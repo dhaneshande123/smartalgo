@@ -1,0 +1,161 @@
+# ============================================================================
+# Docker Compose — Algo Trading Platform (full stack)
+# ============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # Application
+  # --------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: algo-platform-app
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      TIMESCALEDB_HOST: postgres
+      TIMESCALEDB_PORT: "5432"
+      TIMESCALEDB_USER: postgres
+      TIMESCALEDB_PASSWORD: ${TIMESCALEDB_PASSWORD:-algoplatform}
+      TIMESCALEDB_DB: ${TIMESCALEDB_DB:-algo_trading}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - algo-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # --------------------------------------------------------------------------
+  # TimescaleDB (PostgreSQL with time-series extensions)
+  # --------------------------------------------------------------------------
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: algo-platform-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${TIMESCALEDB_PASSWORD:-algoplatform}
+      POSTGRES_DB: ${TIMESCALEDB_DB:-algo_trading}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - algo-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Redis (caching + pub/sub)
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: algo-platform-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - algo-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Prometheus (metrics collection)
+  # --------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: algo-platform-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+    networks:
+      - algo-net
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # --------------------------------------------------------------------------
+  # Grafana (dashboards)
+  # --------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: algo-platform-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - algo-net
+    depends_on:
+      - prometheus
+
+  # --------------------------------------------------------------------------
+  # Nginx reverse proxy
+  # --------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: algo-platform-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./dashboard:/usr/share/nginx/html/dashboard:ro
+    restart: unless-stopped
+    networks:
+      - algo-net
+    depends_on:
+      app:
+        condition: service_healthy
+
+# ----------------------------------------------------------------------------
+# Volumes
+# ----------------------------------------------------------------------------
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+# ----------------------------------------------------------------------------
+# Networks
+# ----------------------------------------------------------------------------
+networks:
+  algo-net:
+    driver: bridge

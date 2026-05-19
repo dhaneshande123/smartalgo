@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "algo-trading-platform"
+version = "1.0.0"
+description = "Institutional-grade algorithmic options trading platform for Indian stock market (NSE/BSE)"
+requires-python = ">=3.12"
+license = {text = "Proprietary"}
+authors = [
+    {name = "SmartAlgo Team"},
+]
+dependencies = [
+    # Core
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "pyyaml>=6.0.1",
+    "uvloop>=0.19.0; sys_platform != 'win32'",
+    # Async
+    "aiohttp>=3.9.0",
+    "websockets>=12.0",
+    # Broker APIs
+    "kiteconnect>=5.0.0",
+    # Numeric / Pricing
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    "pandas>=2.1.0",
+    # Database
+    "asyncpg>=0.29.0",
+    "redis[hiredis]>=5.0.0",
+    "sqlalchemy>=2.0.0",
+    # API Server
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    # Monitoring
+    "prometheus-client>=0.20.0",
+    # Notifications
+    "python-telegram-bot>=20.7",
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "orjson>=3.9.0",
+    "httpx>=0.26.0",
+    "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "black>=24.1.0",
+    "ruff>=0.2.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.6.0",
+]
+backtest = [
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "jinja2>=3.1.0",
+    "weasyprint>=61.0",
+]
+
+[project.scripts]
+algo-platform = "core.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["core*", "strategies*", "data*", "analytics*", "backtest*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "stress: Stress tests",
+    "slow: Slow-running tests",
+]

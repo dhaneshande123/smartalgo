@@ -1,0 +1,221 @@
+# =============================================================================
+# Algo Trading Platform — Master Configuration
+# =============================================================================
+# Environment variables can be referenced as ${VAR_NAME} or ${VAR_NAME:-default}
+# =============================================================================
+
+platform:
+  mode: "paper"  # live | paper | backtest
+  timezone: "Asia/Kolkata"
+  log_level: "INFO"
+  log_format: "json"  # json | console
+
+# ---------------------------------------------------------------------------
+# Broker Configuration
+# ---------------------------------------------------------------------------
+brokers:
+  primary: "zerodha"
+  backup: "angelone"
+
+  zerodha:
+    name: "zerodha"
+    api_key: "${ZERODHA_API_KEY:-}"
+    api_secret: "${ZERODHA_API_SECRET:-}"
+    access_token: "${ZERODHA_ACCESS_TOKEN:-}"
+    totp_secret: "${ZERODHA_TOTP_SECRET:-}"
+    enabled: true
+    rate_limit: 3.0  # requests per second
+
+  angelone:
+    name: "angelone"
+    api_key: "${ANGELONE_API_KEY:-}"
+    api_secret: "${ANGELONE_API_SECRET:-}"
+    access_token: "${ANGELONE_ACCESS_TOKEN:-}"
+    totp_secret: "${ANGELONE_TOTP_SECRET:-}"
+    enabled: false
+    rate_limit: 5.0
+
+  shoonya:
+    name: "shoonya"
+    api_key: "${SHOONYA_API_KEY:-}"
+    api_secret: "${SHOONYA_API_SECRET:-}"
+    enabled: false
+    rate_limit: 5.0
+
+  dhan:
+    name: "dhan"
+    api_key: "${DHAN_API_KEY:-}"
+    api_secret: "${DHAN_API_SECRET:-}"
+    enabled: false
+    rate_limit: 10.0
+
+# ---------------------------------------------------------------------------
+# Market Data
+# ---------------------------------------------------------------------------
+market_data:
+  feed: "zerodha_websocket"
+  subscriptions:
+    - "NIFTY 50"
+    - "NIFTY BANK"
+    - "INDIA VIX"
+    - "NIFTY FIN SERVICE"
+    - "NIFTY MID SELECT"
+  option_chains:
+    - symbol: "NIFTY"
+      expiries: ["current_week", "next_week", "current_month"]
+      strike_range: 20  # strikes above and below ATM
+    - symbol: "BANKNIFTY"
+      expiries: ["current_week", "next_week", "current_month"]
+      strike_range: 20
+    - symbol: "FINNIFTY"
+      expiries: ["current_week", "current_month"]
+      strike_range: 15
+    - symbol: "MIDCPNIFTY"
+      expiries: ["current_week", "current_month"]
+      strike_range: 15
+  tick_storage: true
+  candle_intervals:
+    - "1m"
+    - "5m"
+    - "15m"
+    - "1h"
+    - "1d"
+  snapshot_interval_sec: 60  # option chain snapshot frequency
+
+# ---------------------------------------------------------------------------
+# Risk Management
+# ---------------------------------------------------------------------------
+risk:
+  max_daily_loss: 50000
+  max_portfolio_delta: 500
+  max_portfolio_gamma: 100
+  max_portfolio_vega: 1000
+  max_margin_utilization: 0.85
+  kill_switch_loss: 100000
+  max_order_value: 5000000
+  max_position_per_instrument: 50
+  fat_finger_threshold_pct: 5.0
+  stale_feed_timeout_sec: 5.0
+  max_open_orders: 50
+  max_short_gamma: 200
+  max_concentration_single_expiry: 0.6  # 60% of portfolio
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+database:
+  timescaledb:
+    host: "${TIMESCALEDB_HOST:-localhost}"
+    port: 5432
+    database: "trading"
+    user: "${TIMESCALEDB_USER:-postgres}"
+    password: "${TIMESCALEDB_PASSWORD:-}"
+  redis:
+    host: "${REDIS_HOST:-localhost}"
+    port: 6379
+    password: "${REDIS_PASSWORD:-}"
+    db: 0
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+strategies:
+  - name: "nifty_iron_condor"
+    class: "strategies.examples.iron_condor.NiftyIronCondor"
+    enabled: false
+    mode: "paper"
+    params:
+      iv_percentile_threshold: 60
+      delta_short_call: 0.15
+      delta_short_put: -0.15
+      wing_width: 100
+      max_lots: 10
+      stop_loss_pct: 50
+      target_pct: 60
+      entry_time: "09:20"
+      exit_time: "15:15"
+
+  - name: "nifty_straddle_seller"
+    class: "strategies.examples.straddle_seller.NiftyStraddleSeller"
+    enabled: false
+    mode: "paper"
+    params:
+      max_lots: 5
+      stop_loss_pct: 30
+      trail_after_pct: 20
+      entry_time: "09:20"
+      exit_time: "15:15"
+
+  - name: "expiry_day_theta"
+    class: "strategies.examples.expiry_theta.ExpiryDayTheta"
+    enabled: false
+    mode: "paper"
+    params:
+      max_lots: 10
+      stop_loss_pct: 25
+      entry_time: "09:20"
+      exit_time: "15:20"
+
+# ---------------------------------------------------------------------------
+# Alerts & Notifications
+# ---------------------------------------------------------------------------
+alerts:
+  telegram:
+    bot_token: "${TELEGRAM_BOT_TOKEN:-}"
+    chat_id: "${TELEGRAM_CHAT_ID:-}"
+    enabled: false
+  discord:
+    webhook_url: "${DISCORD_WEBHOOK_URL:-}"
+    enabled: false
+  email:
+    smtp_host: ""
+    smtp_port: 587
+    from_address: ""
+    to_addresses: []
+    enabled: false
+  rules:
+    - name: "vix_spike"
+      condition: "VIX > 20"
+      level: "WARNING"
+    - name: "nifty_big_move"
+      condition: "NIFTY_CHANGE_5M > 2%"
+      level: "CRITICAL"
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+dashboard:
+  host: "0.0.0.0"
+  port: 8080
+  auth_enabled: true
+  secret_key: "${DASHBOARD_SECRET:-change-me-in-production}"
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+
+# ---------------------------------------------------------------------------
+# Event Bus
+# ---------------------------------------------------------------------------
+event_bus:
+  backend: "memory"  # memory | redis
+  redis_url: "redis://${REDIS_HOST:-localhost}:6379/1"
+
+# ---------------------------------------------------------------------------
+# NSE Market Configuration
+# ---------------------------------------------------------------------------
+nse:
+  holidays_url: "https://www.nseindia.com/api/holiday-master?type=trading"
+  lot_sizes_url: "https://archives.nseindia.com/content/fo/fo_mktlots.csv"
+  pre_open_start: "09:00"
+  pre_open_end: "09:08"
+  market_open: "09:15"
+  market_close: "15:30"
+  post_close_start: "15:40"
+  post_close_end: "16:00"
+  auto_square_off: "15:15"  # broker auto-square-off buffer
+  tick_size_options: 0.05
+  tick_size_futures: 0.05
+  weekly_expiry_nifty: "thursday"
+  weekly_expiry_banknifty: "wednesday"
+  weekly_expiry_finnifty: "tuesday"
+  mwpl_ban_threshold: 0.95

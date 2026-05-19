@@ -1,0 +1,26 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Dashboard API",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "core.api:app", "--host", "0.0.0.0", "--port", "8080"],
+      "port": 8080,
+      "cwd": "algo-trading-platform"
+    },
+    {
+      "name": "Frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5173", "--host", "0.0.0.0"],
+      "port": 5173,
+      "cwd": "algo-trading-platform/dashboard"
+    },
+    {
+      "name": "Pytest",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "pytest", "tests/unit/", "-v", "--tb=short"],
+      "port": 0,
+      "cwd": "algo-trading-platform"
+    }
+  ]
+}
