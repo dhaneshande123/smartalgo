@@ -39,9 +39,13 @@ OPTION_CHAIN_SYMBOLS = {
     "MIDCPNIFTY": "NSE:MIDCPNIFTY-INDEX",
 }
 
-# Strike steps and lot sizes
-STRIKE_STEPS = {"NIFTY": 50, "BANKNIFTY": 100, "FINNIFTY": 50, "MIDCPNIFTY": 25}
-LOT_SIZES = {"NIFTY": 25, "BANKNIFTY": 15, "FINNIFTY": 25, "MIDCPNIFTY": 50}
+# Strike steps (per-index price granularity for option strikes).
+# Lot sizes are NOT hardcoded — they come from ``core.symbol_master`` which
+# parses the live Fyers symbol master CSV. See ``get_lot_size()`` calls below.
+STRIKE_STEPS = {
+    "NIFTY": 50, "BANKNIFTY": 100, "FINNIFTY": 50,
+    "MIDCPNIFTY": 25, "SENSEX": 100, "BANKEX": 100,
+}
 
 # Resolution mapping
 RESOLUTION_MAP = {
@@ -229,7 +233,8 @@ class FyersLiveFeed:
                 vix_data = response["data"].get("indiavixData", {})
 
                 step = STRIKE_STEPS.get(symbol.upper(), 50)
-                lot = LOT_SIZES.get(symbol.upper(), 25)
+                from core.symbol_master import get_lot_size
+                lot = get_lot_size(symbol)
 
                 # First entry (strike_price=-1) is the underlying spot
                 spot = 0

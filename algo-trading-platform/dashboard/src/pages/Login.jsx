@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -11,7 +11,6 @@ import {
   AlertCircle,
   Shield,
   TrendingUp,
-  BarChart3,
   Activity,
 } from 'lucide-react';
 
@@ -25,7 +24,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     if (!email || !password) {
@@ -33,15 +32,17 @@ export default function Login() {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      const result = login(email, password);
+    try {
+      const result = await login(email, password);
       if (result.success) {
         navigate('/', { replace: true });
       } else {
         setError(result.error);
       }
-      setLoading(false);
-    }, 400);
+    } catch (err) {
+      setError('Login failed. Please try again.');
+    }
+    setLoading(false);
   };
 
   return (
@@ -263,7 +264,7 @@ export default function Login() {
             <div className="flex-1 h-px" style={{ background: 'rgba(100,116,139,0.15)' }} />
           </div>
 
-          {/* Admin hint */}
+          {/* Demo info */}
           <div
             className="auth-fade-up auth-delay-4 auth-glass-card rounded-xl p-5 relative overflow-hidden auth-shimmer"
           >
@@ -276,29 +277,12 @@ export default function Login() {
                   <Shield className="w-3 h-3" style={{ color: '#a855f7' }} />
                 </div>
                 <span className="text-[11px] font-bold uppercase tracking-[0.1em]" style={{ color: '#a855f7' }}>
-                  Admin Credentials
+                  Demo Access
                 </span>
               </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs" style={{ color: '#64748b' }}>Email</span>
-                  <code
-                    className="text-[13px] font-mono px-2.5 py-1 rounded-md"
-                    style={{ background: 'rgba(255,255,255,0.04)', color: '#e2e8f0' }}
-                  >
-                    admin@smartalgo.in
-                  </code>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs" style={{ color: '#64748b' }}>Password</span>
-                  <code
-                    className="text-[13px] font-mono px-2.5 py-1 rounded-md"
-                    style={{ background: 'rgba(255,255,255,0.04)', color: '#e2e8f0' }}
-                  >
-                    SmartAlgo@2024
-                  </code>
-                </div>
-              </div>
+              <p className="text-xs" style={{ color: '#64748b' }}>
+                Use your registered credentials to sign in. Contact your admin for access.
+              </p>
             </div>
           </div>
 

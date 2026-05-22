@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { TrendingUp, TrendingDown, DollarSign, Activity, Target, BarChart3, Wifi, Radio } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { TrendingUp, TrendingDown, DollarSign, Activity, Target, Radio } from 'lucide-react';
 import Card from '../components/common/Card';
 import MetricCard from '../components/common/MetricCard';
 import StatusBadge from '../components/common/StatusBadge';

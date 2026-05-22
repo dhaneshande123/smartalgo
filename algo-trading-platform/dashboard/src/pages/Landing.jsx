@@ -1,4 +1,3 @@
-import React from 'react';
 import { Link } from 'react-router-dom';
 import {
   TrendingUp,
@@ -11,8 +10,6 @@ import {
   LineChart,
   Target,
   Globe,
-  ChevronRight,
-  Star,
   Sparkles,
   Check,
 } from 'lucide-react';

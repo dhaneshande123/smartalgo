@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, DollarSign, BarChart3, Receipt,
   ArrowUpRight, ArrowDownRight, Clock, Trophy, Target, Percent,
-  ChevronDown, ChevronUp, Filter,
+  Filter,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -11,7 +11,6 @@ import {
 import Card from '../components/common/Card';
 import MetricCard from '../components/common/MetricCard';
 import DataTable from '../components/common/DataTable';
-import StatusBadge from '../components/common/StatusBadge';
 import {
   usePnLSummary, usePnLByStrategy, usePnLCharges, usePnLEquityCurve, usePnLTradeBook,
 } from '../hooks/useApi';

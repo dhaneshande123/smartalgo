@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, RefreshCw, Search,
   Activity, DollarSign, BarChart3, Layers,
@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import Card from '../components/common/Card';
 import { useTheme } from '../context/ThemeContext';
-import { usePositions, usePnL, useGreeks, useMarginUsage } from '../hooks/useApi';
+import { usePositions, usePnL, useGreeks, useMarginUsage, usePnLEquityCurve } from '../hooks/useApi';
 
 // ── Fallback data ────────────────────────────────────────────────────────────
 const fallbackPositions = [
@@ -122,6 +122,7 @@ export default function Portfolio() {
   const { data: pnlData, refetch: refetchPnL } = usePnL();
   const { data: greeksData } = useGreeks();
   const { data: marginData } = useMarginUsage();
+  const { data: equityCurveData } = usePnLEquityCurve();
 
   // ── Normalize positions ───────────────────────────────────────────────────
   const rawPositions = positionsData?.positions || positionsData;
@@ -149,6 +150,10 @@ export default function Portfolio() {
         ),
       }
     : fallbackMargin;
+
+  // ── Normalize Equity Curve ────────────────────────────────────────────────
+  const rawCurve = equityCurveData?.curve || equityCurveData;
+  const equityCurve = Array.isArray(rawCurve) && rawCurve.length > 0 ? rawCurve : fallbackEquityCurve;
 
   // ── Normalize Greeks ──────────────────────────────────────────────────────
   const greeks = greeksData
@@ -327,7 +332,7 @@ export default function Portfolio() {
             <span style={{ fontSize: 11, color: '#475569' }}>Intraday</span>
           </div>
           <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={fallbackEquityCurve} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <AreaChart data={equityCurve} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.35} />

@@ -5,7 +5,7 @@ export const useHealth = () => useQuery({ queryKey: ['health'], queryFn: api.get
 export const useIndices = () => useQuery({ queryKey: ['indices'], queryFn: api.getIndices, refetchInterval: 500 });
 export const useMarketStatus = () => useQuery({ queryKey: ['marketStatus'], queryFn: api.getMarketStatus });
 export const useOptionChain = (symbol, expiry) =>
-  useQuery({ queryKey: ['optionChain', symbol, expiry], queryFn: () => api.getOptionChain(symbol, expiry), refetchInterval: 500 });
+  useQuery({ queryKey: ['optionChain', symbol, expiry], queryFn: () => api.getOptionChain(symbol, expiry), refetchInterval: 1000 });
 export const useExpiries = (symbol) =>
   useQuery({ queryKey: ['expiries', symbol], queryFn: () => api.getExpiries(symbol) });
 export const useLotSizes = () =>
@@ -41,6 +41,91 @@ export const useStrategyAction = () => {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['strategies'] }),
   });
 };
+
+export const usePlaceOrder = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.placeOrder,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['orders'] }); qc.invalidateQueries({ queryKey: ['positions'] }); },
+  });
+};
+
+export const useCancelOrder = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.cancelOrder,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['orders'] }),
+  });
+};
+
+export const useDeployStrategy = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.deployStrategy,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['strategies'] }),
+  });
+};
+
+export const useSaveStrategy = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.saveStrategy,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['strategies'] }),
+  });
+};
+
+export const useSaveFyersSettings = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.saveFyersSettings,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['health'] }),
+  });
+};
+
+// Trading mode (paper / live)
+export const useTradingMode = () =>
+  useQuery({ queryKey: ['tradingMode'], queryFn: api.getTradingMode, refetchInterval: 5000 });
+
+export const useSetTradingMode = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ mode, confirm }) => api.setTradingMode(mode, confirm),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['tradingMode'] });
+      qc.invalidateQueries({ queryKey: ['health'] });
+    },
+  });
+};
+
+// Deployed strategies (live + paper) with live P&L
+export const useDeployedStrategies = () =>
+  useQuery({
+    queryKey: ['deployedStrategies'],
+    queryFn: api.getDeployedStrategies,
+    refetchInterval: 1000,   // refresh P&L every second
+  });
+
+export const useDeployedStrategyPnL = (id) =>
+  useQuery({
+    queryKey: ['deployedStrategyPnL', id],
+    queryFn: () => api.getDeployedStrategyPnL(id),
+    enabled: !!id,
+    refetchInterval: 1000,
+  });
+
+export const useStopDeployedStrategy = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.stopDeployedStrategy,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['deployedStrategies'] }),
+  });
+};
+
+// Account / Fyers live data
+export const useFunds = () => useQuery({ queryKey: ['funds'], queryFn: api.getFunds, refetchInterval: 10000 });
+export const useHoldings = () => useQuery({ queryKey: ['holdings'], queryFn: api.getHoldings, refetchInterval: 30000 });
+export const useMarketDepth = (symbol) =>
+  useQuery({ queryKey: ['marketDepth', symbol], queryFn: () => api.getMarketDepth(symbol), enabled: !!symbol, refetchInterval: 2000 });
 
 export const useRunBacktest = () => {
   const qc = useQueryClient();

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth, PLANS } from '../contexts/AuthContext';
 import {
@@ -51,7 +51,7 @@ export default function Signup() {
 
   const handleContinue = () => setStep(2);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     if (!name || !email || !password) { setError('Please fill in all fields'); return; }
@@ -59,12 +59,14 @@ export default function Signup() {
     if (password !== confirmPassword) { setError('Passwords do not match'); return; }
 
     setLoading(true);
-    setTimeout(() => {
-      const result = signup(name, email, password, selectedPlan);
+    try {
+      const result = await signup(name, email, password, selectedPlan);
       if (result.success) navigate('/', { replace: true });
       else setError(result.error);
-      setLoading(false);
-    }, 500);
+    } catch (err) {
+      setError('Signup failed. Please try again.');
+    }
+    setLoading(false);
   };
 
   const passwordStrength =

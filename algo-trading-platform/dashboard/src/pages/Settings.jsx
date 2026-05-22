@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Settings as SettingsIcon, Server, Shield, Wifi, Palette, Clock, Cpu,
   Globe, Lock, Unlock, CheckCircle, XCircle, AlertTriangle, Eye, EyeOff,
@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import Card from '../components/common/Card';
 import StatusBadge from '../components/common/StatusBadge';
-import { useHealth, useSystemInfo, useSystemConfig, useRiskLimits } from '../hooks/useApi';
+import { useHealth, useSystemInfo, useSystemConfig, useRiskLimits, useSaveFyersSettings } from '../hooks/useApi';
 import { useAuth } from '../contexts/AuthContext';
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -140,6 +140,7 @@ export default function Settings() {
   const [fyersToken,      setFyersToken]      = useState('');
   const [fyersSaving,     setFyersSaving]     = useState(false);
   const [fyersBanner,     setFyersBanner]     = useState(null); // { type: 'success'|'error', msg }
+  const saveFyersMutation = useSaveFyersSettings();
 
   // ── Parse data ──
   const health     = healthData || {};
@@ -177,19 +178,15 @@ export default function Settings() {
     setFyersSaving(true);
     setFyersBanner(null);
     try {
-      const res = await fetch('http://localhost:8080/api/settings/fyers', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ app_id: fyersAppId, secret_key: fyersSecretKey, access_token: fyersToken }),
+      await saveFyersMutation.mutateAsync({
+        app_id: fyersAppId,
+        secret_key: fyersSecretKey,
+        access_token: fyersToken,
       });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setFyersBanner({ type: 'error', msg: data?.error || `Server error: ${res.status}` });
-      } else {
-        setFyersBanner({ type: 'success', msg: 'Saved successfully' });
-      }
+      setFyersBanner({ type: 'success', msg: 'Saved successfully' });
     } catch (err) {
-      setFyersBanner({ type: 'error', msg: err?.message || 'Network error — is the server running?' });
+      const detail = err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Save failed';
+      setFyersBanner({ type: 'error', msg: detail });
     } finally {
       setFyersSaving(false);
     }

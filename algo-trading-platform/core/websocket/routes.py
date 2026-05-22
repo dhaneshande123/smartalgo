@@ -115,7 +115,58 @@ def _generate_position() -> dict[str, Any]:
 
 
 def _generate_portfolio_snapshot() -> dict[str, Any]:
-    """Generate a full portfolio P&L snapshot."""
+    """Generate a full portfolio P&L snapshot — uses Fyers if connected."""
+    # Try live data from Fyers
+    if live_feed and hasattr(live_feed, '_fyers') and live_feed._fyers:
+        try:
+            pos_result = live_feed._fyers.positions()
+            if pos_result and pos_result.get("s") == "ok":
+                fyers_positions = pos_result.get("netPositions", pos_result.get("overall", []))
+                if isinstance(fyers_positions, list):
+                    positions = []
+                    for p in fyers_positions:
+                        sym = p.get("symbol", "")
+                        positions.append({
+                            "symbol": sym.split(":")[1] if ":" in sym else sym,
+                            "quantity": p.get("netQty", p.get("qty", 0)),
+                            "avg_price": round(float(p.get("avgPrice", p.get("buyAvgPrice", 0))), 2),
+                            "ltp": round(float(p.get("ltp", 0)), 2),
+                            "pnl_unrealized": round(float(p.get("unrealizedProfit", p.get("pl", 0))), 2),
+                            "pnl_realized": round(float(p.get("realized_profit", p.get("realizedProfit", 0))), 2),
+                        })
+                    total_unrealized = sum(p["pnl_unrealized"] for p in positions)
+                    total_realized = sum(p["pnl_realized"] for p in positions)
+
+                    # Try getting margin from funds
+                    margin_used = 0.0
+                    margin_available = 0.0
+                    try:
+                        fund_result = live_feed._fyers.funds()
+                        if fund_result and fund_result.get("s") == "ok":
+                            for item in (fund_result.get("fund_limit", []) if isinstance(fund_result.get("fund_limit"), list) else []):
+                                title = item.get("title", "").lower()
+                                val = float(item.get("equityAmount", item.get("amount", 0)))
+                                if "utilized" in title or "used" in title:
+                                    margin_used = val
+                                elif "available" in title or "net" in title:
+                                    margin_available = val
+                    except Exception:
+                        pass
+
+                    return {
+                        "positions": positions,
+                        "total_unrealized_pnl": round(total_unrealized, 2),
+                        "total_realized_pnl": round(total_realized, 2),
+                        "total_pnl": round(total_unrealized + total_realized, 2),
+                        "margin_used": round(margin_used, 2),
+                        "margin_available": round(margin_available, 2),
+                        "source": "fyers_live",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+        except Exception as e:
+            logger.warning(f"Fyers portfolio snapshot failed: {e}")
+
+    # Fallback to mock
     num_positions = random.randint(2, 5)
     positions = [_generate_position() for _ in range(num_positions)]
     total_unrealized = sum(p["pnl_unrealized"] for p in positions)

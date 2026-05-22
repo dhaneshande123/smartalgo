@@ -1,79 +1,19 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
-  Brain, TrendingUp, TrendingDown, Minus, Zap, Target,
-  BarChart3, Activity, RefreshCw, CheckCircle, AlertTriangle,
-  ArrowUpRight, ArrowDownRight, Wifi,
+  Brain, Minus, Zap, Target,
+  Activity, RefreshCw, CheckCircle, AlertTriangle,
+  ArrowUpRight, ArrowDownRight,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
-
-const API = 'http://localhost:8080';
-
-// ── Hooks ─────────────────────────────────────────────────────────────────
-function useMarketRegime() {
-  return useQuery({
-    queryKey: ['market-regime'],
-    queryFn: () => axios.get(`${API}/api/market-regime`).then(r => r.data),
-    refetchInterval: 30000,
-    retry: 1,
-  });
-}
-
-function useStrategySignals() {
-  return useQuery({
-    queryKey: ['strategy-signals'],
-    queryFn: () => axios.get(`${API}/api/strategy-signals`).then(r => r.data),
-    refetchInterval: 15000,
-    retry: 1,
-  });
-}
-
-function useAutoDeployRecs() {
-  return useQuery({
-    queryKey: ['auto-deploy-recs'],
-    queryFn: () => axios.get(`${API}/api/auto-deploy/recommendations`).then(r => r.data),
-    refetchInterval: 60000,
-    retry: 1,
-  });
-}
-
-function useExecuteAutoDeploy() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (payload) => axios.post(`${API}/api/auto-deploy/execute`, payload).then(r => r.data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['auto-deploy-recs'] });
-      qc.invalidateQueries({ queryKey: ['paperStrategies'] });
-      qc.invalidateQueries({ queryKey: ['paperStats'] });
-    },
-  });
-}
-
-function usePaperStatus() {
-  return useQuery({
-    queryKey: ['paper-status-ai'],
-    queryFn: () => axios.get(`${API}/api/paper-trading/status`).then(r => r.data),
-    refetchInterval: 5000,
-  });
-}
-
-function useStartPaper() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => axios.post(`${API}/api/paper-trading/start`, { initial_capital: 2000000 }).then(r => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['paper-status-ai'] }),
-  });
-}
-
-function usePaperStats() {
-  return useQuery({
-    queryKey: ['paper-stats-ai'],
-    queryFn: () => axios.get(`${API}/api/paper-trading/stats`).then(r => r.data),
-    refetchInterval: 3000,
-    retry: false,
-  });
-}
+import {
+  useMarketRegime,
+  useStrategySignals,
+  useAutoDeployRecommendations as useAutoDeployRecs,
+  useExecuteAutoDeploy,
+  usePaperTradingStatus as usePaperStatus,
+  useStartPaperTrading as useStartPaper,
+  usePaperTradingStats as usePaperStats,
+} from '../hooks/useApi';
 
 // ── Fallback Data ─────────────────────────────────────────────────────────
 const fallbackRegime = {
@@ -176,9 +116,9 @@ export default function AISignals() {
   const [deployedIds, setDeployedIds] = useState(new Set());
   const [autoDeploying, setAutoDeploying] = useState(false);
 
-  const { data: regimeData, isLoading: regimeLoading, refetch: refetchRegime } = useMarketRegime();
-  const { data: signalsData, isLoading: signalsLoading, refetch: refetchSignals } = useStrategySignals();
-  const { data: recsData, isLoading: recsLoading } = useAutoDeployRecs();
+  const { data: regimeData, refetch: refetchRegime } = useMarketRegime();
+  const { data: signalsData, refetch: refetchSignals } = useStrategySignals();
+  const { data: recsData } = useAutoDeployRecs();
   const executeDeploy = useExecuteAutoDeploy();
   const { data: paperStatus } = usePaperStatus();
   const startPaper = useStartPaper();
@@ -239,7 +179,7 @@ export default function AISignals() {
     : { background: 'rgba(255,255,255,0.82)', border: '1px solid rgba(0,0,0,0.08)', borderRadius: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' };
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-4 animate-fade-in">
       {/* ── Header ──────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>

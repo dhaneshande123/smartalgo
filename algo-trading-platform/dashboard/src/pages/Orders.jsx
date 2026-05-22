@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import {
   Plus, X, Send, Ban, Filter, FileText, BarChart3,
   ArrowUpCircle, ArrowDownCircle, Clock, AlertTriangle,
@@ -6,7 +6,7 @@ import {
 import Card from '../components/common/Card';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
-import { useOrders, useTrades, useAuditTrail } from '../hooks/useApi';
+import { useOrders, useTrades, useAuditTrail, usePlaceOrder, useCancelOrder } from '../hooks/useApi';
 import { useToast } from '../components/common/ToastProvider';
 
 /* ════════════════════════════════════════════════════════════
@@ -241,6 +241,8 @@ export default function Orders() {
   const { data: ordersData } = useOrders(statusFilter !== 'all' ? statusFilter : '');
   const { data: tradesData } = useTrades();
   const { data: auditData } = useAuditTrail();
+  const placeOrderMutation = usePlaceOrder();
+  const cancelOrderMutation = useCancelOrder();
 
   const rawOrders = ordersData?.orders || ordersData;
   const orders = Array.isArray(rawOrders) ? rawOrders : fallbackOrders;
@@ -256,15 +258,43 @@ export default function Orders() {
   const filledCount = orders.filter(o => o.status === 'filled').length;
   const rejectedCount = orders.filter(o => o.status === 'rejected').length;
 
-  const handlePlaceOrder = useCallback((order) => {
-    toast?.addToast?.(`Order placed: ${order.side} ${order.qty} ${order.symbol} ${order.orderType === 'MARKET' ? '@ Market' : `@ ₹${order.price}`}`, 'success');
-    setShowOrderForm(false);
-  }, [toast]);
+  const handlePlaceOrder = useCallback(async (order) => {
+    try {
+      await placeOrderMutation.mutateAsync(order);
+      toast?.addToast?.({
+        level: 'success',
+        message: `Order placed: ${order.side} ${order.qty} ${order.symbol} ${order.orderType === 'MARKET' ? '@ Market' : `@ ₹${order.price}`}`,
+        source: 'orders',
+      });
+      setShowOrderForm(false);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Order placement failed';
+      toast?.addToast?.({
+        level: 'CRITICAL',
+        message: `Order failed: ${detail}`,
+        source: 'orders',
+      });
+    }
+  }, [toast, placeOrderMutation]);
 
-  const handleCancelOrder = useCallback((orderId) => {
-    toast?.addToast?.(`Order ${orderId} cancelled`, 'info');
+  const handleCancelOrder = useCallback(async (orderId) => {
+    try {
+      await cancelOrderMutation.mutateAsync(orderId);
+      toast?.addToast?.({
+        level: 'success',
+        message: `Order ${orderId} cancelled`,
+        source: 'orders',
+      });
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Cancel failed';
+      toast?.addToast?.({
+        level: 'CRITICAL',
+        message: `Cancel failed: ${detail}`,
+        source: 'orders',
+      });
+    }
     setCancelConfirm(null);
-  }, [toast]);
+  }, [toast, cancelOrderMutation]);
 
   const orderColumns = [
     { key: 'id', label: 'Order ID', render: (v) => <span className="font-mono text-blue-400 text-xs">{(v || '').toString().substring(0, 12)}</span> },
@@ -321,7 +351,7 @@ export default function Orders() {
   ];
 
   return (
-    <div className="space-y-3 animate-fade-in">
+    <div className="space-y-4 animate-fade-in">
       {/* Order Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="glass-card !p-3">

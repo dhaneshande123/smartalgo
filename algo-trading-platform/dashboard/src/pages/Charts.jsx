@@ -1,11 +1,11 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid, Area, Cell,
 } from 'recharts';
 import {
   BarChart3, Clock, TrendingUp, TrendingDown, Activity, Layers,
-  ChevronDown, Minus, Plus, RotateCcw, Eye, EyeOff,
+  ChevronDown, Eye, EyeOff,
 } from 'lucide-react';
 import { useCandles, useIndices } from '../hooks/useApi';
 
@@ -332,7 +332,7 @@ export default function Charts() {
   }, [chartData]);
 
   return (
-    <div className="space-y-3 animate-fade-in">
+    <div className="space-y-4 animate-fade-in">
       {/* ── Top Bar ── */}
       <div className="glass-card !p-3">
         <div className="flex flex-wrap items-center gap-3">

@@ -1,12 +1,13 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useTheme } from '../context/ThemeContext';
 import {
   Play, Pause, Square, Zap, Power, PowerOff, Shield, TrendingUp,
-  Activity, Target, Clock, BarChart3, ChevronDown, ChevronUp, AlertTriangle,
+  Activity, Target, Clock, ChevronDown, ChevronUp, AlertTriangle,
   Crosshair, Rocket, Eye, Ban, Search, Bookmark, BookmarkCheck,
-  ArrowUpRight, Grid3X3, ChevronLeft, Trophy, TrendingDown, Star,
+  ArrowUpRight, Grid3X3, ChevronLeft,
 } from 'lucide-react';
 import PayoffDiagram from '../components/charts/PayoffDiagram';
+import DeployedStrategiesPnL from '../components/common/DeployedStrategiesPnL';
 import {
   useStrategies, useStrategyAction,
   usePaperTradingStatus, usePaperTradingStats, usePaperTradingStrategies,
@@ -404,6 +405,11 @@ export default function Strategies() {
           </p>
         </div>
 
+        {/* Live P&L for deployed strategies (paper + live) */}
+        <div className="glass-card !p-4">
+          <DeployedStrategiesPnL />
+        </div>
+
         {/* Market Regime Banner (if available) */}
         {regime.regime && (
           <div className={`glass-card bg-gradient-to-r ${REGIME_STYLES[regimeColor] || REGIME_STYLES.gray} p-4`}>
@@ -513,7 +519,7 @@ export default function Strategies() {
      Render — Category View (category selected)
      ════════════════════════════════════════════════════════ */
   return (
-    <div className="space-y-5 max-w-[1440px] mx-auto animate-fade-in">
+    <div className="space-y-4 max-w-[1440px] mx-auto animate-fade-in">
 
       {/* ── Back + Breadcrumb Header ────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>

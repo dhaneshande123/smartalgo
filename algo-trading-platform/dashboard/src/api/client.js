@@ -47,6 +47,16 @@ export const updateStrategyAction = (id, action) =>
   api.post(`/strategies/${id}/${action}`);
 export const updateStrategyParams = (id, params) =>
   api.put(`/strategies/${id}/params`, params);
+export const deployStrategy = (config) => api.post('/strategies/deploy', config);
+export const saveStrategy = (config) => api.post('/strategies/save', config);
+export const getDeployedStrategies = () => api.get('/deployed-strategies');
+export const getDeployedStrategyPnL = (id) => api.get(`/strategies/${id}/pnl`);
+export const stopDeployedStrategy = (id) => api.post(`/strategies/${id}/stop`);
+
+// Trading Mode (paper / live)
+export const getTradingMode = () => api.get('/trading/mode');
+export const setTradingMode = (mode, confirm = false) =>
+  api.post('/trading/mode', { mode, confirm });
 
 // Risk
 export const getRiskMetrics = () => api.get('/risk/metrics');
@@ -61,6 +71,7 @@ export const getOrders = (status = '') =>
   api.get('/orders', { params: { status } });
 export const getTrades = () => api.get('/orders/trades');
 export const getAuditTrail = () => api.get('/orders/audit');
+export const placeOrder = (order) => api.post('/orders', order);
 export const cancelOrder = (id) => api.delete(`/orders/${id}`);
 
 // Backtest
@@ -102,6 +113,12 @@ export const getPnLTradeBook = () => api.get('/pnl/trade-book');
 // System & Settings
 export const getSystemInfo = () => api.get('/system/info');
 export const getSystemConfig = () => api.get('/system/config');
+export const saveFyersSettings = (creds) => api.post('/settings/fyers', creds);
+
+// Account / Fyers live data
+export const getFunds = () => api.get('/account/funds');
+export const getHoldings = () => api.get('/account/holdings');
+export const getMarketDepth = (symbol) => api.get(`/market/depth/${symbol}`);
 
 // Monitoring
 export const getMonitoringHealth = () => api.get('/monitoring/health');

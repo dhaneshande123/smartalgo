@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Zap, ShieldAlert, TrendingUp, TrendingDown,
   AlertTriangle, Activity, BarChart3,
 } from 'lucide-react';
-import { useRiskMetrics, useCircuitBreakers, useKillSwitch, useStressTests } from '../hooks/useApi';
+import { useRiskMetrics, useCircuitBreakers, useKillSwitch, useStressTests, useGreeks } from '../hooks/useApi';
 import { useTheme } from '../context/ThemeContext';
 
 // ── Fallback data ────────────────────────────────────────────────────────────
@@ -253,6 +253,7 @@ export default function Risk() {
   const { data: riskData } = useRiskMetrics();
   const { data: cbData }   = useCircuitBreakers();
   const { data: stressData } = useStressTests();
+  const { data: greeksData } = useGreeks();
   const killSwitch = useKillSwitch();
 
   // ── Normalize risk ────────────────────────────────────────────────────────
@@ -274,6 +275,16 @@ export default function Risk() {
 
   const rawStress = stressData?.scenarios || stressData;
   const stressTests = Array.isArray(rawStress) ? rawStress : fallbackStress;
+
+  // ── Normalize Greeks ────────────────────────────────────────────────────
+  const greeks = greeksData
+    ? {
+        delta: greeksData.net_delta ?? greeksData.delta ?? 0,
+        gamma: greeksData.net_gamma ?? greeksData.gamma ?? 0,
+        theta: greeksData.net_theta ?? greeksData.theta ?? 0,
+        vega: greeksData.net_vega ?? greeksData.vega ?? 0,
+      }
+    : fallbackGreeks;
 
   const drawdownPct = Math.min((risk.drawdown / risk.drawdownLimit) * 100, 100);
   const dailyLossPct = Math.min((risk.currentLoss / risk.maxLoss) * 100, 100);
@@ -472,7 +483,7 @@ export default function Risk() {
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
           {(['delta', 'gamma', 'theta', 'vega']).map((key) => {
-            const val = fallbackGreeks[key];
+            const val = greeks[key];
             const limit = greekLimits[key];
             const pct = Math.min((Math.abs(val) / limit) * 100, 100);
             const color = greekColors[key];

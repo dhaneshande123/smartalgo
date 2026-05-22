@@ -3,6 +3,7 @@ import { Wifi, WifiOff, Clock, Sun, Moon, Menu, LogOut, User, Crown } from 'luci
 import { useHealth } from '../../hooks/useApi';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
+import ModeToggle from '../common/ModeToggle';
 
 function safeFormatTime(date) {
   try {
@@ -73,6 +74,9 @@ export default function Header({ onMobileMenuToggle }) {
       </div>
 
       <div className="flex items-center gap-2 md:gap-4">
+        {/* Live / Paper trading mode toggle */}
+        <ModeToggle />
+
         <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
           <Clock className="w-3.5 h-3.5" />
           <span className="font-mono">{safeFormatTime(istTime)} IST</span>

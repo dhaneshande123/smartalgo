@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import { useState } from 'react';
 import {
-  Play, Square, Rocket, Power, TrendingUp, TrendingDown, DollarSign,
-  BarChart3, Clock, Trophy, Target, AlertCircle, Zap, ChevronDown,
+  Play, Square, Rocket, Power, TrendingUp, DollarSign,
+  BarChart3, Trophy, Target, Zap,
   Pause, Activity, Layers,
 } from 'lucide-react';
 import Card from '../components/common/Card';

@@ -49,6 +49,11 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# Fyers symbol master cache (re-downloaded daily by core.symbol_master)
+data/cache/fyers_*.csv
+nse_fo_symbol_master.csv
+bse_fo_symbol_master.csv
+
 # Secrets
 *.pem
 *.key

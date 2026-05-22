@@ -1,15 +1,16 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, ReferenceLine,
 } from 'recharts';
 import {
-  Plus, Trash2, Copy, Save, Play, RotateCcw, ChevronDown,
-  TrendingUp, TrendingDown, Shield, Zap, AlertTriangle,
-  Settings2, Layers, Target, Calculator, DollarSign,
+  Plus, Trash2, Save, Play, RotateCcw,
+  Shield, Zap,
+  Settings2, Layers, Target, Calculator,
 } from 'lucide-react';
-import { useIndices } from '../hooks/useApi';
+import { useIndices, useDeployStrategy, useSaveStrategy, useLotSizes } from '../hooks/useApi';
 import { useToast } from '../components/common/ToastProvider';
+import DeployedStrategiesPnL from '../components/common/DeployedStrategiesPnL';
 
 /* ════════════════════════════════════════════════════════════
    Constants
@@ -19,7 +20,9 @@ const UNDERLYINGS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'];
 
 const SPOT_PRICES = { NIFTY: 24050, BANKNIFTY: 51200, FINNIFTY: 23100, MIDCPNIFTY: 12400 };
 
-const LOT_SIZES = { NIFTY: 25, BANKNIFTY: 15, FINNIFTY: 25, MIDCPNIFTY: 50 };
+// Fallback lot sizes — used only if the /api/market/lot-sizes API hasn't responded yet.
+// Authoritative values come from the Fyers symbol master via useLotSizes() hook.
+const FALLBACK_LOT_SIZES = { NIFTY: 65, BANKNIFTY: 30, FINNIFTY: 60, MIDCPNIFTY: 120 };
 
 const STRATEGY_TEMPLATES = [
   { name: 'Iron Condor', legs: [
@@ -161,6 +164,9 @@ function PayoffTooltip({ active, payload }) {
 export default function StrategyBuilder() {
   const toast = useToast();
   const { data: indicesData } = useIndices();
+  const { data: lotSizesData } = useLotSizes();
+  const deployStrategyMutation = useDeployStrategy();
+  const saveStrategyMutation = useSaveStrategy();
 
   // Core state
   const [underlying, setUnderlying] = useState('NIFTY');
@@ -187,7 +193,9 @@ export default function StrategyBuilder() {
     return match?.ltp || match?.price || SPOT_PRICES[underlying];
   }, [indicesData, underlying]);
 
-  const lotSize = LOT_SIZES[underlying];
+  // Lot size — live from /api/market/lot-sizes (Fyers symbol master).
+  // Falls back to the static map if the API hasn't responded yet.
+  const lotSize = (lotSizesData?.lot_sizes?.[underlying]) ?? FALLBACK_LOT_SIZES[underlying];
 
   // Payoff calculation
   const payoffData = useMemo(() => computePayoff(legs, underlying, spotPrice, lotSize), [legs, underlying, spotPrice, lotSize]);
@@ -220,13 +228,64 @@ export default function StrategyBuilder() {
     setStrategyName('Custom Strategy');
   }, []);
 
-  const handleDeploy = useCallback(() => {
-    toast?.addToast?.(`Strategy "${strategyName}" queued for deployment on ${underlying}`, 'success');
-  }, [toast, strategyName, underlying]);
+  const handleDeploy = useCallback(async () => {
+    const payload = {
+      name: strategyName,
+      underlying,
+      spot_price: spotPrice,
+      lot_size: lotSize,
+      legs: legs.map(l => ({
+        type: l.type, action: l.action,
+        strike: spotPrice + (l.offset || 0),
+        premium: l.premium, lots: l.lots || 1,
+      })),
+      risk_params: riskParams,
+      schedule: schedule === 'custom' ? customTime : schedule,
+    };
+    try {
+      await deployStrategyMutation.mutateAsync(payload);
+      toast?.addToast?.({
+        level: 'success',
+        message: `Strategy "${strategyName}" deployed on ${underlying}`,
+        source: 'strategy_builder',
+      });
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Deploy failed';
+      toast?.addToast?.({
+        level: 'CRITICAL',
+        message: `Deploy failed: ${detail}`,
+        source: 'strategy_builder',
+      });
+    }
+  }, [toast, strategyName, underlying, spotPrice, lotSize, legs, riskParams, schedule, customTime, deployStrategyMutation]);
 
-  const handleSave = useCallback(() => {
-    toast?.addToast?.(`Strategy "${strategyName}" saved to library`, 'info');
-  }, [toast, strategyName]);
+  const handleSave = useCallback(async () => {
+    const payload = {
+      name: strategyName,
+      underlying,
+      legs: legs.map(l => ({
+        type: l.type, action: l.action,
+        offset: l.offset, premium: l.premium, lots: l.lots || 1,
+      })),
+      risk_params: riskParams,
+      schedule: schedule === 'custom' ? customTime : schedule,
+    };
+    try {
+      await saveStrategyMutation.mutateAsync(payload);
+      toast?.addToast?.({
+        level: 'success',
+        message: `Strategy "${strategyName}" saved to library`,
+        source: 'strategy_builder',
+      });
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Save failed';
+      toast?.addToast?.({
+        level: 'CRITICAL',
+        message: `Save failed: ${detail}`,
+        source: 'strategy_builder',
+      });
+    }
+  }, [toast, strategyName, underlying, legs, riskParams, schedule, customTime, saveStrategyMutation]);
 
   // Payoff chart domain
   const pnlDomain = useMemo(() => {
@@ -239,7 +298,7 @@ export default function StrategyBuilder() {
   }, [payoffData]);
 
   return (
-    <div className="space-y-3 animate-fade-in">
+    <div className="space-y-4 animate-fade-in">
       {/* ── Header ── */}
       <div className="glass-card !p-3">
         <div className="flex flex-wrap items-center gap-3">
@@ -677,6 +736,11 @@ export default function StrategyBuilder() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── Live P&L for deployed strategies ── */}
+      <div className="glass-card !p-4">
+        <DeployedStrategiesPnL />
       </div>
     </div>
   );

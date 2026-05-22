@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Activity, AlertTriangle, CheckCircle, XCircle, Clock,
   Cpu, HardDrive, Wifi, Server,

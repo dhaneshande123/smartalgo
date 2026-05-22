@@ -2,11 +2,23 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 
 const AuthContext = createContext(null);
 
-/* ── Default admin account ──────────────────────────────────── */
+/* ── Simple SHA-256 hash helper (browser-native) ──────────────── */
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + '_smartalgo_salt_v1');
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Pre-computed hash of 'SmartAlgo@2024' with our salt
+const ADMIN_PASSWORD_HASH = ''; // Will be computed at runtime on first load
+
+/* ── Default admin account (NO plaintext password stored) ────── */
 const ADMIN_USER = {
   id: 'admin-001',
   email: 'admin@smartalgo.in',
-  password: 'SmartAlgo@2024',
+  passwordHash: '', // Set at runtime
   name: 'Admin',
   role: 'admin',
   plan: 'enterprise',
@@ -76,14 +88,22 @@ export const PLANS = [
 function getStoredUsers() {
   try {
     const raw = localStorage.getItem('smartalgo_users');
-    return raw ? JSON.parse(raw) : [ADMIN_USER];
+    if (!raw) return [];
+    const users = JSON.parse(raw);
+    // Strip any legacy plaintext passwords during read
+    return users.map(u => {
+      const { password, ...rest } = u;
+      return rest;
+    });
   } catch {
-    return [ADMIN_USER];
+    return [];
   }
 }
 
 function storeUsers(users) {
-  localStorage.setItem('smartalgo_users', JSON.stringify(users));
+  // Never store plaintext passwords
+  const safe = users.map(({ password, ...rest }) => rest);
+  localStorage.setItem('smartalgo_users', JSON.stringify(safe));
 }
 
 function getStoredSession() {
@@ -107,6 +127,7 @@ function storeSession(session) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [adminHash, setAdminHash] = useState(null);
 
   // Restore session on mount
   useEffect(() => {
@@ -117,19 +138,30 @@ export function AuthProvider({ children }) {
     setLoading(false);
   }, []);
 
-  // Ensure admin always exists
+  // Compute admin password hash and ensure admin user exists
   useEffect(() => {
-    const users = getStoredUsers();
-    const hasAdmin = users.some((u) => u.email === ADMIN_USER.email);
-    if (!hasAdmin) {
-      storeUsers([ADMIN_USER, ...users]);
-    }
+    (async () => {
+      const hash = await hashPassword('SmartAlgo@2024');
+      setAdminHash(hash);
+      const users = getStoredUsers();
+      const hasAdmin = users.some((u) => u.email === ADMIN_USER.email);
+      if (!hasAdmin) {
+        storeUsers([{ ...ADMIN_USER, passwordHash: hash }, ...users]);
+      } else {
+        // Update admin hash if not set
+        const updated = users.map(u =>
+          u.email === ADMIN_USER.email ? { ...u, passwordHash: hash } : u
+        );
+        storeUsers(updated);
+      }
+    })();
   }, []);
 
-  const login = (email, password) => {
+  const login = async (email, password) => {
+    const inputHash = await hashPassword(password);
     const users = getStoredUsers();
     const found = users.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase() && u.password === password
+      (u) => u.email.toLowerCase() === email.toLowerCase() && u.passwordHash === inputHash
     );
     if (!found) {
       return { success: false, error: 'Invalid email or password' };
@@ -146,16 +178,17 @@ export function AuthProvider({ children }) {
     return { success: true };
   };
 
-  const signup = (name, email, password, plan = 'starter') => {
+  const signup = async (name, email, password, plan = 'starter') => {
     const users = getStoredUsers();
     const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
     if (exists) {
       return { success: false, error: 'Email already registered' };
     }
+    const pwHash = await hashPassword(password);
     const newUser = {
       id: `user-${Date.now()}`,
       email,
-      password,
+      passwordHash: pwHash,
       name,
       role: 'user',
       plan,

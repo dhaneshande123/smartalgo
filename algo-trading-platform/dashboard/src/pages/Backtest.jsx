@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
 import EquityCurve from '../components/charts/EquityCurve';
 import { useRunBacktest, useBacktestResults, useBacktestList } from '../hooks/useApi';

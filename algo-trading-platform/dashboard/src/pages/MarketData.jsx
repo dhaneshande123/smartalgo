@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, ArrowUp, ArrowDown,
   ChevronDown, X, ShoppingCart, Tag,
@@ -513,6 +513,18 @@ export default function MarketData() {
     ? rawExpiries.map((e) => (typeof e === 'string' ? e : e.date || e))
     : fallbackExpiries;
 
+  // ── Live ticker data (derived from indices API instead of static const) ──
+  const liveTickerData = useMemo(() => {
+    return tickerData.map(t => {
+      const match = indices.find(idx =>
+        (idx.symbol || '').toUpperCase().includes(t.symbol)
+      );
+      return match
+        ? { symbol: t.symbol, price: match.price ?? t.price, changePct: match.changePct ?? t.changePct }
+        : t;
+    });
+  }, [indices]);
+
   // ── Derived OI stats ──
   const totalCallOI = chain.reduce((a, r) => a + (Number(r.call_oi) || 0), 0);
   const totalPutOI  = chain.reduce((a, r) => a + (Number(r.put_oi)  || 0), 0);
@@ -541,7 +553,7 @@ export default function MarketData() {
       <div className="rounded-xl px-4 py-3 flex flex-wrap items-center gap-3"
         style={cardStyle}>
         <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-widest mr-1">Live</span>
-        {tickerData.map((t) => (
+        {liveTickerData.map((t) => (
           <TickerPill key={t.symbol} {...t} />
         ))}
         <div className="ml-auto flex items-center gap-2">
