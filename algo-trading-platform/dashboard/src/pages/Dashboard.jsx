@@ -6,6 +6,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import DataTable from '../components/common/DataTable';
 import EquityCurve from '../components/charts/EquityCurve';
 import GreeksGauge from '../components/charts/GreeksGauge';
+import DeployedStrategiesPnL from '../components/common/DeployedStrategiesPnL';
 import { useStrategies, useGreeks, useRiskMetrics } from '../hooks/useApi';
 import { useMarketDataStream, usePortfolioStream, useOrderStream, useAlertStream } from '../hooks/useWebSocket';
 
@@ -219,6 +220,11 @@ export default function Dashboard() {
       {/* Equity Curve — built from live P&L stream */}
       <Card title="Equity Curve — Live">
         <EquityCurve data={equityCurveData} height={280} />
+      </Card>
+
+      {/* Live deployed strategies — compact summary */}
+      <Card title="Active Strategies">
+        <DeployedStrategiesPnL compact />
       </Card>
 
       {/* Live Order Feed */}

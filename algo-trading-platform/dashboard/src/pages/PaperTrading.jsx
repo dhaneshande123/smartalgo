@@ -13,8 +13,10 @@ import {
   usePaperTradingPositions, usePaperTradingOrders,
   useStartPaperTrading, useStopPaperTrading,
   useDeployPaperStrategy, useStopPaperStrategy,
+  useClearStrategyHistory,
 } from '../hooks/useApi';
 import { useToast } from '../components/common/ToastProvider';
+import DeployedStrategiesPnL from '../components/common/DeployedStrategiesPnL';
 
 // ── Available strategies for deployment ─────────────────────────────
 const STRATEGY_OPTIONS = [
@@ -65,6 +67,43 @@ const orderColumns = [
   { key: 'status', label: 'Status', render: (v) => <StatusBadge status={v?.toLowerCase?.()} /> },
   { key: 'timestamp', label: 'Time', render: (v) => <span className="text-xs text-slate-500">{v ? new Date(v).toLocaleTimeString() : '--'}</span> },
 ];
+
+// ════════════════════════════════════════════════════════════════════
+// Helper: clear-history button for the deployed-strategies card
+// ════════════════════════════════════════════════════════════════════
+function PaperClearHistoryButton() {
+  const clearHistory = useClearStrategyHistory();
+  const toast = useToast();
+
+  const handleClick = async () => {
+    try {
+      const result = await clearHistory.mutateAsync();
+      toast?.addToast?.({
+        level: 'success',
+        message: `Removed ${result.removed_count} stopped/exited strategies`,
+        source: 'paper-trading',
+      });
+    } catch (e) {
+      toast?.addToast?.({
+        level: 'CRITICAL',
+        message: `Clear failed: ${e?.response?.data?.detail || e.message}`,
+        source: 'paper-trading',
+      });
+    }
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-700/30 flex justify-end">
+      <button
+        onClick={handleClick}
+        disabled={clearHistory.isPending}
+        className="text-[11px] font-medium text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-40"
+      >
+        {clearHistory.isPending ? 'Clearing…' : 'Clear stopped strategies'}
+      </button>
+    </div>
+  );
+}
 
 // ════════════════════════════════════════════════════════════════════
 // Main Component
@@ -211,6 +250,12 @@ export default function PaperTrading() {
             </button>
           </div>
         )}
+      </div>
+
+      {/* ── Live Strategy P&L (deployed via StrategyBuilder + AI auto-deploy) ── */}
+      <div className="glass-card !p-4 !rounded-2xl">
+        <DeployedStrategiesPnL />
+        <PaperClearHistoryButton />
       </div>
 
       {/* ── Deploy Strategy Dropdown ── */}

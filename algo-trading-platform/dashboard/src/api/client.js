@@ -49,9 +49,11 @@ export const updateStrategyParams = (id, params) =>
   api.put(`/strategies/${id}/params`, params);
 export const deployStrategy = (config) => api.post('/strategies/deploy', config);
 export const saveStrategy = (config) => api.post('/strategies/save', config);
-export const getDeployedStrategies = () => api.get('/deployed-strategies');
+export const getDeployedStrategies = (status) =>
+  api.get('/deployed-strategies', { params: status ? { status } : {} });
 export const getDeployedStrategyPnL = (id) => api.get(`/strategies/${id}/pnl`);
 export const stopDeployedStrategy = (id) => api.post(`/strategies/${id}/stop`);
+export const clearStrategyHistory = () => api.delete('/deployed-strategies/clear-history');
 
 // Trading Mode (paper / live)
 export const getTradingMode = () => api.get('/trading/mode');

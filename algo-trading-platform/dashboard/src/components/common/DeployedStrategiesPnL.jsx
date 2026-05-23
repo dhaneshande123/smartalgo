@@ -16,10 +16,11 @@ export default function DeployedStrategiesPnL({ compact = false }) {
   const stopMutation = useStopDeployedStrategy();
 
   const strategies = data?.strategies || [];
-  // Show RUNNING strategies, plus any EXITED ones from today so user sees their P&L outcome
-  const activeStrategies = strategies.filter(
-    (s) => s.status === 'RUNNING' || s.status === 'EXITED',
-  );
+  // Only RUNNING strategies in the live view (EXITED and STOPPED are historical
+  // and shown in the History tab on the Paper Trading page).
+  const activeStrategies = strategies.filter((s) => s.status === 'RUNNING');
+  // If compact prop is set, show only the top N strategies (used on Dashboard)
+  const displayList = compact ? activeStrategies.slice(0, 3) : activeStrategies;
 
   if (activeStrategies.length === 0) {
     return (
@@ -46,20 +47,42 @@ export default function DeployedStrategiesPnL({ compact = false }) {
     }
   };
 
+  // Aggregate stats for the compact header
+  const totalPnL = activeStrategies.reduce((sum, s) => sum + (Number(s.pnl) || 0), 0);
+  const enteredCount = activeStrategies.filter((s) => s.entered).length;
+  const waitingCount = activeStrategies.length - enteredCount;
+
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="text-sm font-bold text-white flex items-center gap-2">
           <Activity className="w-4 h-4 text-accent" />
           Live Strategy P&amp;L
           <span className="text-xs text-slate-500 font-normal">
-            ({activeStrategies.length} active)
+            ({activeStrategies.length} active{compact && activeStrategies.length > 3 ? `, showing 3 of ${activeStrategies.length}` : ''})
           </span>
         </h3>
+        {activeStrategies.length > 0 && (
+          <div className="flex items-center gap-3 text-xs">
+            <span className="text-slate-500">
+              <span className="text-profit font-semibold">{enteredCount}</span> entered
+              {' · '}
+              <span className="text-yellow-400 font-semibold">{waitingCount}</span> waiting
+            </span>
+            <span className="text-slate-500">Total P&amp;L</span>
+            <span
+              className={`font-mono font-bold ${
+                totalPnL >= 0 ? 'text-profit' : 'text-loss'
+              }`}
+            >
+              ₹{totalPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className={compact ? 'space-y-2' : 'grid grid-cols-1 md:grid-cols-2 gap-3'}>
-        {activeStrategies.map((s) => {
+        {displayList.map((s) => {
           const pnl = Number(s.pnl) || 0;
           const isProfit = pnl >= 0;
           const isLive = (s.mode || '').toLowerCase() === 'live';

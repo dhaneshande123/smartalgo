@@ -121,6 +121,14 @@ export const useStopDeployedStrategy = () => {
   });
 };
 
+export const useClearStrategyHistory = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.clearStrategyHistory,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['deployedStrategies'] }),
+  });
+};
+
 // Indicators + market regime (for entry-condition UI + live previews)
 export const useIndicators = (symbol = 'NIFTY', timeframe = 'M5') =>
   useQuery({

@@ -7,7 +7,6 @@ import {
   ArrowUpRight, Grid3X3, ChevronLeft,
 } from 'lucide-react';
 import PayoffDiagram from '../components/charts/PayoffDiagram';
-import DeployedStrategiesPnL from '../components/common/DeployedStrategiesPnL';
 import {
   useStrategies, useStrategyAction,
   usePaperTradingStatus, usePaperTradingStats, usePaperTradingStrategies,
@@ -403,11 +402,6 @@ export default function Strategies() {
           <p style={{ color: '#475569', fontSize: 13, marginTop: 4 }}>
             {strategies.length} institutional-grade algo strategies — select a category to explore
           </p>
-        </div>
-
-        {/* Live P&L for deployed strategies (paper + live) */}
-        <div className="glass-card !p-4">
-          <DeployedStrategiesPnL />
         </div>
 
         {/* Market Regime Banner (if available) */}

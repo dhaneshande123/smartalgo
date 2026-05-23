@@ -2808,13 +2808,48 @@ async def deploy_strategy(body: dict = Body(...)):
         "the cumulative realized + unrealized P&L."
     ),
 )
-async def list_deployed_strategies():
+async def list_deployed_strategies(status: str | None = None):
+    """List all deployed strategies. Optional ``status`` query filter.
+
+    - ``status=running``  -> only RUNNING (active monitoring/positions)
+    - ``status=history``  -> only STOPPED / EXITED / FAILED
+    - omitted             -> everything
+    """
     results = []
     for sid, strat in _deployed_strategies.items():
         # Refresh per-position LTPs from Fyers cache and recompute leg P&L
         _refresh_strategy_pnl(strat)
         results.append(strat)
+
+    if status:
+        filt = status.lower()
+        if filt == "running":
+            results = [s for s in results if s.get("status") == "RUNNING"]
+        elif filt == "history":
+            results = [s for s in results if s.get("status") in ("STOPPED", "EXITED", "FAILED")]
+
     return {"strategies": results, "count": len(results), "mode": _TRADING_MODE}
+
+
+@app.delete(
+    "/api/deployed-strategies/clear-history",
+    tags=["Strategies"],
+    summary="Clear stopped / exited strategies",
+    description=(
+        "Removes all STOPPED / EXITED / FAILED strategies from the in-memory list. "
+        "Useful for cleaning up after backtest-style experimentation. RUNNING strategies "
+        "are never touched. Returns the count of removed entries."
+    ),
+)
+async def clear_history():
+    to_remove = [
+        sid for sid, strat in _deployed_strategies.items()
+        if strat.get("status") in ("STOPPED", "EXITED", "FAILED")
+    ]
+    for sid in to_remove:
+        _deployed_strategies.pop(sid, None)
+        _strategy_overrides.pop(sid, None)
+    return {"removed_count": len(to_remove), "removed_ids": to_remove}
 
 
 @app.get(
