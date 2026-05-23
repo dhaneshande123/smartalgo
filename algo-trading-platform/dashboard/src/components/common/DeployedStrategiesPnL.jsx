@@ -16,7 +16,10 @@ export default function DeployedStrategiesPnL({ compact = false }) {
   const stopMutation = useStopDeployedStrategy();
 
   const strategies = data?.strategies || [];
-  const activeStrategies = strategies.filter((s) => s.status !== 'STOPPED');
+  // Show RUNNING strategies, plus any EXITED ones from today so user sees their P&L outcome
+  const activeStrategies = strategies.filter(
+    (s) => s.status === 'RUNNING' || s.status === 'EXITED',
+  );
 
   if (activeStrategies.length === 0) {
     return (
@@ -80,14 +83,36 @@ export default function DeployedStrategiesPnL({ compact = false }) {
                       {s.mode || 'paper'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                  <div className="flex items-center gap-2 text-[10px] text-slate-500 flex-wrap">
                     <span>{s.underlying}</span>
                     <span>·</span>
                     <span>{s.positions?.length || 0} legs</span>
                     <span>·</span>
-                    <span className={s.status === 'RUNNING' ? 'text-profit' : 'text-slate-400'}>
+                    <span
+                      className={
+                        s.status === 'RUNNING'
+                          ? 'text-profit'
+                          : s.status === 'EXITED'
+                          ? 'text-blue-400'
+                          : 'text-slate-400'
+                      }
+                    >
                       {s.status}
                     </span>
+                    {s.entered && s.status === 'RUNNING' && (
+                      <>
+                        <span>·</span>
+                        <span className="text-profit font-semibold">● ENTERED</span>
+                      </>
+                    )}
+                    {s.exit_reason && (
+                      <>
+                        <span>·</span>
+                        <span className="text-loss" title={s.exit_reason}>
+                          exit: {s.exit_reason.split(' ')[0]}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
                 <button

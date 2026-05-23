@@ -78,6 +78,7 @@ _event_bus: InMemoryEventBus | None = None
 _ws_manager: WebSocketManager | None = None
 _paper_trading_manager: PaperTradingManager | None = None
 _live_feed: FyersLiveFeed | None = None
+_dashboard_executor: Any = None  # core.strategy_engine.dashboard_executor.DashboardStrategyExecutor
 
 # ── Load environment variables from .env ─────────────────────────
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
@@ -1768,7 +1769,7 @@ class StrategySaveRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup and shutdown logic for the FastAPI application."""
-    global _startup_time, _config, _event_bus, _ws_manager, _paper_trading_manager, _live_feed
+    global _startup_time, _config, _event_bus, _ws_manager, _paper_trading_manager, _live_feed, _dashboard_executor
 
     _startup_time = time.time()
 
@@ -1823,9 +1824,32 @@ async def lifespan(application: FastAPI):
         _logging.getLogger(__name__).warning("Fyers connection failed — falling back to mock data")
         _live_feed = None
 
+    # Start the Dashboard Strategy Executor — runs deployed strategies
+    # (entry orders, SL/target monitoring, 15:15 square-off)
+    global _dashboard_executor
+    try:
+        from core.strategy_engine.dashboard_executor import DashboardStrategyExecutor
+        _dashboard_executor = DashboardStrategyExecutor(
+            deployed_strategies=_deployed_strategies,
+            refresh_pnl_fn=_refresh_strategy_pnl,
+            paper_trading_manager=_paper_trading_manager,
+            live_feed=_live_feed,
+            place_order_fn=None,  # populated lazily — strategies can route via /api/orders
+        )
+        await _dashboard_executor.start()
+    except Exception as e:
+        logger.warning(f"Could not start dashboard strategy executor: {e}")
+        _dashboard_executor = None
+
     yield
 
     # Shutdown
+    if _dashboard_executor is not None:
+        try:
+            await _dashboard_executor.stop()
+        except Exception:
+            pass
+
     if _live_feed is not None:
         await _live_feed.disconnect()
 
@@ -2660,19 +2684,36 @@ async def deploy_strategy(body: dict = Body(...)):
     legs = body.get("legs", [])
     mode = _TRADING_MODE  # snapshot at deploy time
 
+    # Execution mode: defaults to "paper" for safety, regardless of the global
+    # trading mode. To trade real money via the executor, the client must pass
+    # ``execution_mode: "live"`` AND the global mode must also be "live".
+    requested_exec_mode = (body.get("execution_mode") or "paper").lower()
+    if requested_exec_mode == "live" and mode != "live":
+        # Refuse to set execution_mode=live when global mode is paper
+        requested_exec_mode = "paper"
+    execution_mode = requested_exec_mode
+
     strategy_entry = {
         "strategy_id": sid,
         "name": body.get("name", "Custom Strategy"),
         "underlying": underlying,
         "status": "RUNNING",
-        "mode": mode,                # remember which mode this strategy was deployed in
+        "mode": mode,                            # global mode snapshot at deploy
+        "execution_mode": execution_mode,        # actual routing for the executor
+        "entered": False,                        # set True by executor after entry orders placed
+        "entered_at": None,
+        "entry_orders": [],
+        "exit_orders": [],
+        "exit_reason": None,
+        "exited_at": None,
         "pnl": 0.0,
         "realized_pnl": 0.0,
         "unrealized_pnl": 0.0,
-        "positions": [],             # list of {symbol, side, qty, entry_price, ltp, pnl}
+        "positions": [],                         # list of {symbol, side, qty, entry_price, ltp, pnl}
         "legs": legs,
         "risk_params": body.get("risk_params", {}),
         "schedule": body.get("schedule", "market_open"),
+        "custom_time": body.get("custom_time") or body.get("customTime"),
         "spot_price": body.get("spot_price", 0),
         "lot_size": body.get("lot_size", 1),
         "deployed_at": datetime.now(IST).isoformat(),
@@ -2798,6 +2839,15 @@ async def stop_deployed_strategy(strategy_id: str):
     if strategy_id not in _deployed_strategies:
         raise HTTPException(status_code=404, detail=f"Strategy '{strategy_id}' not deployed")
     strat = _deployed_strategies[strategy_id]
+
+    # If the strategy has already entered positions, square them off via the executor.
+    # This locks in the current P&L as realized and places exit orders.
+    if strat.get("entered") and _dashboard_executor is not None:
+        try:
+            await _dashboard_executor._place_exit_orders(strategy_id, strat, reason="manual_stop")
+        except Exception as e:
+            logger.warning(f"Manual-stop exit-order placement failed: {e}")
+
     strat["status"] = "STOPPED"
     _strategy_overrides[strategy_id] = {"status": "STOPPED"}
 
@@ -2807,7 +2857,65 @@ async def stop_deployed_strategy(strategy_id: str):
         except Exception as e:
             logger.warning(f"Paper manager stop failed: {e}")
 
-    return {"success": True, "strategy_id": strategy_id, "status": "STOPPED"}
+    return {
+        "success": True,
+        "strategy_id": strategy_id,
+        "status": "STOPPED",
+        "exit_reason": strat.get("exit_reason"),
+        "realized_pnl": strat.get("realized_pnl", 0.0),
+    }
+
+
+@app.post(
+    "/api/strategies/{strategy_id}/execution-mode",
+    tags=["Strategies"],
+    summary="Set execution mode for a strategy",
+    description=(
+        "Per-strategy execution_mode override. By default deployed strategies "
+        "execute in PAPER even when the global mode is LIVE. To enable real "
+        "trading for ONE strategy, POST {execution_mode: 'live'}. Requires the "
+        "global trading mode to also be 'live'."
+    ),
+)
+async def set_strategy_execution_mode(strategy_id: str, body: dict = Body(...)):
+    if strategy_id not in _deployed_strategies:
+        raise HTTPException(status_code=404, detail=f"Strategy '{strategy_id}' not deployed")
+    requested = (body.get("execution_mode") or "").lower().strip()
+    if requested not in {"paper", "live"}:
+        raise HTTPException(status_code=400, detail="execution_mode must be 'paper' or 'live'")
+    if requested == "live" and _TRADING_MODE != "live":
+        raise HTTPException(
+            status_code=400,
+            detail="Global trading mode is PAPER. Switch to LIVE first via /api/trading/mode.",
+        )
+    strat = _deployed_strategies[strategy_id]
+    previous = strat.get("execution_mode", "paper")
+    strat["execution_mode"] = requested
+    logger.warning(
+        f"Strategy {strategy_id} execution_mode: {previous} -> {requested} "
+        f"(name={strat.get('name')})"
+    )
+    return {
+        "success": True,
+        "strategy_id": strategy_id,
+        "execution_mode": requested,
+        "previous": previous,
+    }
+
+
+@app.get(
+    "/api/executor/status",
+    tags=["Strategies"],
+    summary="Dashboard strategy executor status",
+    description=(
+        "Returns whether the background strategy executor is running, how many "
+        "ticks it has processed, and when it last ticked. Useful for debugging."
+    ),
+)
+async def executor_status():
+    if _dashboard_executor is None:
+        return {"running": False, "reason": "executor not initialised"}
+    return _dashboard_executor.status()
 
 
 @app.post(
