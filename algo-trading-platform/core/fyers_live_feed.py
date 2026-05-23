@@ -26,6 +26,7 @@ INDEX_SYMBOLS = {
     "FINNIFTY": "NSE:FINNIFTY-INDEX",
     "MIDCPNIFTY": "NSE:MIDCPNIFTY-INDEX",
     "SENSEX": "BSE:SENSEX-INDEX",
+    "INDIA VIX": "NSE:INDIAVIX-INDEX",
 }
 
 # Reverse map: Fyers symbol -> internal name

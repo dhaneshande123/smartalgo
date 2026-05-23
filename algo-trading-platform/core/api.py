@@ -4984,75 +4984,185 @@ async def paper_trading_place_order(body: PaperOrderRequest):
         raise HTTPException(status_code=409, detail=str(exc))
 
 
+async def _build_market_context(symbol: str = "NIFTY") -> dict:
+    """Fetch live candles, VIX, spot for the signal engine."""
+    candles = []
+    vix = None
+    spot = None
+    if _live_feed and _live_feed.is_connected:
+        try:
+            candles = await _live_feed.get_candles(symbol, "M15", 100)
+        except Exception:
+            pass
+        vix_tick = _live_feed.get_cached_tick("INDIA VIX")
+        vix = float(vix_tick.get("ltp", 0)) if vix_tick else None
+        spot_tick = _live_feed.get_cached_tick(symbol)
+        spot = float(spot_tick.get("ltp", 0)) if spot_tick else None
+    return {"candles": candles, "vix": vix, "spot": spot, "symbol": symbol}
+
+
 @app.get(
     "/api/market-regime",
     tags=["Market Intelligence"],
-    summary="Current market regime analysis",
-    description="Classifies current market into a regime (trending, range-bound, volatile, crisis) based on VIX, trend, and price action.",
+    summary="Current market regime analysis (live)",
+    description=(
+        "Live market regime classification using Fyers candles + VIX + IV Rank. "
+        "Returns HIGH_VOL / LOW_VOL / TRENDING_UP / TRENDING_DOWN / RANGE_BOUND "
+        "with confidence and a strategy recommendation."
+    ),
 )
-async def get_market_regime():
-    return _mock.market_regime()
+async def get_market_regime(symbol: str = "NIFTY"):
+    from core.market_regime import classify_regime
+    ctx = await _build_market_context(symbol)
+    regime = classify_regime(**ctx)
+    # Add a normalised regime_label for legacy UI compatibility
+    regime["regime_label"] = regime["regime"].replace("_", " ").title()
+    regime["color"] = {
+        "HIGH_VOL": "red", "LOW_VOL": "green",
+        "TRENDING_UP": "blue", "TRENDING_DOWN": "orange",
+        "RANGE_BOUND": "gray", "UNKNOWN": "gray",
+    }.get(regime["regime"], "gray")
+    regime["source"] = "fyers_live" if ctx["candles"] else "fyers_partial"
+    return regime
 
 
 @app.get(
     "/api/strategy-signals",
     tags=["Market Intelligence"],
-    summary="Strategy-specific trading signals",
-    description="Returns entry/exit/avoid signals for each strategy based on current market conditions.",
+    summary="Live AI strategy signals",
+    description=(
+        "Per-strategy entry signals (STRONG_ENTRY / ENTRY / WAIT / NEUTRAL / AVOID) "
+        "computed from live market regime, IV Rank, ADX, VIX, and baseline win rates. "
+        "Returns sorted by confidence descending."
+    ),
 )
-async def get_strategy_signals():
-    return {"signals": _mock.strategy_signals(), "regime": _mock.market_regime()}
+async def get_strategy_signals(symbol: str = "NIFTY"):
+    from core.ai_signal_engine import generate_signals
+    ctx = await _build_market_context(symbol)
+    result = generate_signals(
+        symbol=symbol,
+        candles=ctx["candles"],
+        vix=ctx["vix"],
+        spot=ctx["spot"],
+    )
+    # Legacy field for older UI
+    result["regime_label"] = result["regime"]["regime"].replace("_", " ").title()
+    return result
 
 
 @app.get(
     "/api/auto-deploy/recommendations",
     tags=["Market Intelligence"],
-    summary="Auto-deploy strategy recommendations",
-    description="Returns top strategy picks for current market regime with deploy-ready configuration.",
+    summary="Auto-deploy recommendations (live AI signals)",
+    description=(
+        "Top strategies the AI engine recommends deploying right now. Only strategies "
+        "with confidence >= AUTO_DEPLOY_THRESHOLD (70) are marked auto_deploy=true."
+    ),
 )
-async def get_auto_deploy_recommendations():
+async def get_auto_deploy_recommendations(symbol: str = "NIFTY"):
+    from core.ai_signal_engine import generate_signals
+    from core.strategy_fit import AUTO_DEPLOY_THRESHOLD
+    ctx = await _build_market_context(symbol)
+    result = generate_signals(
+        symbol=symbol, candles=ctx["candles"], vix=ctx["vix"], spot=ctx["spot"],
+    )
+    recommendations = [
+        {
+            "strategy_id": s["strategy_class"].replace("_", "-"),
+            "strategy_class": s["strategy_class"],
+            "strategy_name": s["strategy_name"],
+            "category": s["category"],
+            "signal": s["signal"],
+            "confidence": s["confidence"],
+            "auto_deploy": s["ready_to_deploy"],
+            "reason": " · ".join(s["reasoning"][:2]),
+            "expected_return_pct": s["expected_return_pct"],
+            "max_loss_pct": s["max_loss_pct"],
+            "win_rate_pct": s["win_rate_pct"],
+            "capital_req": s["capital_req"],
+        }
+        for s in result["signals"]
+    ]
     return {
-        "recommendations": _mock.auto_deploy_recommendations(),
-        "regime": _mock.market_regime(),
+        "recommendations": recommendations,
+        "regime": result["regime"],
+        "threshold": AUTO_DEPLOY_THRESHOLD,
+        "deploy_ready_count": result["deploy_ready_count"],
     }
 
 
 @app.post(
     "/api/auto-deploy/execute",
     tags=["Market Intelligence"],
-    summary="Auto-deploy recommended strategies to paper mode",
-    description="Deploys all high-confidence recommended strategies to the active paper trading session.",
+    summary="Auto-deploy live AI recommendations to paper mode",
+    description=(
+        "Deploys every strategy with confidence ≥ threshold via the dashboard "
+        "strategy executor. All deploys are PAPER by default (safety policy). "
+        "Each strategy gets its AI-generated entry_conditions so it only enters "
+        "when conditions are actually met."
+    ),
 )
-async def execute_auto_deploy():
-    if _paper_trading_manager is None:
-        raise HTTPException(status_code=503, detail="Paper trading manager not initialized")
-    if not _paper_trading_manager.is_active:
-        raise HTTPException(status_code=409, detail="No active paper trading session. Start one first.")
+async def execute_auto_deploy(body: dict = Body(default={})):
+    from core.ai_signal_engine import generate_signals, build_deploy_payload
+    from core import symbol_master
 
-    recs = _mock.auto_deploy_recommendations()
+    symbol = (body.get("symbol") or "NIFTY").upper()
+    threshold = float(body.get("threshold") or 0)
+
+    ctx = await _build_market_context(symbol)
+    result = generate_signals(symbol=symbol, **{k: v for k, v in ctx.items() if k != "symbol"})
+
+    spot = ctx["spot"] or 0
+    lot = symbol_master.get_lot_size(symbol)
+
     deployed = []
-    for rec in recs:
-        if not rec["auto_deploy"]:
+    skipped = []
+    for sig in result["signals"]:
+        if threshold > 0 and sig["confidence"] < threshold:
+            skipped.append({"strategy": sig["strategy_class"], "reason": f"below threshold ({sig['confidence']}<{threshold})"})
             continue
-        strategy_class = rec["strategy_class"]
-        if strategy_class not in _STRATEGY_MAP:
+        if not sig["ready_to_deploy"]:
+            skipped.append({"strategy": sig["strategy_class"], "reason": f"not ready (conf={sig['confidence']})"})
             continue
-        strategy_id = f"auto-{strategy_class}-{random.randint(1000, 9999)}"
+
+        payload = build_deploy_payload(sig, spot_price=spot, lot_size=lot, name_suffix="AI")
         try:
-            result = _paper_trading_manager.deploy_strategy(
-                strategy_id=strategy_id,
-                strategy_name=rec["strategy_id"].replace("-", " ").title(),
-                strategy_class=strategy_class,
-                params={},
-            )
-            deployed.append({**result, "reason": rec["reason"]})
-        except RuntimeError:
-            continue
+            # Reuse the platform's own deploy endpoint logic
+            deploy_result = await deploy_strategy(payload)
+            deployed.append({
+                "strategy_id": deploy_result["strategy_id"],
+                "name": deploy_result["strategy"]["name"],
+                "strategy_class": sig["strategy_class"],
+                "confidence": sig["confidence"],
+                "reason": " · ".join(sig["reasoning"][:2]),
+            })
+        except Exception as e:
+            logger.warning(f"Auto-deploy of {sig['strategy_class']} failed: {e}")
+            skipped.append({"strategy": sig["strategy_class"], "reason": str(e)})
 
     return {
         "deployed_count": len(deployed),
         "deployed": deployed,
-        "regime": _mock.market_regime()["regime_label"],
+        "skipped_count": len(skipped),
+        "skipped": skipped,
+        "regime": result["regime"]["regime"],
+        "timestamp": datetime.now(IST).isoformat(),
+    }
+
+
+@app.get(
+    "/api/strategy-fit",
+    tags=["Market Intelligence"],
+    summary="Strategy-fit matrix",
+    description="Returns the full strategy-fit matrix: which strategies suit which regimes/IV/ADX bands.",
+)
+async def get_strategy_fit():
+    from core import strategy_fit
+    return {
+        "strategies": strategy_fit.STRATEGY_FIT,
+        "weights": strategy_fit.SCORE_WEIGHTS,
+        "auto_deploy_threshold": strategy_fit.AUTO_DEPLOY_THRESHOLD,
+        "by_category": strategy_fit.by_category(),
     }
 
 

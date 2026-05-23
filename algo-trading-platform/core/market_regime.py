@@ -131,32 +131,53 @@ def get_iv_tracker() -> IVTracker:
 
 
 def record_iv_from_option_chain(chain_data: dict[str, Any]) -> None:
-    """Extract the ATM straddle IV from a /api/market/option-chain response and
-    record it. The chain format we use is:
+    """Extract the implied volatility proxy from a /api/market/option-chain
+    response and record it.
 
-        {"symbol": "NIFTY", "spot_price": ..., "atm_strike": ...,
-         "chain": [{"strike": 23700, "call_iv": ..., "put_iv": ..., ...}, ...]}
+    Sources (in priority order):
+        1. ``india_vix`` field on the response — this is what Fyers returns
+           for index option chains and equals NIFTY ATM IV by construction.
+        2. Average of ATM ``call_iv`` and ``put_iv`` from the chain rows if
+           Fyers ever populates them (currently they don't, but we keep the
+           fallback for future-proofing).
 
-    The ATM straddle IV = (call_iv + put_iv) / 2 at the ATM strike. This
-    is a single number per symbol per tick, which the IV tracker stores.
+    A single sample per symbol per option-chain refresh is recorded.
     """
     if not isinstance(chain_data, dict):
         return
     symbol = chain_data.get("symbol")
-    atm = chain_data.get("atm_strike")
-    rows = chain_data.get("chain", []) or []
-    if not (symbol and atm and rows):
+    if not symbol:
         return
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        if row.get("strike") == atm:
-            call_iv = float(row.get("call_iv", 0) or 0)
-            put_iv = float(row.get("put_iv", 0) or 0)
-            if call_iv > 0 and put_iv > 0:
-                atm_iv = (call_iv + put_iv) / 2.0
-                _global_iv_tracker.record(symbol, atm_iv)
-            return
+
+    iv_value: float | None = None
+
+    # Source 1: india_vix (preferred — already an IV % from Fyers)
+    vix = chain_data.get("india_vix")
+    if vix is not None:
+        try:
+            v = float(vix)
+            if v > 0:
+                iv_value = v
+        except (TypeError, ValueError):
+            pass
+
+    # Source 2: per-leg IV in the chain rows (fallback)
+    if iv_value is None:
+        atm = chain_data.get("atm_strike")
+        rows = chain_data.get("chain", []) or []
+        if atm and rows:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("strike") == atm:
+                    call_iv = float(row.get("call_iv", 0) or 0)
+                    put_iv = float(row.get("put_iv", 0) or 0)
+                    if call_iv > 0 and put_iv > 0:
+                        iv_value = (call_iv + put_iv) / 2.0
+                    break
+
+    if iv_value is not None and iv_value > 0:
+        _global_iv_tracker.record(symbol, iv_value)
 
 
 # ---------------------------------------------------------------------------
