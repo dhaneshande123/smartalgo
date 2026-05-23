@@ -195,7 +195,7 @@ export default function AISignals() {
           className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all"
           style={{ background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.2)', color: '#a855f7' }}
         >
-          <RefreshCw className={`w-4 h-4 ${regimeLoading || signalsLoading ? 'animate-spin' : ''}`} />
+          <RefreshCw className="w-4 h-4" />
           Refresh
         </button>
       </div>
