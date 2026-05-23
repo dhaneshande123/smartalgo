@@ -150,9 +150,11 @@ class DashboardStrategyExecutor:
         # ---- 1. Refresh P&L from current LTPs (always)
         self._refresh_pnl(strat)
 
-        # ---- 2. Entry: if scheduled time reached and not yet entered, place orders
-        if not strat.get("entered", False) and self._should_enter_now(strat, now_t):
-            await self._place_entry_orders(sid, strat)
+        # ---- 2. Entry: only if within the schedule window AND entry conditions pass
+        if not strat.get("entered", False):
+            if self._within_entry_window(strat, now_t):
+                if await self._entry_conditions_met(sid, strat):
+                    await self._place_entry_orders(sid, strat)
 
         # ---- 3. Risk checks (only after entry)
         if strat.get("entered", False):
@@ -160,27 +162,89 @@ class DashboardStrategyExecutor:
             if exit_reason:
                 await self._place_exit_orders(sid, strat, reason=exit_reason)
 
-    # ── Schedule ─────────────────────────────────────────────────────────
+    # ── Entry gating ─────────────────────────────────────────────────────
 
-    def _should_enter_now(self, strat: dict, now_t: dtime) -> bool:
-        """Return True if the strategy should enter at this tick."""
+    def _within_entry_window(self, strat: dict, now_t: dtime) -> bool:
+        """Return True if the current time is within the strategy's allowed
+        entry window. Two modes are supported:
+
+        1. **Explicit window**: ``schedule_window: ["09:20", "15:00"]`` — only
+           consider entries within this range.
+        2. **Legacy schedule**: ``schedule: "market_open"`` (or mid_morning /
+           afternoon / pre_close / custom) — entry-time-or-after, while market
+           is open.
+
+        If neither is set, defaults to "09:20–15:00 IST".
+        """
+        # Always block outside market hours
+        if not (MARKET_OPEN <= now_t < SQUARE_OFF_TIME):
+            return False
+
+        window = strat.get("schedule_window") or strat.get("scheduleWindow")
+        if isinstance(window, (list, tuple)) and len(window) == 2:
+            try:
+                start = self._parse_hhmm(window[0]) or dtime(9, 20)
+                end = self._parse_hhmm(window[1]) or dtime(15, 0)
+                return start <= now_t < end
+            except Exception:
+                return True  # malformed window → be permissive
+
+        # Legacy schedule field
         schedule = strat.get("schedule", "market_open")
-
-        # Custom HH:MM time
         if schedule == "custom":
             custom = strat.get("custom_time") or strat.get("customTime") or "09:20"
-            try:
-                h, m = custom.split(":")
-                target = dtime(int(h), int(m))
-            except (ValueError, AttributeError):
-                target = SCHEDULE_TIMES["market_open"]
+            target = self._parse_hhmm(custom) or SCHEDULE_TIMES["market_open"]
         else:
             target = SCHEDULE_TIMES.get(schedule, SCHEDULE_TIMES["market_open"])
 
-        # Enter if we're past the target time AND market is open
-        if not (MARKET_OPEN <= now_t < SQUARE_OFF_TIME):
-            return False
+        # If a schedule is set, the strategy is allowed to enter from that
+        # time onwards (until square-off). If the strategy ALSO has entry
+        # conditions, those still need to pass — schedule is just the window.
         return now_t >= target
+
+    @staticmethod
+    def _parse_hhmm(s: str) -> dtime | None:
+        try:
+            h, m = s.strip().split(":")
+            return dtime(int(h), int(m))
+        except Exception:
+            return None
+
+    async def _entry_conditions_met(self, sid: str, strat: dict) -> bool:
+        """If the strategy has ``entry_conditions``, evaluate them against
+        live market data. If it has none, return True (schedule alone decides).
+        """
+        conditions = strat.get("entry_conditions") or strat.get("entryConditions") or []
+        if not conditions:
+            return True
+
+        trigger = strat.get("entry_trigger") or strat.get("entryTrigger") or "ALL"
+        underlying = strat.get("underlying", "NIFTY")
+
+        try:
+            from core.condition_evaluator import evaluate_conditions
+            result = await evaluate_conditions(
+                symbol=underlying,
+                conditions=conditions,
+                trigger=trigger,
+                live_feed=self._live_feed,
+                timeframe=strat.get("condition_timeframe", "M5"),
+            )
+            # Store the latest evaluation for the UI
+            strat["last_condition_check"] = {
+                "at": datetime.now(IST).isoformat(),
+                "passed": result["passed"],
+                "summary": result["summary"],
+                "results": result["results"],
+            }
+            if not result["passed"]:
+                # Conditions failed → wait
+                return False
+            logger.info(f"Strategy {sid} entry conditions PASSED: {result['summary']}")
+            return True
+        except Exception as e:
+            logger.warning(f"Condition evaluation failed for {sid}: {e}")
+            return False
 
     # ── Exit conditions ──────────────────────────────────────────────────
 

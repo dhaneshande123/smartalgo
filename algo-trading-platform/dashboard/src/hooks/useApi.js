@@ -121,6 +121,33 @@ export const useStopDeployedStrategy = () => {
   });
 };
 
+// Indicators + market regime (for entry-condition UI + live previews)
+export const useIndicators = (symbol = 'NIFTY', timeframe = 'M5') =>
+  useQuery({
+    queryKey: ['indicators', symbol, timeframe],
+    queryFn: () => api.getIndicators(symbol, timeframe),
+    enabled: !!symbol,
+    refetchInterval: 5000,
+  });
+
+export const useSupportedIndicators = () =>
+  useQuery({
+    queryKey: ['supportedIndicators'],
+    queryFn: api.getSupportedIndicators,
+    staleTime: 600_000,
+  });
+
+export const useLiveMarketRegime = (symbol = 'NIFTY') =>
+  useQuery({
+    queryKey: ['liveMarketRegime', symbol],
+    queryFn: () => api.getMarketRegimeLive(symbol),
+    enabled: !!symbol,
+    refetchInterval: 10000,
+  });
+
+export const useEvaluateConditions = () =>
+  useMutation({ mutationFn: api.evaluateConditions });
+
 // Account / Fyers live data
 export const useFunds = () => useQuery({ queryKey: ['funds'], queryFn: api.getFunds, refetchInterval: 10000 });
 export const useHoldings = () => useQuery({ queryKey: ['holdings'], queryFn: api.getHoldings, refetchInterval: 30000 });

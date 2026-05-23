@@ -11,6 +11,7 @@ import {
 import { useIndices, useDeployStrategy, useSaveStrategy, useLotSizes } from '../hooks/useApi';
 import { useToast } from '../components/common/ToastProvider';
 import DeployedStrategiesPnL from '../components/common/DeployedStrategiesPnL';
+import EntryConditionsBuilder from '../components/common/EntryConditionsBuilder';
 
 /* ════════════════════════════════════════════════════════════
    Constants
@@ -183,7 +184,10 @@ export default function StrategyBuilder() {
   );
   const [schedule, setSchedule] = useState('market_open');
   const [customTime, setCustomTime] = useState('09:20');
-  const [activeTab, setActiveTab] = useState('legs'); // 'legs' | 'risk' | 'schedule'
+  // Entry conditions: list of {indicator, period, operator, value}
+  const [entryConditions, setEntryConditions] = useState([]);
+  const [entryTrigger, setEntryTrigger] = useState('ALL');
+  const [activeTab, setActiveTab] = useState('legs'); // 'legs' | 'risk' | 'schedule' | 'entry'
 
   // Live spot price from API
   const spotPrice = useMemo(() => {
@@ -235,12 +239,17 @@ export default function StrategyBuilder() {
       spot_price: spotPrice,
       lot_size: lotSize,
       legs: legs.map(l => ({
+        id: l.id,
         type: l.type, action: l.action,
+        offset: l.offset || 0,
         strike: spotPrice + (l.offset || 0),
         premium: l.premium, lots: l.lots || 1,
       })),
       risk_params: riskParams,
       schedule: schedule === 'custom' ? customTime : schedule,
+      custom_time: schedule === 'custom' ? customTime : undefined,
+      entry_conditions: entryConditions,
+      entry_trigger: entryTrigger,
     };
     try {
       await deployStrategyMutation.mutateAsync(payload);
@@ -373,6 +382,7 @@ export default function StrategyBuilder() {
           <div className="flex gap-1 bg-terminal-card rounded-lg p-0.5 border border-terminal-border">
             {[
               { key: 'legs', label: 'Option Legs', icon: Layers },
+              { key: 'entry', label: 'Entry Conditions', icon: Target },
               { key: 'risk', label: 'Risk Params', icon: Shield },
               { key: 'schedule', label: 'Schedule', icon: Settings2 },
             ].map(tab => (
@@ -498,6 +508,19 @@ export default function StrategyBuilder() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Entry Conditions Tab */}
+          {activeTab === 'entry' && (
+            <div className="glass-card !p-3">
+              <EntryConditionsBuilder
+                underlying={underlying}
+                conditions={entryConditions}
+                trigger={entryTrigger}
+                onConditionsChange={setEntryConditions}
+                onTriggerChange={setEntryTrigger}
+              />
             </div>
           )}
 

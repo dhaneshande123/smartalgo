@@ -58,6 +58,15 @@ export const getTradingMode = () => api.get('/trading/mode');
 export const setTradingMode = (mode, confirm = false) =>
   api.post('/trading/mode', { mode, confirm });
 
+// Indicators + market regime
+export const getIndicators = (symbol = 'NIFTY', timeframe = 'M5') =>
+  api.get(`/indicators/${symbol}`, { params: { timeframe } });
+export const getSupportedIndicators = () => api.get('/indicators/supported');
+export const getMarketRegimeLive = (symbol = 'NIFTY') =>
+  api.get(`/market/regime/${symbol}`);
+export const evaluateConditions = (payload) =>
+  api.post('/strategies/evaluate-conditions', payload);
+
 // Risk
 export const getRiskMetrics = () => api.get('/risk/metrics');
 export const getRiskLimits = () => api.get('/risk/limits');

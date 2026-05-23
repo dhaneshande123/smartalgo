@@ -2238,6 +2238,12 @@ async def market_option_chain(
                 _fyers_chain_cache_time[cache_key] = time.time()
                 # Also store by symbol for fallback
                 _fyers_chain_cache[symbol] = chain_data
+                # Feed IV tracker so IV Rank / Percentile can be computed
+                try:
+                    from core.market_regime import record_iv_from_option_chain
+                    record_iv_from_option_chain(chain_data)
+                except Exception:
+                    pass
                 return chain_data
         except Exception as e:
             import logging
@@ -2712,8 +2718,14 @@ async def deploy_strategy(body: dict = Body(...)):
         "positions": [],                         # list of {symbol, side, qty, entry_price, ltp, pnl}
         "legs": legs,
         "risk_params": body.get("risk_params", {}),
+        # Entry gating: legacy schedule (back-compat) + new condition-based fields
         "schedule": body.get("schedule", "market_open"),
         "custom_time": body.get("custom_time") or body.get("customTime"),
+        "schedule_window": body.get("schedule_window") or body.get("scheduleWindow"),
+        "entry_conditions": body.get("entry_conditions") or body.get("entryConditions") or [],
+        "entry_trigger": (body.get("entry_trigger") or body.get("entryTrigger") or "ALL").upper(),
+        "condition_timeframe": body.get("condition_timeframe") or body.get("conditionTimeframe") or "M5",
+        "last_condition_check": None,            # populated by executor on each evaluation
         "spot_price": body.get("spot_price", 0),
         "lot_size": body.get("lot_size", 1),
         "deployed_at": datetime.now(IST).isoformat(),
@@ -2916,6 +2928,155 @@ async def executor_status():
     if _dashboard_executor is None:
         return {"running": False, "reason": "executor not initialised"}
     return _dashboard_executor.status()
+
+
+# ===================================================================
+# Indicators & Market Regime — live values for entry conditions UI
+# ===================================================================
+
+
+@app.get(
+    "/api/indicators/{symbol}",
+    tags=["Indicators"],
+    summary="All indicators for a symbol",
+    description=(
+        "Returns live values for RSI, MACD, ATR, ADX, Bollinger Bands, VWAP, "
+        "Supertrend, IV Rank, IV Percentile, current regime — computed from "
+        "Fyers candles + option chain. Used by the StrategyBuilder UI to show "
+        "current readings while the user designs entry conditions."
+    ),
+)
+async def get_indicators(symbol: str, timeframe: str = "M5"):
+    from core import indicators as _ind
+    from core.market_regime import classify_regime, get_iv_tracker
+
+    sym = symbol.upper()
+    out: dict[str, Any] = {
+        "symbol": sym,
+        "timeframe": timeframe,
+        "indicators": {},
+        "regime": None,
+    }
+
+    if not (_live_feed and _live_feed.is_connected):
+        return {**out, "source": "unavailable"}
+
+    candles = []
+    try:
+        candles = await _live_feed.get_candles(sym, timeframe, 200)
+    except Exception as e:
+        logger.warning(f"Candle fetch failed for {sym}: {e}")
+
+    if candles:
+        arr = _ind.split_ohlcv(candles)
+        out["indicators"]["close"] = float(arr["Close"][-1]) if len(arr["Close"]) else None
+        out["indicators"]["rsi_14"] = _ind.rsi(arr["Close"], 14)
+        out["indicators"]["atr_14"] = _ind.atr(arr["High"], arr["Low"], arr["Close"], 14)
+        adx_v = _ind.adx(arr["High"], arr["Low"], arr["Close"], 14)
+        out["indicators"]["adx_14"] = adx_v
+        out["indicators"]["macd"] = _ind.macd(arr["Close"])
+        out["indicators"]["bbands_20"] = _ind.bollinger_bands(arr["Close"], 20, 2.0)
+        out["indicators"]["vwap"] = _ind.vwap(arr["High"], arr["Low"], arr["Close"], arr["Volume"])
+        out["indicators"]["supertrend_10_3"] = _ind.supertrend(arr["High"], arr["Low"], arr["Close"], 10, 3.0)
+        out["indicators"]["ema_20"] = _ind.ema(arr["Close"], 20)
+        out["indicators"]["sma_50"] = _ind.sma(arr["Close"], 50)
+        out["indicators"]["sma_200"] = _ind.sma(arr["Close"], 200)
+
+    # IV stats
+    tracker = get_iv_tracker()
+    out["indicators"]["iv_rank"] = tracker.iv_rank(sym)
+    out["indicators"]["iv_percentile"] = tracker.iv_percentile(sym)
+    out["indicators"]["iv_sample_count"] = tracker.sample_count(sym)
+    out["indicators"]["iv_latest"] = tracker.latest(sym)
+
+    # VIX
+    vix_tick = _live_feed.get_cached_tick("INDIA VIX") if _live_feed else None
+    vix_val = float(vix_tick.get("ltp", 0)) if vix_tick else None
+    out["indicators"]["vix"] = vix_val
+
+    # Spot
+    spot_tick = _live_feed.get_cached_tick(sym) if _live_feed else None
+    spot_val = float(spot_tick.get("ltp", 0)) if spot_tick else None
+    out["indicators"]["spot"] = spot_val
+
+    # Regime
+    out["regime"] = classify_regime(
+        symbol=sym,
+        candles=candles,
+        vix=vix_val,
+        spot=spot_val,
+    )
+
+    out["source"] = "fyers_live" if candles else "fyers_partial"
+    return out
+
+
+@app.get(
+    "/api/indicators/supported",
+    tags=["Indicators"],
+    summary="Supported indicators metadata",
+    description="Returns the list of indicators that can be used in entry_conditions, with parameter names and types.",
+)
+async def supported_indicators():
+    from core.condition_evaluator import supported_indicators_spec
+    return {"indicators": supported_indicators_spec()}
+
+
+@app.get(
+    "/api/market/regime/{symbol}",
+    tags=["Indicators"],
+    summary="Current market regime for a symbol",
+    description=(
+        "Classifies the current regime as one of HIGH_VOL / LOW_VOL / TRENDING_UP / "
+        "TRENDING_DOWN / RANGE_BOUND / UNKNOWN, with a confidence score and a "
+        "human-readable strategy recommendation."
+    ),
+)
+async def market_regime(symbol: str):
+    from core.market_regime import classify_regime
+
+    sym = symbol.upper()
+    candles = []
+    vix = None
+    spot = None
+    if _live_feed and _live_feed.is_connected:
+        try:
+            candles = await _live_feed.get_candles(sym, "M15", 100)
+        except Exception:
+            pass
+        vix_tick = _live_feed.get_cached_tick("INDIA VIX")
+        vix = float(vix_tick.get("ltp", 0)) if vix_tick else None
+        spot_tick = _live_feed.get_cached_tick(sym)
+        spot = float(spot_tick.get("ltp", 0)) if spot_tick else None
+
+    return classify_regime(symbol=sym, candles=candles, vix=vix, spot=spot)
+
+
+@app.post(
+    "/api/strategies/evaluate-conditions",
+    tags=["Indicators"],
+    summary="Dry-run entry conditions",
+    description=(
+        "Evaluate a list of entry_conditions against current market data without "
+        "deploying anything. Used by the StrategyBuilder preview to show 'would "
+        "this strategy enter right now?'"
+    ),
+)
+async def evaluate_conditions_dryrun(body: dict = Body(...)):
+    from core.condition_evaluator import evaluate_conditions
+
+    symbol = (body.get("symbol") or "NIFTY").upper()
+    conditions = body.get("entry_conditions") or body.get("conditions") or []
+    trigger = (body.get("entry_trigger") or body.get("trigger") or "ALL").upper()
+    timeframe = body.get("timeframe") or "M5"
+
+    return await evaluate_conditions(
+        symbol=symbol,
+        conditions=conditions,
+        trigger=trigger,
+        live_feed=_live_feed,
+        timeframe=timeframe,
+    )
 
 
 @app.post(
