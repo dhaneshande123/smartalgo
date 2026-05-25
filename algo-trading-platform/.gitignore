@@ -35,6 +35,11 @@ data/tick_data/
 *.parquet
 *.h5
 
+# SQLite state store (runtime data, recreated on first run)
+data/platform_state.db
+data/platform_state.db-shm
+data/platform_state.db-wal
+
 # Docker
 docker-compose.override.yml
 

@@ -427,6 +427,16 @@ class DashboardStrategyExecutor:
             f"name={strat.get('name')}"
         )
 
+        # Persist entry trades and updated strategy to SQLite
+        try:
+            from core.state_store import get_store
+            store = get_store()
+            for pos in positions:
+                store.log_trade(sid, "ENTRY", pos["side"], pos["symbol"], pos["qty"], pos.get("entry_price", 0))
+            store.save_strategy(sid, strat)
+        except Exception:
+            pass
+
     async def _fill_entry_prices_from_chain(
         self, sid: str, strat: dict, positions: list[dict]
     ) -> None:
@@ -565,3 +575,13 @@ class DashboardStrategyExecutor:
             f"Strategy {sid} EXITED ({execution_mode}) — reason={reason}, "
             f"final_pnl=₹{final_pnl:.2f}"
         )
+
+        # Persist exit trades and updated strategy to SQLite
+        try:
+            from core.state_store import get_store
+            store = get_store()
+            for pos in positions:
+                store.log_trade(sid, "EXIT", "SELL" if pos["side"] == "BUY" else "BUY", pos["symbol"], pos["qty"], float(pos.get("ltp", 0)), reason=reason)
+            store.save_strategy(sid, strat)
+        except Exception:
+            pass

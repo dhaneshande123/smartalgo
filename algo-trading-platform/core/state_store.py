@@ -1,0 +1,390 @@
+"""
+State persistence layer using SQLite.
+
+Saves and loads platform state so it survives backend restarts.
+Uses a single SQLite file at data/platform_state.db (auto-created).
+
+Design principles:
+- Zero external dependencies (sqlite3 is stdlib)
+- Thread-safe (sqlite3 with check_same_thread=False + threading.Lock)
+- Auto-save on every mutation (no explicit flush needed)
+- JSON serialization for complex nested dicts
+- Atomic writes via SQLite transactions
+- Graceful degradation: if DB fails, platform still runs (logs warning)
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import sqlite3
+import threading
+from datetime import datetime
+from typing import Any
+
+from core.constants import IST
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# StateStore
+# ---------------------------------------------------------------------------
+
+
+class StateStore:
+    """SQLite-backed persistence for deployed strategies, P&L snapshots,
+    trade logs, paper sessions, and arbitrary settings."""
+
+    def __init__(self, db_path: str = "data/platform_state.db") -> None:
+        self._db_path = db_path
+        self._lock = threading.Lock()
+        self._conn: sqlite3.Connection | None = None
+
+        try:
+            # Ensure parent directory exists
+            os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+
+            self._conn = sqlite3.connect(
+                db_path,
+                check_same_thread=False,
+                timeout=10.0,
+            )
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._create_tables()
+            logger.info(f"StateStore initialised — {db_path}")
+        except Exception as exc:
+            logger.warning(f"StateStore DB init failed ({exc}). Platform will run without persistence.")
+            self._conn = None
+
+    # ------------------------------------------------------------------
+    # Table creation
+    # ------------------------------------------------------------------
+
+    def _create_tables(self) -> None:
+        assert self._conn is not None
+        with self._conn:
+            self._conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS deployed_strategies (
+                    id          TEXT PRIMARY KEY,
+                    data        TEXT,
+                    updated_at  TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS pnl_snapshots (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id     TEXT,
+                    timestamp       TEXT,
+                    pnl             REAL,
+                    unrealized_pnl  REAL,
+                    realized_pnl    REAL,
+                    positions_json  TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS trade_log (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id TEXT,
+                    action      TEXT,
+                    side        TEXT,
+                    symbol      TEXT,
+                    qty         INTEGER,
+                    price       REAL,
+                    timestamp   TEXT,
+                    reason      TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_sessions (
+                    id          TEXT PRIMARY KEY,
+                    data        TEXT,
+                    updated_at  TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key         TEXT PRIMARY KEY,
+                    value       TEXT,
+                    updated_at  TEXT
+                );
+                """
+            )
+
+    # ------------------------------------------------------------------
+    # Strategy methods
+    # ------------------------------------------------------------------
+
+    def save_strategy(self, strategy_id: str, strategy_data: dict) -> None:
+        """Upsert a deployed strategy (JSON-serialized)."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                now = datetime.now(IST).isoformat()
+                data_json = json.dumps(strategy_data, default=str)
+                with self._conn:
+                    self._conn.execute(
+                        """
+                        INSERT INTO deployed_strategies (id, data, updated_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+                        """,
+                        (strategy_id, data_json, now),
+                    )
+        except Exception as exc:
+            logger.warning(f"StateStore.save_strategy failed: {exc}")
+
+    def load_all_strategies(self) -> dict[str, dict]:
+        """Return {strategy_id: strategy_data} for every saved strategy."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return {}
+                cursor = self._conn.execute("SELECT id, data FROM deployed_strategies")
+                rows = cursor.fetchall()
+            result: dict[str, dict] = {}
+            for row in rows:
+                try:
+                    result[row["id"]] = json.loads(row["data"])
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning(f"StateStore: corrupt data for strategy {row['id']}, skipping")
+            return result
+        except Exception as exc:
+            logger.warning(f"StateStore.load_all_strategies failed: {exc}")
+            return {}
+
+    def delete_strategy(self, strategy_id: str) -> None:
+        """Remove a single strategy from the DB."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                with self._conn:
+                    self._conn.execute(
+                        "DELETE FROM deployed_strategies WHERE id = ?",
+                        (strategy_id,),
+                    )
+        except Exception as exc:
+            logger.warning(f"StateStore.delete_strategy failed: {exc}")
+
+    def clear_strategies(self, status_filter: list[str] | None = None) -> None:
+        """Remove strategies by status list, or all if *status_filter* is ``None``."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                with self._conn:
+                    if status_filter is None:
+                        self._conn.execute("DELETE FROM deployed_strategies")
+                    else:
+                        # Need to inspect the JSON data for status
+                        cursor = self._conn.execute("SELECT id, data FROM deployed_strategies")
+                        rows = cursor.fetchall()
+                        ids_to_delete: list[str] = []
+                        for row in rows:
+                            try:
+                                strat = json.loads(row["data"])
+                                if strat.get("status") in status_filter:
+                                    ids_to_delete.append(row["id"])
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+                        if ids_to_delete:
+                            placeholders = ",".join("?" for _ in ids_to_delete)
+                            self._conn.execute(
+                                f"DELETE FROM deployed_strategies WHERE id IN ({placeholders})",
+                                ids_to_delete,
+                            )
+        except Exception as exc:
+            logger.warning(f"StateStore.clear_strategies failed: {exc}")
+
+    # ------------------------------------------------------------------
+    # P&L snapshot methods
+    # ------------------------------------------------------------------
+
+    def save_pnl_snapshot(
+        self,
+        strategy_id: str,
+        pnl: float,
+        unrealized_pnl: float,
+        realized_pnl: float,
+        positions: list[dict],
+    ) -> None:
+        """Insert a new P&L snapshot row."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                now = datetime.now(IST).isoformat()
+                positions_json = json.dumps(positions, default=str)
+                with self._conn:
+                    self._conn.execute(
+                        """
+                        INSERT INTO pnl_snapshots
+                            (strategy_id, timestamp, pnl, unrealized_pnl, realized_pnl, positions_json)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (strategy_id, now, pnl, unrealized_pnl, realized_pnl, positions_json),
+                    )
+        except Exception as exc:
+            logger.warning(f"StateStore.save_pnl_snapshot failed: {exc}")
+
+    def get_pnl_history(
+        self, strategy_id: str | None = None, limit: int = 500
+    ) -> list[dict]:
+        """Return P&L snapshots, newest first. Optionally filter by strategy_id."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return []
+                if strategy_id:
+                    cursor = self._conn.execute(
+                        "SELECT * FROM pnl_snapshots WHERE strategy_id = ? ORDER BY timestamp DESC LIMIT ?",
+                        (strategy_id, limit),
+                    )
+                else:
+                    cursor = self._conn.execute(
+                        "SELECT * FROM pnl_snapshots ORDER BY timestamp DESC LIMIT ?",
+                        (limit,),
+                    )
+                rows = cursor.fetchall()
+            result: list[dict] = []
+            for row in rows:
+                entry = dict(row)
+                # Deserialize positions JSON
+                try:
+                    entry["positions"] = json.loads(entry.pop("positions_json", "[]"))
+                except (json.JSONDecodeError, TypeError):
+                    entry["positions"] = []
+                result.append(entry)
+            return result
+        except Exception as exc:
+            logger.warning(f"StateStore.get_pnl_history failed: {exc}")
+            return []
+
+    # ------------------------------------------------------------------
+    # Trade log methods
+    # ------------------------------------------------------------------
+
+    def log_trade(
+        self,
+        strategy_id: str,
+        action: str,
+        side: str,
+        symbol: str,
+        qty: int,
+        price: float,
+        reason: str = "",
+    ) -> None:
+        """Insert a trade log entry."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                now = datetime.now(IST).isoformat()
+                with self._conn:
+                    self._conn.execute(
+                        """
+                        INSERT INTO trade_log
+                            (strategy_id, action, side, symbol, qty, price, timestamp, reason)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (strategy_id, action, side, symbol, qty, price, now, reason),
+                    )
+        except Exception as exc:
+            logger.warning(f"StateStore.log_trade failed: {exc}")
+
+    def get_trade_log(
+        self, strategy_id: str | None = None, limit: int = 200
+    ) -> list[dict]:
+        """Return trade log entries, newest first."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return []
+                if strategy_id:
+                    cursor = self._conn.execute(
+                        "SELECT * FROM trade_log WHERE strategy_id = ? ORDER BY timestamp DESC LIMIT ?",
+                        (strategy_id, limit),
+                    )
+                else:
+                    cursor = self._conn.execute(
+                        "SELECT * FROM trade_log ORDER BY timestamp DESC LIMIT ?",
+                        (limit,),
+                    )
+                rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except Exception as exc:
+            logger.warning(f"StateStore.get_trade_log failed: {exc}")
+            return []
+
+    # ------------------------------------------------------------------
+    # Settings methods
+    # ------------------------------------------------------------------
+
+    def save_setting(self, key: str, value: Any) -> None:
+        """Upsert a JSON-serialized setting."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                now = datetime.now(IST).isoformat()
+                value_json = json.dumps(value, default=str)
+                with self._conn:
+                    self._conn.execute(
+                        """
+                        INSERT INTO settings (key, value, updated_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                        """,
+                        (key, value_json, now),
+                    )
+        except Exception as exc:
+            logger.warning(f"StateStore.save_setting failed: {exc}")
+
+    def load_setting(self, key: str, default: Any = None) -> Any:
+        """Load and JSON-deserialize a setting, returning *default* if missing."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return default
+                cursor = self._conn.execute(
+                    "SELECT value FROM settings WHERE key = ?", (key,)
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return default
+            return json.loads(row["value"])
+        except (json.JSONDecodeError, TypeError):
+            return default
+        except Exception as exc:
+            logger.warning(f"StateStore.load_setting failed: {exc}")
+            return default
+
+    # ------------------------------------------------------------------
+    # Utility
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        try:
+            with self._lock:
+                if self._conn is not None:
+                    self._conn.close()
+                    self._conn = None
+                    logger.info("StateStore closed.")
+        except Exception as exc:
+            logger.warning(f"StateStore.close failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton
+# ---------------------------------------------------------------------------
+
+_store: StateStore | None = None
+
+
+def get_store() -> StateStore:
+    """Return (or create) the module-level StateStore singleton."""
+    global _store
+    if _store is None:
+        _store = StateStore()
+    return _store

@@ -1769,7 +1769,7 @@ class StrategySaveRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup and shutdown logic for the FastAPI application."""
-    global _startup_time, _config, _event_bus, _ws_manager, _paper_trading_manager, _live_feed, _dashboard_executor
+    global _startup_time, _config, _event_bus, _ws_manager, _paper_trading_manager, _live_feed, _dashboard_executor, _TRADING_MODE
 
     _startup_time = time.time()
 
@@ -1841,6 +1841,20 @@ async def lifespan(application: FastAPI):
         logger.warning(f"Could not start dashboard strategy executor: {e}")
         _dashboard_executor = None
 
+    # --- Restore persisted state from SQLite ---
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        saved = store.load_all_strategies()
+        _deployed_strategies.update(saved)
+        # Also load trading mode
+        saved_mode = store.load_setting("trading_mode", "paper")
+        _TRADING_MODE = saved_mode
+        if saved:
+            logger.info(f"Restored {len(saved)} deployed strategies from DB")
+    except Exception as _e:
+        logger.warning(f"Could not restore state from DB: {_e}")
+
     yield
 
     # Shutdown
@@ -1864,6 +1878,17 @@ async def lifespan(application: FastAPI):
 
     if _event_bus is not None:
         await _event_bus.stop()
+
+    # --- Persist final state to SQLite before exit ---
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        for sid, strat in _deployed_strategies.items():
+            store.save_strategy(sid, strat)
+        store.close()
+        logger.info("StateStore: final state saved and connection closed.")
+    except Exception as _e:
+        logger.warning(f"StateStore shutdown save failed: {_e}")
 
 
 # ===================================================================
@@ -2840,6 +2865,14 @@ async def set_trading_mode(body: dict = Body(...)):
     previous = _TRADING_MODE
     _TRADING_MODE = requested
     logger.warning(f"Trading mode switched: {previous} -> {requested}")
+
+    # Persist trading mode to SQLite
+    try:
+        from core.state_store import get_store
+        get_store().save_setting("trading_mode", _TRADING_MODE)
+    except Exception:
+        pass
+
     return {
         "success": True,
         "mode": _TRADING_MODE,
@@ -2986,6 +3019,13 @@ async def deploy_strategy(body: dict = Body(...)):
     _deployed_strategies[sid] = strategy_entry
     _strategy_overrides[sid] = {"status": strategy_entry["status"]}
 
+    # Persist to SQLite
+    try:
+        from core.state_store import get_store
+        get_store().save_strategy(sid, strategy_entry)
+    except Exception:
+        pass
+
     return {
         "success": True,
         "strategy_id": sid,
@@ -3018,6 +3058,12 @@ async def list_deployed_strategies(status: str | None = None):
     for sid, strat in _deployed_strategies.items():
         # Refresh per-position LTPs from Fyers cache and recompute leg P&L
         _refresh_strategy_pnl(strat)
+        # Persist updated P&L to SQLite
+        try:
+            from core.state_store import get_store
+            get_store().save_strategy(sid, strat)
+        except Exception:
+            pass
         results.append(strat)
 
     if status:
@@ -3048,6 +3094,12 @@ async def clear_history():
     for sid in to_remove:
         _deployed_strategies.pop(sid, None)
         _strategy_overrides.pop(sid, None)
+        # Remove from SQLite
+        try:
+            from core.state_store import get_store
+            get_store().delete_strategy(sid)
+        except Exception:
+            pass
     return {"removed_count": len(to_remove), "removed_ids": to_remove}
 
 
@@ -3064,6 +3116,12 @@ async def clear_all_strategies():
     count = len(_deployed_strategies)
     _deployed_strategies.clear()
     _strategy_overrides.clear()
+    # Clear all from SQLite
+    try:
+        from core.state_store import get_store
+        get_store().clear_strategies()
+    except Exception:
+        pass
     return {"removed_count": count}
 
 
@@ -3160,6 +3218,13 @@ async def stop_deployed_strategy(strategy_id: str):
 
     strat["status"] = "STOPPED"
     _strategy_overrides[strategy_id] = {"status": "STOPPED"}
+
+    # Persist stopped state to SQLite
+    try:
+        from core.state_store import get_store
+        get_store().save_strategy(strategy_id, strat)
+    except Exception:
+        pass
 
     if strat.get("mode") == "paper" and _paper_trading_manager:
         try:
@@ -5637,3 +5702,24 @@ async def get_fyers_status():
         "access_token_preview": token[:20] + "..." if len(token) > 20 else token,
         "live_feed_connected": _live_feed.is_connected if _live_feed else False,
     }
+
+
+# ===================================================================
+# Trade Log & P&L History (persisted via StateStore)
+# ===================================================================
+
+
+@app.get("/api/trade-log", tags=["Trading"])
+async def get_trade_log(strategy_id: str | None = None, limit: int = 200):
+    """Return persisted trade log entries from the SQLite state store."""
+    from core.state_store import get_store
+    trades = get_store().get_trade_log(strategy_id=strategy_id, limit=limit)
+    return {"trades": trades, "count": len(trades)}
+
+
+@app.get("/api/pnl/history", tags=["P&L Analytics"])
+async def get_pnl_history(strategy_id: str | None = None, limit: int = 500):
+    """Return persisted P&L snapshots from the SQLite state store."""
+    from core.state_store import get_store
+    snapshots = get_store().get_pnl_history(strategy_id=strategy_id, limit=limit)
+    return {"snapshots": snapshots, "count": len(snapshots)}
