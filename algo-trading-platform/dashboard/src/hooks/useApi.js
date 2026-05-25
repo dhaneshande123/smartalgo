@@ -10,9 +10,9 @@ export const useExpiries = (symbol) =>
   useQuery({ queryKey: ['expiries', symbol], queryFn: () => api.getExpiries(symbol) });
 export const useLotSizes = () =>
   useQuery({ queryKey: ['lotSizes'], queryFn: api.getLotSizes, staleTime: 60_000, refetchInterval: 60_000 });
-export const usePositions = () => useQuery({ queryKey: ['positions'], queryFn: api.getPositions });
-export const useGreeks = () => useQuery({ queryKey: ['greeks'], queryFn: api.getGreeks });
-export const usePnL = () => useQuery({ queryKey: ['pnl'], queryFn: api.getPnL });
+export const usePositions = () => useQuery({ queryKey: ['positions'], queryFn: api.getPositions, refetchInterval: 2000 });
+export const useGreeks = () => useQuery({ queryKey: ['greeks'], queryFn: api.getGreeks, refetchInterval: 5000 });
+export const usePnL = () => useQuery({ queryKey: ['pnl'], queryFn: api.getPnL, refetchInterval: 2000 });
 export const useMarginUsage = () => useQuery({ queryKey: ['margin'], queryFn: api.getMarginUsage });
 export const useStrategies = () => useQuery({ queryKey: ['strategies'], queryFn: api.getStrategies });
 export const useRiskMetrics = () => useQuery({ queryKey: ['riskMetrics'], queryFn: api.getRiskMetrics });

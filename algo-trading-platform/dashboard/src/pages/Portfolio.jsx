@@ -126,7 +126,20 @@ export default function Portfolio() {
 
   // ── Normalize positions ───────────────────────────────────────────────────
   const rawPositions = positionsData?.positions || positionsData;
-  const positions = Array.isArray(rawPositions) ? rawPositions : fallbackPositions;
+  const positions = Array.isArray(rawPositions)
+    ? rawPositions.map((p) => ({
+        ...p,
+        // Normalize field names — backend may send qty/quantity, avgPrice/avg_price etc.
+        symbol: p.symbol || p.instrument || '',
+        type: p.type || p.option_type || (p.symbol?.endsWith('CE') ? 'CE' : p.symbol?.endsWith('PE') ? 'PE' : ''),
+        qty: Number(p.qty ?? p.quantity ?? 0),
+        avgPrice: Number(p.avgPrice ?? p.avg_price ?? p.average_price ?? 0),
+        ltp: Number(p.ltp ?? 0),
+        pnl: Number(p.pnl ?? p.pnl_unrealized ?? 0),
+        strategy: p.strategy || p.strategy_id || '',
+        expiry: p.expiry || '',
+      }))
+    : fallbackPositions;
 
   // ── Normalize P&L ─────────────────────────────────────────────────────────
   const pnl = pnlData

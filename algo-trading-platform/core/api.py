@@ -2438,19 +2438,32 @@ async def portfolio_positions():
                     fyers_positions = result.get("netPositions", result.get("overall", []))
                     parsed = []
                     for p in (fyers_positions if isinstance(fyers_positions, list) else []):
+                        fyers_sym = p.get("symbol", "")
+                        display_sym = fyers_sym.split(":")[1] if ":" in fyers_sym else fyers_sym
+                        fyers_qty = p.get("netQty", p.get("qty", 0))
+                        fyers_avg = p.get("avgPrice", p.get("buyAvgPrice", 0))
+                        fyers_ltp = p.get("ltp", 0)
+                        fyers_pnl_u = p.get("unrealizedProfit", p.get("pl", 0))
+                        fyers_pnl_r = p.get("realized_profit", p.get("realizedProfit", 0))
+                        fyers_opt_type = p.get("optionType", "")
                         parsed.append({
-                            "instrument": p.get("symbol", ""),
-                            "symbol": p.get("symbol", "").split(":")[1] if ":" in p.get("symbol", "") else p.get("symbol", ""),
+                            "instrument": fyers_sym,
+                            "symbol": display_sym,
                             "strike": p.get("strikePrice", 0),
-                            "option_type": p.get("optionType", ""),
+                            "option_type": fyers_opt_type,
+                            "type": fyers_opt_type,           # alias for frontend
                             "expiry": p.get("expiryDate", ""),
-                            "quantity": p.get("netQty", p.get("qty", 0)),
-                            "avg_price": p.get("avgPrice", p.get("buyAvgPrice", 0)),
-                            "ltp": p.get("ltp", 0),
-                            "pnl_unrealized": p.get("unrealizedProfit", p.get("pl", 0)),
-                            "pnl_realized": p.get("realized_profit", p.get("realizedProfit", 0)),
+                            "quantity": fyers_qty,
+                            "qty": fyers_qty,                 # alias for frontend
+                            "avg_price": fyers_avg,
+                            "avgPrice": fyers_avg,            # alias for frontend
+                            "ltp": fyers_ltp,
+                            "pnl_unrealized": fyers_pnl_u,
+                            "pnl_realized": fyers_pnl_r,
+                            "pnl": fyers_pnl_u,              # alias for frontend
                             "product_type": p.get("productType", ""),
                             "strategy_id": "",
+                            "strategy": "",
                             "delta": 0, "gamma": 0, "theta": 0, "vega": 0,
                         })
                     return {
@@ -2466,6 +2479,24 @@ async def portfolio_positions():
     if _paper_trading_manager and _paper_trading_manager.is_active:
         try:
             paper_positions = await _paper_trading_manager.get_positions()
+
+            # Build a chain lookup so we can refresh LTP for each option
+            # from the cached Fyers option chain (same cache the executor uses).
+            chain_lookup: dict[str, dict[int, dict]] = {}  # underlying → {strike → {call_ltp, put_ltp}}
+            for cache_key, chain_data in _fyers_chain_cache.items():
+                if ":" in cache_key:
+                    continue  # skip duplicate "NIFTY:" keys
+                rows = chain_data.get("chain", []) if isinstance(chain_data, dict) else []
+                by_strike: dict[int, dict] = {}
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    s = int(row.get("strike", 0))
+                    if s:
+                        by_strike[s] = row
+                if by_strike:
+                    chain_lookup[cache_key.upper()] = by_strike
+
             parsed = []
             for p in paper_positions:
                 # paper_broker returns Decimal — coerce to float
@@ -2487,21 +2518,91 @@ async def portfolio_positions():
                     except ValueError:
                         pass
                     opt_type = parts[2] if parts[2] in ("CE", "PE") else ""
+
+                # Refresh LTP from option chain cache if available
+                if underlying.upper() in chain_lookup and strike:
+                    row = chain_lookup[underlying.upper()].get(strike)
+                    if row:
+                        key = "call_ltp" if opt_type == "CE" else "put_ltp"
+                        fresh_ltp = float(row.get(key, 0) or 0)
+                        if fresh_ltp > 0:
+                            ltp = fresh_ltp
+                            # Recompute unrealized P&L with fresh LTP
+                            if qty != 0:
+                                pnl_u = (ltp - avg) * qty
+
                 parsed.append({
                     "instrument": sym,
-                    "symbol": underlying,
+                    "symbol": sym,                    # full instrument name for UI display
+                    "underlying": underlying,
                     "strike": strike,
                     "option_type": opt_type,
+                    "type": opt_type,                 # alias for frontend
                     "expiry": p.get("expiry", ""),
                     "quantity": qty,
+                    "qty": qty,                       # alias for frontend
                     "avg_price": avg,
+                    "avgPrice": avg,                  # alias for frontend
                     "ltp": ltp,
                     "pnl_unrealized": pnl_u,
                     "pnl_realized": pnl_r,
+                    "pnl": pnl_u,                     # alias for frontend (net P&L = unrealized for open)
                     "product_type": p.get("product_type", "NRML"),
                     "strategy_id": p.get("strategy_id", ""),
+                    "strategy": p.get("strategy_id", ""),
                     "delta": 0, "gamma": 0, "theta": 0, "vega": 0,
                 })
+            # Also include positions from deployed strategies that have entered.
+            # This gives a unified portfolio view of all paper positions
+            # (manual trades + AI/executor-deployed strategies).
+            for sid, strat in _deployed_strategies.items():
+                if strat.get("status") not in ("RUNNING", "EXITED"):
+                    continue
+                if not strat.get("entered"):
+                    continue
+                strat_name = strat.get("name", sid)
+                strat_underlying = (strat.get("underlying") or "NIFTY").upper()
+                for pos in strat.get("positions", []):
+                    sym = pos.get("symbol", "")
+                    p_strike = pos.get("strike", 0)
+                    p_opt_type = ""
+                    p_underlying = sym
+                    parts = sym.split()
+                    if len(parts) >= 3:
+                        p_underlying = parts[0]
+                        try:
+                            p_strike = int(parts[1])
+                        except ValueError:
+                            pass
+                        p_opt_type = parts[2] if parts[2] in ("CE", "PE") else ""
+                    p_qty = int(pos.get("qty", 0))
+                    p_entry = float(pos.get("entry_price", 0))
+                    p_ltp = float(pos.get("ltp", p_entry))
+                    p_pnl = float(pos.get("pnl", 0))
+                    # Signed qty: BUY = positive, SELL = negative
+                    signed_qty = p_qty if pos.get("side") == "BUY" else -p_qty
+                    parsed.append({
+                        "instrument": sym,
+                        "symbol": sym,
+                        "underlying": p_underlying,
+                        "strike": p_strike,
+                        "option_type": p_opt_type,
+                        "type": p_opt_type,
+                        "expiry": "",
+                        "quantity": signed_qty,
+                        "qty": signed_qty,
+                        "avg_price": p_entry,
+                        "avgPrice": p_entry,
+                        "ltp": p_ltp,
+                        "pnl_unrealized": p_pnl,
+                        "pnl_realized": 0.0,
+                        "pnl": p_pnl,
+                        "product_type": "NRML",
+                        "strategy_id": sid,
+                        "strategy": strat_name,
+                        "delta": 0, "gamma": 0, "theta": 0, "vega": 0,
+                    })
+
             return {
                 "positions": parsed,
                 "count": len(parsed),
@@ -2511,11 +2612,20 @@ async def portfolio_positions():
         except Exception as e:
             logger.warning(f"Paper positions fetch failed: {e}")
 
-    # Last resort: mock
-    positions = _mock.positions()
+    # Last resort: mock — add frontend-compatible aliases
+    raw_mock = _mock.positions()
+    for mp in raw_mock:
+        mp.setdefault("type", mp.get("option_type", ""))
+        mp.setdefault("qty", mp.get("quantity", 0))
+        mp.setdefault("avgPrice", mp.get("avg_price", 0))
+        mp.setdefault("pnl", mp.get("pnl_unrealized", 0))
+        mp.setdefault("strategy", mp.get("strategy_id", ""))
+        # Make symbol the full instrument name for the table
+        if mp.get("instrument") and mp.get("symbol") != mp.get("instrument"):
+            mp["symbol"] = mp["instrument"]
     return {
-        "positions": positions,
-        "count": len(positions),
+        "positions": raw_mock,
+        "count": len(raw_mock),
         "source": "mock",
         "timestamp": datetime.now(IST).isoformat(),
     }
@@ -2798,6 +2908,13 @@ async def deploy_strategy(body: dict = Body(...)):
         "spot_price": body.get("spot_price", 0),
         "lot_size": body.get("lot_size", 1),
         "deployed_at": datetime.now(IST).isoformat(),
+        # AI auto-deploy metadata — when True the executor enters immediately
+        # (the AI signal engine's scoring IS the entry condition)
+        "ai_deployed": body.get("ai_deployed", False),
+        "ai_confidence": body.get("ai_confidence"),
+        "ai_signal": body.get("ai_signal"),
+        "ai_reasoning": body.get("ai_reasoning"),
+        "strategy_class": body.get("strategy_class"),
     }
 
     # ------- Paper mode: auto-start a paper session if needed, register strategy

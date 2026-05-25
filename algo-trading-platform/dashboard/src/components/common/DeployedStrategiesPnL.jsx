@@ -128,6 +128,20 @@ export default function DeployedStrategiesPnL({ compact = false }) {
                         <span className="text-profit font-semibold">● ENTERED</span>
                       </>
                     )}
+                    {!s.entered && s.status === 'RUNNING' && (
+                      <>
+                        <span>·</span>
+                        <span className="text-yellow-400 font-semibold animate-pulse">⏳ WAITING</span>
+                      </>
+                    )}
+                    {s.ai_deployed && (
+                      <>
+                        <span>·</span>
+                        <span className="text-accent font-semibold" title={s.ai_reasoning?.join(' · ') || ''}>
+                          🤖 AI {s.ai_confidence ? `${Math.round(s.ai_confidence)}%` : ''}
+                        </span>
+                      </>
+                    )}
                     {s.exit_reason && (
                       <>
                         <span>·</span>

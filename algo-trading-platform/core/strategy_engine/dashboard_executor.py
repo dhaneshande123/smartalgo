@@ -271,7 +271,27 @@ class DashboardStrategyExecutor:
     async def _entry_conditions_met(self, sid: str, strat: dict) -> bool:
         """If the strategy has ``entry_conditions``, evaluate them against
         live market data. If it has none, return True (schedule alone decides).
+
+        **AI auto-deployed strategies**: When the AI signal engine deploys a
+        strategy it has already evaluated regime fit, IV rank, ADX, VIX, and
+        win rate. Re-evaluating strict template conditions would double-gate
+        entry and almost always fail (the AI uses partial-credit scoring, but
+        template conditions are exact-match). So strategies with
+        ``ai_deployed=True`` enter immediately within their schedule window.
         """
+        # AI-deployed strategies: the AI's confidence score IS the entry condition
+        if strat.get("ai_deployed"):
+            conf = strat.get("ai_confidence", 0)
+            strat["last_condition_check"] = {
+                "at": datetime.now(IST).isoformat(),
+                "passed": True,
+                "summary": f"AI auto-entry (confidence {conf}%, signal {strat.get('ai_signal', '?')})",
+                "results": [{"indicator": "AI_SIGNAL", "passed": True,
+                             "reason": f"AI scored {conf}% → immediate entry"}],
+            }
+            logger.info(f"Strategy {sid} AI auto-entry (conf={conf}%)")
+            return True
+
         conditions = strat.get("entry_conditions") or strat.get("entryConditions") or []
         if not conditions:
             return True

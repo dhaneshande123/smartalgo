@@ -254,8 +254,19 @@ def build_deploy_payload(
     """Construct a strategy-deploy payload from a signal.
 
     The result is shaped to match the body the existing /api/strategies/deploy
-    endpoint expects. Includes auto-generated entry_conditions so the executor
-    waits for the right market state before placing orders.
+    endpoint expects.
+
+    IMPORTANT DESIGN DECISION: When the AI signal engine says a strategy is
+    ready to deploy (confidence >= threshold), the AI's scoring IS the entry
+    decision. The scoring already evaluated regime fit, IV rank, ADX, VIX,
+    and win rate. Adding the template's ``entry_conditions`` on top would
+    double-gate the entry — the AI uses partial-credit weighted scoring
+    while template conditions are strict exact-match gates. This mismatch
+    means strategies almost never enter.
+
+    Therefore: AI-deployed strategies enter IMMEDIATELY (within market hours)
+    without additional condition gating. The ``ai_deployed`` flag tells the
+    executor to skip condition evaluation.
     """
     return {
         "name": f"{signal['strategy_name']} [{name_suffix}]",
@@ -265,9 +276,14 @@ def build_deploy_payload(
         "legs": signal.get("default_legs", []),
         "risk_params": signal.get("risk_params", {}),
         "schedule": "market_open",
-        "entry_conditions": signal.get("entry_conditions", []),
+        "schedule_window": ["09:16", "15:00"],   # full market hours
+        "entry_conditions": [],                  # AI scoring IS the entry condition
         "entry_trigger": "ALL",
         "condition_timeframe": "M5",
         "execution_mode": "paper",  # SAFETY: AI auto-deploy is paper-only by default
         "strategy_class": signal["strategy_class"],
+        "ai_deployed": True,                     # flag for executor: skip condition gating
+        "ai_confidence": signal.get("confidence", 0),
+        "ai_signal": signal.get("signal", ""),
+        "ai_reasoning": signal.get("reasoning", []),
     }
