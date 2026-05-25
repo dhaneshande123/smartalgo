@@ -135,11 +135,69 @@ class DashboardStrategyExecutor:
         self._last_tick_at = datetime.now(IST)
         now_t = self._last_tick_at.time()
 
+        # 1. Refresh option chains for every underlying that has a RUNNING
+        #    strategy. Without this the per-leg LTP lookup in
+        #    _refresh_strategy_pnl is stale and P&L gets stuck at zero.
+        await self._refresh_option_chains_if_needed()
+
+        # 2. Per-strategy lifecycle processing
         for sid, strat in list(self._deployed.items()):
             try:
                 await self._process_strategy(sid, strat, now_t)
             except Exception as e:
                 logger.warning(f"Strategy {sid} processing failed: {e}")
+
+    async def _refresh_option_chains_if_needed(self) -> None:
+        """Pull fresh option chains for underlyings with running strategies.
+
+        The chain results are cached in the ``_fyers_chain_cache`` dict in
+        ``core.api`` — same cache the ``_refresh_strategy_pnl`` helper reads
+        when computing per-leg P&L. We import lazily to avoid a circular
+        import at module load time.
+        """
+        if not self._live_feed or not self._live_feed.is_connected:
+            return
+
+        underlyings = {
+            (s.get("underlying") or "NIFTY").upper()
+            for s in self._deployed.values()
+            if s.get("status") == "RUNNING"
+        }
+        if not underlyings:
+            return
+
+        try:
+            # Import locally to avoid circular dependency
+            from core import api as _api_mod
+        except ImportError:
+            return
+
+        for sym in underlyings:
+            try:
+                chain = await self._live_feed.get_option_chain(sym, strike_count=25)
+                if not (chain and chain.get("chain")):
+                    continue
+                # Re-pair the chain into the same {strike → {call_ltp, put_ltp, …}}
+                # format _refresh_strategy_pnl expects.
+                raw = chain["chain"]
+                by_strike: dict[int, dict] = {}
+                for opt in raw:
+                    strike = int(opt.get("strike", 0))
+                    if not strike:
+                        continue
+                    if strike not in by_strike:
+                        by_strike[strike] = {"strike": strike}
+                    side = "call" if opt.get("option_type") == "CE" else "put"
+                    by_strike[strike][f"{side}_ltp"] = float(opt.get("ltp", 0))
+                    by_strike[strike][f"{side}_iv"] = float(opt.get("iv", 0) or 0)
+                    by_strike[strike][f"{side}_oi"] = int(opt.get("oi", 0))
+
+                chain["chain"] = sorted(by_strike.values(), key=lambda r: r["strike"])
+                _api_mod._fyers_chain_cache[sym] = chain
+                # also stash by symbol:'' key the cache lookup uses
+                _api_mod._fyers_chain_cache[f"{sym}:"] = chain
+            except Exception as e:
+                logger.debug(f"Chain refresh for {sym} failed: {e}")
 
     async def _process_strategy(self, sid: str, strat: dict, now_t: dtime) -> None:
         status = strat.get("status", "")
@@ -330,6 +388,39 @@ class DashboardStrategyExecutor:
             # Paper mode: synthetic order IDs, broker simulates fills via PaperBroker
             for pos in positions:
                 entry_orders.append(f"paper-{uuid.uuid4().hex[:10]}")
+
+        # Overwrite each leg's entry_price with the current option-chain LTP
+        # so paper P&L reflects realistic entry fills. The template/AI premiums
+        # are just placeholders; the executor only enters once it's the right time
+        # so the real market price at entry IS what gets recorded.
+        try:
+            from core import api as _api_mod
+            underlying = (strat.get("underlying") or "NIFTY").upper()
+            chain = _api_mod._fyers_chain_cache.get(underlying)
+            if chain and chain.get("chain"):
+                lookup = {int(r["strike"]): r for r in chain["chain"] if isinstance(r, dict) and "strike" in r}
+                for pos in positions:
+                    strike = pos.get("strike")
+                    if not strike:
+                        # parse from symbol "NIFTY 23750 PE"
+                        parts = (pos.get("symbol") or "").split()
+                        if len(parts) >= 2:
+                            try:
+                                strike = int(parts[1])
+                            except ValueError:
+                                continue
+                    row = lookup.get(int(strike)) if strike else None
+                    if not row:
+                        continue
+                    opt_type = "CE" if "CE" in (pos.get("symbol") or "").upper().split()[-1] else "PE"
+                    key = "call_ltp" if opt_type == "CE" else "put_ltp"
+                    ltp = float(row.get(key, 0) or 0)
+                    if ltp > 0:
+                        pos["entry_price"] = round(ltp, 2)
+                        pos["ltp"] = round(ltp, 2)
+                        pos["pnl"] = 0.0
+        except Exception as e:
+            logger.debug(f"Entry-price fill from chain failed for {sid}: {e}")
 
         strat["entered"] = True
         strat["entered_at"] = datetime.now(IST).isoformat()

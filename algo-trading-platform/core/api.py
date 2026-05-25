@@ -2755,14 +2755,27 @@ async def deploy_strategy(body: dict = Body(...)):
             logger.warning(f"Paper manager deploy failed: {e}")
 
         # Build virtual positions from legs (one position per leg)
+        # Strike is offset-from-spot but must snap to the valid strike step
+        # (NIFTY=50, BANKNIFTY=100, MIDCPNIFTY=25, etc.) — otherwise the
+        # option chain LTP lookup for P&L won't find a matching row.
+        from core.fyers_live_feed import STRIKE_STEPS
+        strike_step = STRIKE_STEPS.get(underlying.upper(), 50)
+
+        def _snap_strike(price: float, step: int) -> int:
+            if step <= 0:
+                return int(round(price))
+            return int(round(price / step) * step)
+
         spot = float(strategy_entry["spot_price"]) or 0.0
         lot = int(strategy_entry["lot_size"]) or 1
         for leg in legs:
             premium = float(leg.get("premium", 0))
             lots = int(leg.get("lots", 1)) or 1
             offset = float(leg.get("offset", 0))
+            strike = _snap_strike(spot + offset, strike_step)
             strategy_entry["positions"].append({
-                "symbol": f"{underlying} {int(spot + offset)} {leg.get('type', 'CE')}",
+                "symbol": f"{underlying} {strike} {leg.get('type', 'CE')}",
+                "strike": strike,
                 "side": leg.get("action", "SELL"),
                 "qty": lots * lot,
                 "lots": lots,
@@ -5047,17 +5060,99 @@ async def _build_market_context(symbol: str = "NIFTY") -> dict:
     ),
 )
 async def get_market_regime(symbol: str = "NIFTY"):
-    from core.market_regime import classify_regime
+    from core import indicators as _ind
+    from core.market_regime import classify_regime, get_iv_tracker
+
     ctx = await _build_market_context(symbol)
     regime = classify_regime(**ctx)
     # Add a normalised regime_label for legacy UI compatibility
     regime["regime_label"] = regime["regime"].replace("_", " ").title()
+    regime["regime_code"] = regime["regime"]
     regime["color"] = {
         "HIGH_VOL": "red", "LOW_VOL": "green",
         "TRENDING_UP": "blue", "TRENDING_DOWN": "orange",
         "RANGE_BOUND": "gray", "UNKNOWN": "gray",
     }.get(regime["regime"], "gray")
     regime["source"] = "fyers_live" if ctx["candles"] else "fyers_partial"
+
+    # ── Flat fields for the existing AI Signals page UI ──
+    # The page renders regime.vix / .nifty_ltp / .nifty_change_pct / .trend etc.
+    candles = ctx.get("candles") or []
+    spot = ctx.get("spot")
+    vix = ctx.get("vix")
+
+    # Spot, change %, intraday range from the spot tick + today's candle range
+    nifty_change_pct = None
+    intraday_range_pct = None
+    if _live_feed and _live_feed.is_connected:
+        spot_tick = _live_feed.get_cached_tick(symbol)
+        if spot_tick:
+            nifty_change_pct = float(spot_tick.get("change_pct", 0)) or None
+            day_high = float(spot_tick.get("high", 0))
+            day_low = float(spot_tick.get("low", 0))
+            if day_high and day_low and spot:
+                intraday_range_pct = round(((day_high - day_low) / spot) * 100, 2)
+
+    # Trend label from regime
+    trend_label = {
+        "TRENDING_UP": "Up",
+        "TRENDING_DOWN": "Down",
+        "RANGE_BOUND": "Sideways",
+        "HIGH_VOL": "Volatile",
+        "LOW_VOL": "Calm",
+    }.get(regime["regime"], "Mixed")
+
+    # Volatility regime from VIX
+    vol_label = "--"
+    if vix is not None:
+        if vix > 20:
+            vol_label = "High"
+        elif vix > 15:
+            vol_label = "Moderate"
+        else:
+            vol_label = "Low"
+
+    # Per-indicator readings the UI uses
+    indicator_block = {}
+    if candles and len(candles) >= 30:
+        arr = _ind.split_ohlcv(candles)
+        rsi_v = _ind.rsi(arr["Close"], 14)
+        adx_dict = _ind.adx(arr["High"], arr["Low"], arr["Close"], 14)
+        macd_dict = _ind.macd(arr["Close"])
+        bb = _ind.bollinger_bands(arr["Close"], 20, 2.0)
+        indicator_block["rsi"] = rsi_v
+        indicator_block["adx"] = adx_dict["adx"] if adx_dict else None
+        if macd_dict:
+            indicator_block["macd_signal"] = (
+                "bullish" if macd_dict["histogram"] > 0 else "bearish"
+            )
+        if bb and spot:
+            if spot >= bb["upper"]:
+                indicator_block["bb_position"] = "above_upper"
+            elif spot >= bb["mid"]:
+                indicator_block["bb_position"] = "upper_half"
+            elif spot >= bb["lower"]:
+                indicator_block["bb_position"] = "lower_half"
+            else:
+                indicator_block["bb_position"] = "below_lower"
+
+    iv_rank = get_iv_tracker().iv_rank(symbol)
+
+    # Confidence is currently 0-100; the UI normalises either format
+    regime.update({
+        "vix": vix,
+        "iv_rank": iv_rank,
+        "nifty_ltp": spot,
+        "nifty_change_pct": nifty_change_pct,
+        "intraday_range_pct": intraday_range_pct,
+        "trend": trend_label,
+        "trend_strength": (regime.get("signals", {}).get("adx") or 0) / 50.0,
+        "vol_regime": vol_label,
+        "is_expiry_day": False,  # could compute by checking nearest expiry == today
+        "indicators": indicator_block,
+        "breadth": None,
+    })
+
     return regime
 
 
