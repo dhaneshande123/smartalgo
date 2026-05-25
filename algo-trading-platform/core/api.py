@@ -1979,9 +1979,24 @@ def _refresh_strategy_pnl(strat: dict) -> None:
 
     Mutates ``strat`` in place — sets ``positions[i].ltp``, ``positions[i].pnl``,
     ``unrealized_pnl``, and ``pnl``.
+
+    Important: a strategy that has NOT yet entered has no P&L exposure — its
+    entry_price is still a template placeholder, not a real fill. We force
+    P&L to zero in that case so the dashboard shows ₹0 while the strategy
+    sits in WAIT state.
     """
     positions = strat.get("positions", [])
     if not positions:
+        strat["unrealized_pnl"] = 0.0
+        strat["pnl"] = strat.get("realized_pnl", 0.0)
+        return
+
+    # If the strategy has not actually entered yet, its entry_price values
+    # are template placeholders. Don't show fake P&L from those.
+    if not strat.get("entered"):
+        for pos in positions:
+            pos["pnl"] = 0.0
+            # leave entry_price + ltp as template hints, but reset pnl
         strat["unrealized_pnl"] = 0.0
         strat["pnl"] = strat.get("realized_pnl", 0.0)
         return
@@ -2863,6 +2878,70 @@ async def clear_history():
         _deployed_strategies.pop(sid, None)
         _strategy_overrides.pop(sid, None)
     return {"removed_count": len(to_remove), "removed_ids": to_remove}
+
+
+@app.delete(
+    "/api/deployed-strategies/clear-all",
+    tags=["Strategies"],
+    summary="Clear ALL deployed strategies (running too)",
+    description=(
+        "Hard reset — removes every deployed strategy, including running ones. "
+        "Use this when you want a clean slate (typically after fixing a bug)."
+    ),
+)
+async def clear_all_strategies():
+    count = len(_deployed_strategies)
+    _deployed_strategies.clear()
+    _strategy_overrides.clear()
+    return {"removed_count": count}
+
+
+@app.post(
+    "/api/deployed-strategies/recalibrate-entry-prices",
+    tags=["Strategies"],
+    summary="Recalibrate entry prices from current option chain",
+    description=(
+        "For every entered strategy, overwrites each leg's entry_price with the "
+        "current option-chain LTP. Useful when strategies entered before the "
+        "chain was cached and ended up with placeholder template premiums. "
+        "Optionally restrict via ``?status=running``."
+    ),
+)
+async def recalibrate_entry_prices(status: str | None = None):
+    if _dashboard_executor is None or not _live_feed or not _live_feed.is_connected:
+        raise HTTPException(status_code=503, detail="Executor or Fyers not available")
+
+    fixed: list[dict] = []
+    failed: list[dict] = []
+    for sid, strat in _deployed_strategies.items():
+        if not strat.get("entered"):
+            continue
+        if status and strat.get("status", "").lower() != status.lower():
+            continue
+        positions = strat.get("positions", [])
+        try:
+            await _dashboard_executor._fill_entry_prices_from_chain(sid, strat, positions)
+            # Reset realized/unrealized P&L since we just changed entry prices
+            strat["unrealized_pnl"] = 0.0
+            strat["pnl"] = strat.get("realized_pnl", 0.0)
+            strat["_high_water_mark"] = 0.0
+            fixed.append({
+                "strategy_id": sid,
+                "name": strat.get("name"),
+                "positions": [
+                    {"symbol": p["symbol"], "entry": p["entry_price"], "ltp": p["ltp"]}
+                    for p in positions
+                ],
+            })
+        except Exception as e:
+            failed.append({"strategy_id": sid, "error": str(e)})
+
+    return {
+        "recalibrated_count": len(fixed),
+        "failed_count": len(failed),
+        "recalibrated": fixed,
+        "failed": failed,
+    }
 
 
 @app.get(

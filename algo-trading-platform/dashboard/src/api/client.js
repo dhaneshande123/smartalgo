@@ -54,6 +54,8 @@ export const getDeployedStrategies = (status) =>
 export const getDeployedStrategyPnL = (id) => api.get(`/strategies/${id}/pnl`);
 export const stopDeployedStrategy = (id) => api.post(`/strategies/${id}/stop`);
 export const clearStrategyHistory = () => api.delete('/deployed-strategies/clear-history');
+export const clearAllStrategies = () => api.delete('/deployed-strategies/clear-all');
+export const recalibrateEntryPrices = () => api.post('/deployed-strategies/recalibrate-entry-prices');
 
 // Trading Mode (paper / live)
 export const getTradingMode = () => api.get('/trading/mode');

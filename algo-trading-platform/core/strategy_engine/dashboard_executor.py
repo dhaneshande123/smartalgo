@@ -391,36 +391,12 @@ class DashboardStrategyExecutor:
 
         # Overwrite each leg's entry_price with the current option-chain LTP
         # so paper P&L reflects realistic entry fills. The template/AI premiums
-        # are just placeholders; the executor only enters once it's the right time
-        # so the real market price at entry IS what gets recorded.
+        # are just placeholders; the real market price at entry IS what gets
+        # recorded. Falls back to an inline chain fetch if the cache is empty.
         try:
-            from core import api as _api_mod
-            underlying = (strat.get("underlying") or "NIFTY").upper()
-            chain = _api_mod._fyers_chain_cache.get(underlying)
-            if chain and chain.get("chain"):
-                lookup = {int(r["strike"]): r for r in chain["chain"] if isinstance(r, dict) and "strike" in r}
-                for pos in positions:
-                    strike = pos.get("strike")
-                    if not strike:
-                        # parse from symbol "NIFTY 23750 PE"
-                        parts = (pos.get("symbol") or "").split()
-                        if len(parts) >= 2:
-                            try:
-                                strike = int(parts[1])
-                            except ValueError:
-                                continue
-                    row = lookup.get(int(strike)) if strike else None
-                    if not row:
-                        continue
-                    opt_type = "CE" if "CE" in (pos.get("symbol") or "").upper().split()[-1] else "PE"
-                    key = "call_ltp" if opt_type == "CE" else "put_ltp"
-                    ltp = float(row.get(key, 0) or 0)
-                    if ltp > 0:
-                        pos["entry_price"] = round(ltp, 2)
-                        pos["ltp"] = round(ltp, 2)
-                        pos["pnl"] = 0.0
+            await self._fill_entry_prices_from_chain(sid, strat, positions)
         except Exception as e:
-            logger.debug(f"Entry-price fill from chain failed for {sid}: {e}")
+            logger.warning(f"Entry-price fill from chain failed for {sid}: {e}")
 
         strat["entered"] = True
         strat["entered_at"] = datetime.now(IST).isoformat()
@@ -430,6 +406,103 @@ class DashboardStrategyExecutor:
             f"Strategy {sid} ENTERED ({execution_mode}) — {len(entry_orders)} legs, "
             f"name={strat.get('name')}"
         )
+
+    async def _fill_entry_prices_from_chain(
+        self, sid: str, strat: dict, positions: list[dict]
+    ) -> None:
+        """Set each position's entry_price to the actual current option-chain
+        LTP so paper P&L reflects realistic entry fills.
+
+        Strategy:
+        1. Try the in-memory cache populated by ``_refresh_option_chains_if_needed``
+        2. If empty/stale, fetch the chain inline (with timeout)
+        3. For each leg, look up its strike+option_type in the chain and
+           overwrite entry_price + ltp with the live premium
+        """
+        if not positions:
+            return
+
+        from core import api as _api_mod
+
+        underlying = (strat.get("underlying") or "NIFTY").upper()
+        chain = _api_mod._fyers_chain_cache.get(underlying)
+
+        # If cache is empty, fetch inline (blocking with timeout)
+        if not (chain and chain.get("chain")):
+            if self._live_feed and self._live_feed.is_connected:
+                try:
+                    chain = await asyncio.wait_for(
+                        self._live_feed.get_option_chain(underlying, strike_count=25),
+                        timeout=8.0,
+                    )
+                    if chain and chain.get("chain"):
+                        # Build the same {call_ltp, put_ltp} per-strike format
+                        raw = chain["chain"]
+                        by_strike: dict[int, dict] = {}
+                        for opt in raw:
+                            strike = int(opt.get("strike", 0))
+                            if not strike:
+                                continue
+                            if strike not in by_strike:
+                                by_strike[strike] = {"strike": strike}
+                            side = "call" if opt.get("option_type") == "CE" else "put"
+                            by_strike[strike][f"{side}_ltp"] = float(opt.get("ltp", 0))
+                        chain["chain"] = sorted(by_strike.values(), key=lambda r: r["strike"])
+                        _api_mod._fyers_chain_cache[underlying] = chain
+                    else:
+                        chain = None
+                except asyncio.TimeoutError:
+                    logger.warning(f"Strategy {sid}: option-chain inline fetch timed out")
+                    chain = None
+                except Exception as e:
+                    logger.warning(f"Strategy {sid}: option-chain inline fetch failed: {e}")
+                    chain = None
+
+        if not (chain and chain.get("chain")):
+            logger.warning(
+                f"Strategy {sid}: entered with template entry prices (chain unavailable). "
+                f"P&L will be inaccurate until chain becomes available."
+            )
+            return
+
+        lookup = {
+            int(r["strike"]): r
+            for r in chain["chain"]
+            if isinstance(r, dict) and "strike" in r
+        }
+
+        filled_count = 0
+        for pos in positions:
+            strike = pos.get("strike")
+            if not strike:
+                parts = (pos.get("symbol") or "").split()
+                if len(parts) >= 2:
+                    try:
+                        strike = int(parts[1])
+                    except ValueError:
+                        continue
+            if not strike:
+                continue
+            row = lookup.get(int(strike))
+            if not row:
+                logger.debug(f"Strategy {sid}: strike {strike} not in chain")
+                continue
+
+            sym = (pos.get("symbol") or "").upper()
+            opt_type = "CE" if sym.endswith(" CE") or sym.endswith("CE") else "PE"
+            key = "call_ltp" if opt_type == "CE" else "put_ltp"
+            ltp = float(row.get(key, 0) or 0)
+            if ltp > 0:
+                pos["entry_price"] = round(ltp, 2)
+                pos["ltp"] = round(ltp, 2)
+                pos["pnl"] = 0.0
+                filled_count += 1
+
+        if filled_count:
+            logger.info(
+                f"Strategy {sid}: filled {filled_count}/{len(positions)} entry prices "
+                f"from live chain"
+            )
 
     async def _place_exit_orders(self, sid: str, strat: dict, *, reason: str) -> None:
         """Square off all open legs by placing reverse orders."""
