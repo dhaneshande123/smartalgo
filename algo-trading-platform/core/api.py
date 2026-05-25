@@ -2425,39 +2425,93 @@ async def market_candles(
     description="Returns all open positions with greeks, P&L, and strategy attribution.",
 )
 async def portfolio_positions():
-    # Try Fyers live positions first
-    try:
-        if _live_feed and _live_feed._fyers:
-            result = await _fyers_call(_live_feed._fyers.positions)
-            if result and result.get("s") == "ok":
-                fyers_positions = result.get("netPositions", result.get("overall", []))
-                parsed = []
-                for p in (fyers_positions if isinstance(fyers_positions, list) else []):
-                    parsed.append({
-                        "instrument": p.get("symbol", ""),
-                        "symbol": p.get("symbol", "").split(":")[1] if ":" in p.get("symbol", "") else p.get("symbol", ""),
-                        "strike": p.get("strikePrice", 0),
-                        "option_type": p.get("optionType", ""),
-                        "expiry": p.get("expiryDate", ""),
-                        "quantity": p.get("netQty", p.get("qty", 0)),
-                        "avg_price": p.get("avgPrice", p.get("buyAvgPrice", 0)),
-                        "ltp": p.get("ltp", 0),
-                        "pnl_unrealized": p.get("unrealizedProfit", p.get("pl", 0)),
-                        "pnl_realized": p.get("realized_profit", p.get("realizedProfit", 0)),
-                        "product_type": p.get("productType", ""),
-                        "strategy_id": "",
-                        "delta": 0, "gamma": 0, "theta": 0, "vega": 0,
-                    })
-                return {
-                    "positions": parsed,
-                    "count": len(parsed),
-                    "source": "fyers_live",
-                    "timestamp": datetime.now(IST).isoformat(),
-                }
-    except Exception as e:
-        logger.warning(f"Fyers positions fetch failed: {e}")
+    # Routing priority depends on the global trading mode:
+    #   - LIVE  → real Fyers positions (only)
+    #   - PAPER → paper trading positions (only — never mock)
+    # Each mode falls back to its respective source. Mock is the last resort
+    # only when neither broker is available.
+    if _TRADING_MODE == "live":
+        try:
+            if _live_feed and _live_feed._fyers:
+                result = await _fyers_call(_live_feed._fyers.positions)
+                if result and result.get("s") == "ok":
+                    fyers_positions = result.get("netPositions", result.get("overall", []))
+                    parsed = []
+                    for p in (fyers_positions if isinstance(fyers_positions, list) else []):
+                        parsed.append({
+                            "instrument": p.get("symbol", ""),
+                            "symbol": p.get("symbol", "").split(":")[1] if ":" in p.get("symbol", "") else p.get("symbol", ""),
+                            "strike": p.get("strikePrice", 0),
+                            "option_type": p.get("optionType", ""),
+                            "expiry": p.get("expiryDate", ""),
+                            "quantity": p.get("netQty", p.get("qty", 0)),
+                            "avg_price": p.get("avgPrice", p.get("buyAvgPrice", 0)),
+                            "ltp": p.get("ltp", 0),
+                            "pnl_unrealized": p.get("unrealizedProfit", p.get("pl", 0)),
+                            "pnl_realized": p.get("realized_profit", p.get("realizedProfit", 0)),
+                            "product_type": p.get("productType", ""),
+                            "strategy_id": "",
+                            "delta": 0, "gamma": 0, "theta": 0, "vega": 0,
+                        })
+                    return {
+                        "positions": parsed,
+                        "count": len(parsed),
+                        "source": "fyers_live",
+                        "timestamp": datetime.now(IST).isoformat(),
+                    }
+        except Exception as e:
+            logger.warning(f"Fyers positions fetch failed: {e}")
 
-    # Fallback to mock
+    # Paper mode (default) — read from PaperTradingManager
+    if _paper_trading_manager and _paper_trading_manager.is_active:
+        try:
+            paper_positions = await _paper_trading_manager.get_positions()
+            parsed = []
+            for p in paper_positions:
+                # paper_broker returns Decimal — coerce to float
+                qty = float(p.get("quantity", 0) or 0)
+                avg = float(p.get("average_price", 0) or 0)
+                ltp = float(p.get("ltp", avg) or avg)
+                pnl_u = float(p.get("pnl_unrealized", 0) or 0)
+                pnl_r = float(p.get("pnl_realized", 0) or 0)
+                sym = p.get("symbol", "")
+                # Best-effort parse of "NIFTY 24000 CE" into components
+                strike = 0
+                opt_type = ""
+                underlying = sym
+                parts = sym.split()
+                if len(parts) >= 3:
+                    underlying = parts[0]
+                    try:
+                        strike = int(parts[1])
+                    except ValueError:
+                        pass
+                    opt_type = parts[2] if parts[2] in ("CE", "PE") else ""
+                parsed.append({
+                    "instrument": sym,
+                    "symbol": underlying,
+                    "strike": strike,
+                    "option_type": opt_type,
+                    "expiry": p.get("expiry", ""),
+                    "quantity": qty,
+                    "avg_price": avg,
+                    "ltp": ltp,
+                    "pnl_unrealized": pnl_u,
+                    "pnl_realized": pnl_r,
+                    "product_type": p.get("product_type", "NRML"),
+                    "strategy_id": p.get("strategy_id", ""),
+                    "delta": 0, "gamma": 0, "theta": 0, "vega": 0,
+                })
+            return {
+                "positions": parsed,
+                "count": len(parsed),
+                "source": "paper_trading",
+                "timestamp": datetime.now(IST).isoformat(),
+            }
+        except Exception as e:
+            logger.warning(f"Paper positions fetch failed: {e}")
+
+    # Last resort: mock
     positions = _mock.positions()
     return {
         "positions": positions,

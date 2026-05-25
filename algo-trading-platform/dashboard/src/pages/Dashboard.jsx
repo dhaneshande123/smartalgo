@@ -23,7 +23,18 @@ const strategyColumns = [
       </span>
     ),
   },
-  { key: 'positions', label: 'Positions', align: 'right' },
+  {
+    key: 'positions',
+    label: 'Positions',
+    align: 'right',
+    render: (v) => {
+      // Accept either a plain count (mock strategies) or a list of position
+      // objects (live deployed strategies) — render the count in both cases.
+      if (Array.isArray(v)) return v.length;
+      if (typeof v === 'number') return v;
+      return v ?? '--';
+    },
+  },
 ];
 
 const orderColumns = [
