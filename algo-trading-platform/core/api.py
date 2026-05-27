@@ -5150,7 +5150,8 @@ async def paper_trading_stats():
     "/api/paper-trading/positions",
     tags=["Paper Trading"],
     summary="Paper trading positions",
-    description="Return current open positions in the paper trading session.",
+    description="Return current open positions in the paper trading session, "
+    "with normalized field names for the frontend (side, avg_price, pnl, etc.).",
 )
 async def paper_trading_positions():
     if _paper_trading_manager is None:
@@ -5159,9 +5160,78 @@ async def paper_trading_positions():
         raise HTTPException(status_code=409, detail="No active paper trading session")
 
     try:
-        return await _paper_trading_manager.get_positions()
+        raw_positions = await _paper_trading_manager.get_positions()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+    # ── Build chain-lookup for LTP refresh (same logic as /api/positions) ──
+    chain_lookup: dict[str, dict[int, dict]] = {}
+    for cache_key, chain_data in _fyers_chain_cache.items():
+        if ":" in cache_key:
+            continue
+        rows = chain_data.get("chain", []) if isinstance(chain_data, dict) else []
+        by_strike: dict[int, dict] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            s = int(row.get("strike", 0))
+            if s:
+                by_strike[s] = row
+        if by_strike:
+            chain_lookup[cache_key.upper()] = by_strike
+
+    parsed = []
+    for p in raw_positions:
+        # PaperBroker returns Decimal strings — coerce to float
+        qty_raw = float(p.get("quantity", 0) or 0)
+        avg = float(p.get("average_price", 0) or 0)
+        ltp = float(p.get("ltp", avg) or avg)
+        pnl_u = float(p.get("pnl_unrealized", 0) or 0)
+        pnl_r = float(p.get("pnl_realized", 0) or 0)
+        sym = p.get("symbol", "")
+
+        # Derive side from signed quantity (+ve = BUY/LONG, -ve = SELL/SHORT)
+        side = "BUY" if qty_raw >= 0 else "SELL"
+        qty = abs(qty_raw)
+
+        # Parse "NIFTY 24000 CE" into underlying / strike / opt_type
+        strike = 0
+        opt_type = ""
+        underlying = sym
+        parts = sym.split()
+        if len(parts) >= 3:
+            underlying = parts[0]
+            try:
+                strike = int(parts[1])
+            except ValueError:
+                pass
+            opt_type = parts[2] if parts[2] in ("CE", "PE") else ""
+
+        # Refresh LTP from cached option chain (live Fyers data)
+        if underlying.upper() in chain_lookup and strike:
+            row = chain_lookup[underlying.upper()].get(strike)
+            if row:
+                key = "call_ltp" if opt_type == "CE" else "put_ltp"
+                fresh_ltp = float(row.get(key, 0) or 0)
+                if fresh_ltp > 0:
+                    ltp = fresh_ltp
+                    if qty_raw != 0:
+                        pnl_u = (ltp - avg) * qty_raw
+
+        parsed.append({
+            "symbol": sym,
+            "side": side,
+            "quantity": qty,
+            "avg_price": avg,
+            "ltp": ltp,
+            "pnl": pnl_u,
+            "pnl_unrealized": pnl_u,
+            "pnl_realized": pnl_r,
+            "strategy": p.get("strategy_id", "manual"),
+            "product_type": p.get("product_type", "NRML"),
+        })
+
+    return {"positions": parsed, "count": len(parsed)}
 
 
 @app.get(
@@ -5177,9 +5247,27 @@ async def paper_trading_orders():
         raise HTTPException(status_code=409, detail="No active paper trading session")
 
     try:
-        return await _paper_trading_manager.get_orders()
+        raw_orders = await _paper_trading_manager.get_orders()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+    # Normalize field names / types for the frontend DataTable columns
+    parsed = []
+    for o in raw_orders:
+        parsed.append({
+            "order_id": o.get("order_id", ""),
+            "symbol": o.get("symbol", ""),
+            "side": o.get("side", ""),
+            "order_type": o.get("order_type", ""),
+            "quantity": o.get("quantity", 0),
+            "price": float(o.get("price", 0) or 0),
+            "status": o.get("status", ""),
+            "filled_quantity": o.get("filled_quantity", 0),
+            "average_price": float(o.get("average_price", 0) or 0),
+            "timestamp": o.get("placed_at", o.get("timestamp", "")),
+        })
+
+    return {"orders": parsed, "count": len(parsed)}
 
 
 @app.post(
@@ -5239,15 +5327,56 @@ async def paper_trading_stop_strategy(strategy_id: str):
     "/api/paper-trading/strategies",
     tags=["Paper Trading"],
     summary="List deployed paper strategies",
-    description="Return all strategies deployed in the current paper trading session.",
+    description="Return all strategies deployed in the current paper trading session, "
+    "including AI-deployed and Strategy-Builder-deployed strategies.",
 )
 async def paper_trading_strategies():
     if _paper_trading_manager is None:
         raise HTTPException(status_code=503, detail="Paper trading manager not initialized")
     if not _paper_trading_manager.is_active:
-        return {"strategies": [], "session_active": False}
+        # Even when no paper session, return AI-deployed strategies so they're visible
+        ai_strategies = []
+        for sid, strat in _deployed_strategies.items():
+            ai_strategies.append({
+                "strategy_id": sid,
+                "name": strat.get("name", ""),
+                "strategy_name": strat.get("name", ""),
+                "class": strat.get("strategy_type", ""),
+                "status": strat.get("status", "RUNNING"),
+                "pnl": strat.get("pnl", 0),
+                "total_pnl": strat.get("pnl", 0),
+                "trades_count": len(strat.get("positions", [])),
+                "positions_count": len(strat.get("positions", [])),
+                "entered": strat.get("entered", False),
+                "mode": strat.get("mode", "paper"),
+                "deployed_at": strat.get("deployed_at", ""),
+                "ai_deployed": strat.get("ai_deployed", False),
+            })
+        return {"strategies": ai_strategies, "session_active": False, "count": len(ai_strategies)}
 
     strategies = _paper_trading_manager.get_deployed_strategies()
+    seen_ids = {s.get("strategy_id") for s in strategies}
+
+    # Merge in AI-deployed / Strategy-Builder strategies from global dict
+    for sid, strat in _deployed_strategies.items():
+        if sid in seen_ids:
+            continue  # avoid duplicates
+        strategies.append({
+            "strategy_id": sid,
+            "name": strat.get("name", ""),
+            "strategy_name": strat.get("name", ""),
+            "class": strat.get("strategy_type", ""),
+            "status": strat.get("status", "RUNNING"),
+            "pnl": strat.get("pnl", 0),
+            "total_pnl": strat.get("pnl", 0),
+            "trades_count": len(strat.get("positions", [])),
+            "positions_count": len(strat.get("positions", [])),
+            "entered": strat.get("entered", False),
+            "mode": strat.get("mode", "paper"),
+            "deployed_at": strat.get("deployed_at", ""),
+            "ai_deployed": strat.get("ai_deployed", False),
+        })
+
     return {
         "strategies": strategies,
         "session_active": True,
