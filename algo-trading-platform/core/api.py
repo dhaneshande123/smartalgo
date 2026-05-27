@@ -5723,3 +5723,145 @@ async def get_pnl_history(strategy_id: str | None = None, limit: int = 500):
     from core.state_store import get_store
     snapshots = get_store().get_pnl_history(strategy_id=strategy_id, limit=limit)
     return {"snapshots": snapshots, "count": len(snapshots)}
+
+
+@app.get("/api/trade-analytics", tags=["Trading"])
+async def get_trade_analytics():
+    """
+    Compute trade performance analytics from deployed strategies and trade log.
+
+    Returns: summary stats, per-strategy breakdown, equity curve data, and
+    recent trade history — everything the Trade Analytics dashboard needs.
+    """
+    from core.state_store import get_store
+    import math
+
+    store = get_store()
+
+    # ── Gather raw data ──────────────────────────────────────
+    all_trades = store.get_trade_log(limit=5000)
+    all_strategies = list(_deployed_strategies.values())
+
+    # ── Completed strategies (EXITED / STOPPED) ──────────────
+    completed = [s for s in all_strategies if s.get("status") in ("EXITED", "STOPPED")]
+    running = [s for s in all_strategies if s.get("status") == "RUNNING"]
+
+    pnl_values = [s.get("pnl", 0) or s.get("realized_pnl", 0) for s in completed]
+    winners = [p for p in pnl_values if p > 0]
+    losers = [p for p in pnl_values if p < 0]
+    breakeven = [p for p in pnl_values if p == 0]
+
+    total_pnl = sum(pnl_values)
+    total_trades = len(completed)
+    win_count = len(winners)
+    loss_count = len(losers)
+    win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
+
+    avg_win = (sum(winners) / win_count) if win_count > 0 else 0
+    avg_loss = (sum(losers) / loss_count) if loss_count > 0 else 0
+    profit_factor = (sum(winners) / abs(sum(losers))) if losers else float("inf") if winners else 0
+    expectancy = (total_pnl / total_trades) if total_trades > 0 else 0
+
+    # Max drawdown from cumulative P&L
+    cumulative = []
+    running_total = 0
+    peak = 0
+    max_dd = 0
+    for s in sorted(completed, key=lambda x: x.get("exited_at") or x.get("deployed_at") or ""):
+        p = s.get("pnl", 0) or s.get("realized_pnl", 0)
+        running_total += p
+        cumulative.append(running_total)
+        if running_total > peak:
+            peak = running_total
+        dd = peak - running_total
+        if dd > max_dd:
+            max_dd = dd
+
+    # Sharpe ratio (annualized, assuming ~252 trading days)
+    if len(pnl_values) > 1:
+        mean_pnl = total_pnl / len(pnl_values)
+        variance = sum((p - mean_pnl) ** 2 for p in pnl_values) / (len(pnl_values) - 1)
+        std_dev = math.sqrt(variance) if variance > 0 else 0
+        sharpe = (mean_pnl / std_dev * math.sqrt(252)) if std_dev > 0 else 0
+    else:
+        sharpe = 0
+
+    # Running P&L
+    running_pnl = sum(s.get("unrealized_pnl", 0) + s.get("realized_pnl", 0) for s in running)
+
+    # ── Per-strategy breakdown ───────────────────────────────
+    strategy_breakdown = {}
+    for s in all_strategies:
+        name = s.get("name", "Unknown")
+        cls = s.get("strategy_class", "unknown")
+        key = cls or name
+        if key not in strategy_breakdown:
+            strategy_breakdown[key] = {
+                "strategy_class": cls,
+                "name": name,
+                "total_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "total_pnl": 0,
+                "best_trade": 0,
+                "worst_trade": 0,
+            }
+        entry = strategy_breakdown[key]
+        p = s.get("pnl", 0) or s.get("realized_pnl", 0)
+        if s.get("status") in ("EXITED", "STOPPED"):
+            entry["total_trades"] += 1
+            if p > 0:
+                entry["wins"] += 1
+            elif p < 0:
+                entry["losses"] += 1
+            entry["total_pnl"] += p
+            entry["best_trade"] = max(entry["best_trade"], p)
+            entry["worst_trade"] = min(entry["worst_trade"], p)
+
+    # ── Equity curve points ──────────────────────────────────
+    equity_curve = []
+    running_equity = 0
+    for s in sorted(completed, key=lambda x: x.get("exited_at") or x.get("deployed_at") or ""):
+        p = s.get("pnl", 0) or s.get("realized_pnl", 0)
+        running_equity += p
+        equity_curve.append({
+            "timestamp": s.get("exited_at") or s.get("deployed_at"),
+            "equity": round(running_equity, 2),
+            "trade_pnl": round(p, 2),
+            "strategy": s.get("name", ""),
+        })
+
+    # ── Daily P&L aggregation ────────────────────────────────
+    daily_pnl = {}
+    for s in completed:
+        ts = s.get("exited_at") or s.get("deployed_at") or ""
+        day = ts[:10] if ts else "unknown"
+        daily_pnl.setdefault(day, 0)
+        daily_pnl[day] += s.get("pnl", 0) or s.get("realized_pnl", 0)
+    daily_pnl_list = [{"date": d, "pnl": round(v, 2)} for d, v in sorted(daily_pnl.items())]
+
+    return {
+        "summary": {
+            "total_pnl": round(total_pnl, 2),
+            "running_pnl": round(running_pnl, 2),
+            "total_trades": total_trades,
+            "running_strategies": len(running),
+            "win_count": win_count,
+            "loss_count": loss_count,
+            "breakeven_count": len(breakeven),
+            "win_rate": round(win_rate, 1),
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            "best_trade": round(max(pnl_values) if pnl_values else 0, 2),
+            "worst_trade": round(min(pnl_values) if pnl_values else 0, 2),
+            "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else "inf",
+            "expectancy": round(expectancy, 2),
+            "sharpe_ratio": round(sharpe, 2),
+            "max_drawdown": round(max_dd, 2),
+        },
+        "strategy_breakdown": list(strategy_breakdown.values()),
+        "equity_curve": equity_curve,
+        "daily_pnl": daily_pnl_list,
+        "recent_trades": all_trades[:50],
+        "trade_count": len(all_trades),
+    }

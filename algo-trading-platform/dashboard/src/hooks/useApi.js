@@ -182,6 +182,14 @@ export const useAcknowledgeAlert = () => {
 export const useSystemInfo = () => useQuery({ queryKey: ['systemInfo'], queryFn: api.getSystemInfo });
 export const useSystemConfig = () => useQuery({ queryKey: ['systemConfig'], queryFn: api.getSystemConfig });
 
+// Trade Analytics (SQLite-backed)
+export const useTradeAnalytics = () =>
+  useQuery({ queryKey: ['tradeAnalytics'], queryFn: api.getTradeAnalytics, refetchInterval: 5000 });
+export const useTradeLog = (strategyId) =>
+  useQuery({ queryKey: ['tradeLog', strategyId], queryFn: () => api.getTradeLog(strategyId), refetchInterval: 5000 });
+export const usePnLHistoryPersisted = (strategyId) =>
+  useQuery({ queryKey: ['pnlHistoryPersisted', strategyId], queryFn: () => api.getPnLHistory(strategyId), refetchInterval: 5000 });
+
 // P&L Analytics
 export const usePnLSummary = () => useQuery({ queryKey: ['pnlSummary'], queryFn: api.getPnLSummary, refetchInterval: 5000 });
 export const usePnLByStrategy = () => useQuery({ queryKey: ['pnlByStrategy'], queryFn: api.getPnLByStrategy, refetchInterval: 5000 });

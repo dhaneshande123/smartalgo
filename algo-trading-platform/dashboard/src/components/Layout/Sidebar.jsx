@@ -20,6 +20,7 @@ import {
   X,
   Flame,
   Brain,
+  ClipboardList,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -37,6 +38,7 @@ const navItems = [
   { to: '/iv-surface', icon: Flame, label: 'IV Surface' },
   { to: '/paper', icon: FlaskRound, label: 'Paper Trading' },
   { to: '/ai-signals', icon: Brain, label: 'AI Signals' },
+  { to: '/trade-analytics', icon: ClipboardList, label: 'Trade Analytics' },
   { to: '/monitoring', icon: Activity, label: 'Monitoring' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

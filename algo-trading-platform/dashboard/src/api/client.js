@@ -116,6 +116,13 @@ export const getStrategySignals = () => api.get('/strategy-signals');
 export const getAutoDeployRecommendations = () => api.get('/auto-deploy/recommendations');
 export const executeAutoDeploy = () => api.post('/auto-deploy/execute');
 
+// Trade Analytics (SQLite-backed)
+export const getTradeAnalytics = () => api.get('/trade-analytics');
+export const getTradeLog = (strategyId, limit = 200) =>
+  api.get('/trade-log', { params: { ...(strategyId ? { strategy_id: strategyId } : {}), limit } });
+export const getPnLHistory = (strategyId, limit = 500) =>
+  api.get('/pnl/history', { params: { ...(strategyId ? { strategy_id: strategyId } : {}), limit } });
+
 // P&L Analytics
 export const getPnLSummary = () => api.get('/pnl/summary');
 export const getPnLByStrategy = () => api.get('/pnl/by-strategy');
