@@ -5729,6 +5729,17 @@ async def execute_auto_deploy(body: dict = Body(default={})):
     spot = ctx["spot"] or 0
     lot = symbol_master.get_lot_size(symbol)
 
+    # ── Build set of already-RUNNING strategy classes to prevent duplicates ──
+    running_classes: set[str] = set()
+    for sid, strat in _deployed_strategies.items():
+        if strat.get("status") == "RUNNING":
+            sclass = strat.get("strategy_class", "")
+            if not sclass:
+                # Derive from name: "Bear Put Spread [AI]" → "bear_put_spread"
+                raw_name = (strat.get("name") or "").replace("[AI]", "").strip()
+                sclass = raw_name.lower().replace(" ", "_").replace("(", "").replace(")", "")
+            running_classes.add(sclass.lower())
+
     deployed = []
     skipped = []
     for sig in result["signals"]:
@@ -5737,6 +5748,14 @@ async def execute_auto_deploy(body: dict = Body(default={})):
             continue
         if not sig["ready_to_deploy"]:
             skipped.append({"strategy": sig["strategy_class"], "reason": f"not ready (conf={sig['confidence']})"})
+            continue
+
+        # Skip if same strategy class already RUNNING (prevents duplicates)
+        if sig["strategy_class"].lower() in running_classes:
+            skipped.append({
+                "strategy": sig["strategy_class"],
+                "reason": "already running (duplicate prevented)",
+            })
             continue
 
         payload = build_deploy_payload(sig, spot_price=spot, lot_size=lot, name_suffix="AI")
@@ -5750,6 +5769,9 @@ async def execute_auto_deploy(body: dict = Body(default={})):
                 "confidence": sig["confidence"],
                 "reason": " · ".join(sig["reasoning"][:2]),
             })
+            # Mark this class as running so later signals in the same batch
+            # don't create additional duplicates
+            running_classes.add(sig["strategy_class"].lower())
         except Exception as e:
             logger.warning(f"Auto-deploy of {sig['strategy_class']} failed: {e}")
             skipped.append({"strategy": sig["strategy_class"], "reason": str(e)})
