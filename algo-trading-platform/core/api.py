@@ -2026,6 +2026,30 @@ def _refresh_strategy_pnl(strat: dict) -> None:
         strat["pnl"] = strat.get("realized_pnl", 0.0)
         return
 
+    # Exited / Stopped strategies have locked-in realized P&L.
+    # Do NOT recalculate from positions — the chain cache may be empty
+    # after a restart, which would corrupt their P&L to near-zero.
+    status = (strat.get("status") or "").upper()
+    if status in ("EXITED", "STOPPED"):
+        # Preserve the realized P&L as-is; charges were already factored
+        # at exit time or will be computed from the frozen position data.
+        strat["pnl"] = float(strat.get("realized_pnl", 0.0))
+        strat["unrealized_pnl"] = 0.0
+        # Still compute charges for display purposes (positions are frozen)
+        try:
+            from core.charges import compute_strategy_charges
+
+            charges = compute_strategy_charges(positions)
+            strat["charges"] = charges["breakdown"]
+            strat["total_charges"] = charges["total_all"]
+            strat["gross_pnl"] = strat["pnl"]
+            strat["pnl"] = round(strat["pnl"] - charges["total_all"], 2)
+        except Exception:
+            strat["charges"] = {}
+            strat["total_charges"] = 0.0
+            strat["gross_pnl"] = strat["pnl"]
+        return
+
     underlying = (strat.get("underlying") or "").upper()
     chain_cache = _fyers_chain_cache.get(underlying) or _fyers_chain_cache.get(f"{underlying}:")
     chain_rows = chain_cache.get("chain", []) if isinstance(chain_cache, dict) else []
@@ -2068,7 +2092,23 @@ def _refresh_strategy_pnl(strat: dict) -> None:
         unrealized_total += leg_pnl
 
     strat["unrealized_pnl"] = round(unrealized_total, 2)
-    strat["pnl"] = round(strat.get("realized_pnl", 0.0) + unrealized_total, 2)
+    gross_pnl = round(strat.get("realized_pnl", 0.0) + unrealized_total, 2)
+
+    # ── Charges + slippage deduction for realistic paper P&L ─────
+    try:
+        from core.charges import compute_strategy_charges
+
+        charges = compute_strategy_charges(positions)
+        strat["charges"] = charges["breakdown"]
+        strat["total_charges"] = charges["total_all"]
+        strat["gross_pnl"] = gross_pnl
+        strat["pnl"] = round(gross_pnl - charges["total_all"], 2)
+    except Exception:
+        strat["charges"] = {}
+        strat["total_charges"] = 0.0
+        strat["gross_pnl"] = gross_pnl
+        strat["pnl"] = gross_pnl
+
     strat["spot_price"] = spot  # keep cached
     # legacy alias used elsewhere
     strat["positions_count"] = len(positions)
@@ -5746,16 +5786,31 @@ async def get_trade_analytics():
     completed = [s for s in all_strategies if s.get("status") in ("EXITED", "STOPPED")]
     running = [s for s in all_strategies if s.get("status") == "RUNNING"]
 
-    pnl_values = [s.get("pnl", 0) or s.get("realized_pnl", 0) for s in completed]
+    # Net P&L values (after charges + slippage) — what you actually take home
+    net_pnl_values = [s.get("pnl", 0) or s.get("realized_pnl", 0) for s in completed]
+    # Gross P&L values (before charges) — raw strategy performance
+    gross_pnl_values = [s.get("gross_pnl", s.get("pnl", 0)) for s in completed]
+
+    # Use GROSS P&L for win/loss classification (strategy quality)
+    # Use NET P&L for total/expectancy (what you actually make)
+    pnl_values = net_pnl_values  # net is the reality
+
+    gross_winners = [p for p in gross_pnl_values if p > 0]
+    gross_losers = [p for p in gross_pnl_values if p < 0]
+
     winners = [p for p in pnl_values if p > 0]
     losers = [p for p in pnl_values if p < 0]
     breakeven = [p for p in pnl_values if p == 0]
 
     total_pnl = sum(pnl_values)
+    total_gross_pnl_sum = sum(gross_pnl_values)
     total_trades = len(completed)
     win_count = len(winners)
     loss_count = len(losers)
+    gross_win_count = len(gross_winners)
+    gross_loss_count = len(gross_losers)
     win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
+    gross_win_rate = (gross_win_count / total_trades * 100) if total_trades > 0 else 0
 
     avg_win = (sum(winners) / win_count) if win_count > 0 else 0
     avg_loss = (sum(losers) / loss_count) if loss_count > 0 else 0
@@ -5840,9 +5895,23 @@ async def get_trade_analytics():
         daily_pnl[day] += s.get("pnl", 0) or s.get("realized_pnl", 0)
     daily_pnl_list = [{"date": d, "pnl": round(v, 2)} for d, v in sorted(daily_pnl.items())]
 
+    # ── Aggregate charges across all strategies ────────────
+    total_charges = sum(s.get("total_charges", 0) for s in all_strategies)
+    total_gross_pnl = sum(s.get("gross_pnl", s.get("pnl", 0)) for s in completed)
+    agg_charges = {}
+    for s in all_strategies:
+        ch = s.get("charges", {})
+        for k, v in ch.items():
+            agg_charges[k] = round(agg_charges.get(k, 0) + (v or 0), 2)
+
     return {
         "summary": {
             "total_pnl": round(total_pnl, 2),
+            "gross_pnl": round(total_gross_pnl_sum, 2),
+            "total_charges": round(total_charges, 2),
+            "gross_win_rate": round(gross_win_rate, 1),
+            "gross_win_count": gross_win_count,
+            "gross_loss_count": gross_loss_count,
             "running_pnl": round(running_pnl, 2),
             "total_trades": total_trades,
             "running_strategies": len(running),
@@ -5858,6 +5927,7 @@ async def get_trade_analytics():
             "expectancy": round(expectancy, 2),
             "sharpe_ratio": round(sharpe, 2),
             "max_drawdown": round(max_dd, 2),
+            "charges_breakdown": agg_charges,
         },
         "strategy_breakdown": list(strategy_breakdown.values()),
         "equity_curve": equity_curve,

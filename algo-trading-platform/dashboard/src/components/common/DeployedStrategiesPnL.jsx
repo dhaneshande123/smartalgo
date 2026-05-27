@@ -192,6 +192,14 @@ export default function DeployedStrategiesPnL({ compact = false }) {
                     })}
                   </div>
                 </div>
+                {s.total_charges > 0 && (
+                  <div className="rounded-lg bg-slate-900/40 px-2.5 py-1.5">
+                    <div className="text-[9px] text-slate-500 uppercase font-semibold">Charges</div>
+                    <div className="text-base font-bold text-orange-400">
+                      -₹{Number(s.total_charges || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Per-leg breakdown */}

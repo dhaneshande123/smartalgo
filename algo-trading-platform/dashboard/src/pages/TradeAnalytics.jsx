@@ -35,19 +35,19 @@ function KPIRow({ summary }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
       <MetricCard
-        label="Total P&L"
+        label="Net P&L"
         value={summary.total_pnl}
         prefix="₹"
         icon={summary.total_pnl >= 0 ? TrendingUp : TrendingDown}
       />
       <MetricCard
-        label="Running P&L"
-        value={summary.running_pnl}
+        label="Gross P&L"
+        value={summary.gross_pnl ?? summary.total_pnl}
         prefix="₹"
-        icon={Activity}
+        icon={summary.gross_pnl >= 0 ? ArrowUpRight : ArrowDownRight}
       />
       <MetricCard
-        label="Win Rate"
+        label={summary.gross_win_rate != null ? 'Net Win Rate' : 'Win Rate'}
         value={summary.win_rate}
         suffix="%"
         icon={Target}
@@ -88,6 +88,7 @@ function StatsBar({ summary }) {
     { label: 'Running', value: summary.running_strategies, icon: Activity },
     { label: 'Wins', value: summary.win_count, color: 'text-profit' },
     { label: 'Losses', value: summary.loss_count, color: 'text-loss' },
+    ...(summary.gross_win_rate != null ? [{ label: 'Gross WR', value: `${summary.gross_win_rate}%`, color: summary.gross_win_rate >= 50 ? 'text-profit' : 'text-loss' }] : []),
     { label: 'Avg Win', value: fmtINR(summary.avg_win), color: 'text-profit' },
     { label: 'Avg Loss', value: fmtINR(summary.avg_loss), color: 'text-loss' },
     { label: 'Best', value: fmtINR(summary.best_trade), color: 'text-profit' },
@@ -450,6 +451,46 @@ export default function TradeAnalytics() {
               </div>
             </div>
           </Card>
+
+          {/* Charges Breakdown */}
+          {summary.total_charges > 0 && (
+            <Card title="Charges & Slippage" className="lg:col-span-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+                {[
+                  { label: 'Brokerage', key: 'brokerage' },
+                  { label: 'STT', key: 'stt' },
+                  { label: 'Exchange Fee', key: 'exchange_txn_fee' },
+                  { label: 'GST', key: 'gst' },
+                  { label: 'SEBI', key: 'sebi_charges' },
+                  { label: 'Stamp Duty', key: 'stamp_duty' },
+                  { label: 'Slippage', key: 'slippage_cost' },
+                ].map(({ label, key }) => {
+                  const val = summary.charges_breakdown?.[key] ?? 0;
+                  return (
+                    <div key={key} className="glass-card !p-3 !rounded-xl text-center">
+                      <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{label}</div>
+                      <div className="font-mono text-sm font-semibold text-orange-400">{fmtINR(val)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flex items-center justify-between mt-3 pt-3 border-t border-terminal-border">
+                <div className="text-xs text-slate-500">
+                  Gross P&L: <span className={`font-mono font-semibold ${pnlColor(summary.gross_pnl)}`}>
+                    {summary.gross_pnl >= 0 ? '+' : '-'}{fmtINR(summary.gross_pnl)}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Total Charges: <span className="font-mono font-semibold text-orange-400">-{fmtINR(summary.total_charges)}</span>
+                </div>
+                <div className="text-xs text-slate-500">
+                  Net P&L: <span className={`font-mono font-bold ${pnlColor(summary.total_pnl)}`}>
+                    {summary.total_pnl >= 0 ? '+' : '-'}{fmtINR(summary.total_pnl)}
+                  </span>
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
