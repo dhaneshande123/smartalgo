@@ -47,26 +47,26 @@ function formatINR(val) {
 
 // ── Position columns (base — exit button added dynamically inside component) ──
 const basePositionColumns = [
-  { key: 'symbol', label: 'Symbol', render: (v) => <span className="font-medium text-white">{v}</span> },
-  { key: 'side', label: 'Side', render: (v) => <span className={`font-medium ${v === 'BUY' || v === 'LONG' ? 'text-profit' : 'text-loss'}`}>{v || '--'}</span> },
-  { key: 'quantity', label: 'Qty', align: 'right', render: (v) => <span className="font-mono">{v}</span> },
-  { key: 'avg_price', label: 'Avg Price', align: 'right', render: (v) => <span className="font-mono">{v?.toFixed?.(2) ?? v ?? '--'}</span> },
-  { key: 'ltp', label: 'LTP', align: 'right', render: (v) => <span className="font-mono">{v?.toFixed?.(2) ?? v ?? '--'}</span> },
+  { key: 'symbol', label: 'Symbol', headerTitle: 'The option contract identifier (e.g., NIFTY 24800 CE)', render: (v) => <span className="font-medium text-white">{v}</span> },
+  { key: 'side', label: 'Side', headerTitle: 'BUY = you own the option, SELL = you have written/sold the option', render: (v) => <span className={`font-medium ${v === 'BUY' || v === 'LONG' ? 'text-profit' : 'text-loss'}`}>{v || '--'}</span> },
+  { key: 'quantity', label: 'Qty', align: 'right', headerTitle: 'Number of lots held in this position', render: (v) => <span className="font-mono">{v}</span> },
+  { key: 'avg_price', label: 'Avg Price', align: 'right', headerTitle: 'Average entry price per contract including slippage', render: (v) => <span className="font-mono">{v?.toFixed?.(2) ?? v ?? '--'}</span> },
+  { key: 'ltp', label: 'LTP', align: 'right', headerTitle: 'Last Traded Price — Current market price of this option', render: (v) => <span className="font-mono">{v?.toFixed?.(2) ?? v ?? '--'}</span> },
   {
-    key: 'pnl', label: 'P&L', align: 'right',
+    key: 'pnl', label: 'P&L', align: 'right', headerTitle: 'Profit or Loss on this position (LTP vs Avg Price x Quantity)',
     render: (v) => <span className={`font-mono font-medium ${(v ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>{(v ?? 0) >= 0 ? '+' : ''}{v?.toFixed?.(2) ?? v ?? '--'}</span>,
   },
-  { key: 'strategy', label: 'Strategy' },
+  { key: 'strategy', label: 'Strategy', headerTitle: 'Which strategy placed this position' },
 ];
 
 const orderColumns = [
-  { key: 'order_id', label: 'ID', render: (v) => <span className="font-mono text-blue-400 text-xs">{v?.slice?.(0, 12) ?? v}</span> },
-  { key: 'symbol', label: 'Symbol', render: (v) => <span className="font-medium text-white">{v}</span> },
-  { key: 'side', label: 'Side', render: (v) => <span className={`font-medium ${v === 'BUY' ? 'text-profit' : 'text-loss'}`}>{v}</span> },
-  { key: 'quantity', label: 'Qty', align: 'right' },
-  { key: 'price', label: 'Price', align: 'right', render: (v) => <span className="font-mono">{v?.toFixed?.(2) ?? v}</span> },
-  { key: 'status', label: 'Status', render: (v) => <StatusBadge status={v?.toLowerCase?.()} /> },
-  { key: 'timestamp', label: 'Time', render: (v) => <span className="text-xs text-slate-500">{v ? new Date(v).toLocaleTimeString() : '--'}</span> },
+  { key: 'order_id', label: 'ID', headerTitle: 'Unique identifier for this order', render: (v) => <span className="font-mono text-blue-400 text-xs">{v?.slice?.(0, 12) ?? v}</span> },
+  { key: 'symbol', label: 'Symbol', headerTitle: 'The option contract that was traded', render: (v) => <span className="font-medium text-white">{v}</span> },
+  { key: 'side', label: 'Side', headerTitle: 'BUY = purchased the option, SELL = sold/wrote the option', render: (v) => <span className={`font-medium ${v === 'BUY' ? 'text-profit' : 'text-loss'}`}>{v}</span> },
+  { key: 'quantity', label: 'Qty', align: 'right', headerTitle: 'Number of lots in this order' },
+  { key: 'price', label: 'Price', align: 'right', headerTitle: 'Execution price including slippage', render: (v) => <span className="font-mono">{v?.toFixed?.(2) ?? v}</span> },
+  { key: 'status', label: 'Status', headerTitle: 'Order status: filled, pending, or cancelled', render: (v) => <StatusBadge status={v?.toLowerCase?.()} /> },
+  { key: 'timestamp', label: 'Time', headerTitle: 'When this order was placed', render: (v) => <span className="text-xs text-slate-500">{v ? new Date(v).toLocaleTimeString() : '--'}</span> },
 ];
 
 // ════════════════════════════════════════════════════════════════════
@@ -205,11 +205,12 @@ export default function PaperTrading() {
   const positionColumns = [
     ...basePositionColumns,
     {
-      key: '_exit', label: 'Action', align: 'center',
+      key: '_exit', label: 'Action', align: 'center', headerTitle: 'Exit button to close this position at current market price',
       render: (_v, row) => (
         <button
           onClick={() => handleExitPosition(row)}
           disabled={exitOrderMutation.isPending}
+          title="Exit this position at current market price"
           className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-loss/10 border border-loss/20 text-loss text-[11px] font-semibold hover:bg-loss/20 transition-all disabled:opacity-40"
         >
           <X className="w-3 h-3" />
@@ -220,9 +221,9 @@ export default function PaperTrading() {
   ];
 
   const tabs = [
-    { id: 'strategies', label: 'Deployed Strategies' },
-    { id: 'positions', label: 'Positions' },
-    { id: 'orders', label: 'Order History' },
+    { id: 'strategies', label: 'Deployed Strategies', title: 'AI and manual strategies running in paper mode' },
+    { id: 'positions', label: 'Positions', title: 'Your current open option positions with live P&L' },
+    { id: 'orders', label: 'Order History', title: 'History of all orders placed in this session' },
   ];
 
   return (
@@ -237,7 +238,7 @@ export default function PaperTrading() {
           {/* Feed Mode Badge */}
           <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
             feedMode === 'fyers_live' ? 'bg-profit/10 text-profit' : 'bg-yellow-500/10 text-yellow-400'
-          }`}>
+          }`} title={feedMode === 'fyers_live' ? 'Using real-time market prices from Fyers broker' : 'Using simulated price data for testing'}>
             <Zap className="w-3.5 h-3.5" />
             {feedMode === 'fyers_live' ? 'LIVE FEED' : 'MOCK FEED'}
           </div>
@@ -277,7 +278,7 @@ export default function PaperTrading() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className={`text-sm font-bold ${isActive ? 'text-profit' : 'text-slate-400'}`}>
+              <span className={`text-sm font-bold ${isActive ? 'text-profit' : 'text-slate-400'}`} title={isActive ? 'Paper trading session is running — all trades are simulated' : 'No active session — start one to begin paper trading'}>
                 {isActive ? 'SESSION ACTIVE' : 'SESSION INACTIVE'}
               </span>
               {isActive && <span className="w-2 h-2 rounded-full bg-profit animate-pulse" />}
@@ -293,6 +294,7 @@ export default function PaperTrading() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setDeployOpen(!deployOpen)}
+              title="Choose and deploy a trading strategy in paper mode"
               className="btn-deploy !py-2 !px-4 !text-sm"
             >
               <Rocket className="w-4 h-4" />
@@ -355,12 +357,12 @@ export default function PaperTrading() {
       {/* ── Stats Cards (only when active) ── */}
       {isActive && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <MetricCard label="Capital" value={stats.initial_capital || stats.capital || 2000000} prefix="Rs " icon={DollarSign} colorClass="text-white" />
-          <MetricCard label="Net P&L" value={stats.total_pnl ?? stats.net_pnl ?? 0} prefix="Rs " icon={TrendingUp} />
-          <MetricCard label="Total Trades" value={stats.total_trades ?? stats.trades_count ?? 0} icon={BarChart3} colorClass="text-white" />
-          <MetricCard label="Win Rate" value={stats.win_rate != null ? `${(stats.win_rate * 100).toFixed(0)}%` : '--'} icon={Trophy} colorClass={
+          <span title="Total virtual money available for paper trading"><MetricCard label="Capital" value={stats.initial_capital || stats.capital || 2000000} prefix="Rs " icon={DollarSign} colorClass="text-white" /></span>
+          <span title="Total profit or loss from all trades today"><MetricCard label="Net P&L" value={stats.total_pnl ?? stats.net_pnl ?? 0} prefix="Rs " icon={TrendingUp} /></span>
+          <span title="Total number of trades executed this session"><MetricCard label="Total Trades" value={stats.total_trades ?? stats.trades_count ?? 0} icon={BarChart3} colorClass="text-white" /></span>
+          <span title="Percentage of trades that ended in profit"><MetricCard label="Win Rate" value={stats.win_rate != null ? `${(stats.win_rate * 100).toFixed(0)}%` : '--'} icon={Trophy} colorClass={
             (stats.win_rate ?? 0) >= 0.6 ? 'text-profit' : (stats.win_rate ?? 0) >= 0.45 ? 'text-yellow-400' : 'text-loss'
-          } />
+          } /></span>
         </div>
       )}
 
@@ -372,6 +374,7 @@ export default function PaperTrading() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
+                title={tab.title}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                   activeTab === tab.id
                     ? 'bg-accent/15 text-accent shadow-sm'
@@ -436,10 +439,10 @@ export default function PaperTrading() {
                             <span className="text-[10px] font-mono text-slate-500">{s.strategy_id}</span>
                             <StatusBadge status={s.status || 'running'} />
                             {isRunning && isEntered && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-profit/15 text-profit border border-profit/30">ENTERED</span>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-profit/15 text-profit border border-profit/30" title="Strategy has entered the market with real orders">ENTERED</span>
                             )}
                             {isRunning && !isEntered && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 animate-pulse">WAITING</span>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 animate-pulse" title="Strategy is monitoring but hasn't entered yet — conditions not met">WAITING</span>
                             )}
                           </div>
                         </div>
@@ -461,6 +464,7 @@ export default function PaperTrading() {
                           <button
                             onClick={() => handleStopStrategy(s.strategy_id, s.ai_deployed)}
                             disabled={stopStrategyMutation.isPending || stopDeployedMutation.isPending}
+                            title="Stop this strategy and close all its positions"
                             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-loss/10 border border-loss/20 text-loss text-xs font-semibold hover:bg-loss/20 transition-all"
                           >
                             <Pause className="w-3.5 h-3.5" />

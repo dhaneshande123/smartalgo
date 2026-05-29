@@ -82,7 +82,8 @@ function FitBadge({ fit }) {
   const c = colors[fit] || colors.MEDIUM;
   return (
     <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider"
-      style={{ background: c.bg, color: c.color }}>
+      style={{ background: c.bg, color: c.color }}
+      title="How well this strategy matches the current market condition (trending/ranging/volatile)">
       {fit}
     </span>
   );
@@ -187,7 +188,7 @@ export default function AISignals() {
             AI Signals & Auto-Deploy
           </h1>
           <p className="text-sm mt-0.5" style={{ color: '#64748b' }}>
-            Machine learning signals, market regime detection, and automated strategy recommendations
+            AI analyzes live market data and recommends option strategies
           </p>
         </div>
         <button
@@ -228,15 +229,16 @@ export default function AISignals() {
                 <Brain className="w-5 h-5" style={{ color: rc.color }} />
               </div>
               <div>
-                <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ color: rc.color }}>
+                <div className="text-xs font-bold uppercase tracking-wider mb-1" style={{ color: rc.color }} title="Current market classification: Trending Up/Down, Ranging, High Volatility">
                   Market Regime
                 </div>
                 <div className="text-2xl font-extrabold" style={{ color: '#ffffff', letterSpacing: '-0.02em' }}>
                   {regime.regime_label}
                 </div>
+                <div style={{ fontSize: 9, color: '#64748b', marginTop: 2, fontWeight: 400 }}>AI classifies the market to pick the best strategy type</div>
               </div>
             </div>
-            <div className="text-right">
+            <div className="text-right" title="AI's conviction level — Higher % = stronger signal based on current market conditions">
               <div className="text-xs" style={{ color: '#64748b' }}>Confidence</div>
               <div className="text-3xl font-extrabold" style={{ color: rc.color }}>{confidencePct}%</div>
             </div>
@@ -269,7 +271,7 @@ export default function AISignals() {
         {/* VIX + MACD mini cards */}
         <div className="flex flex-col gap-4">
           <div className="flex-1 p-5 rounded-2xl" style={cardStyle}>
-            <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#64748b' }}>India VIX</div>
+            <div className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: '#64748b' }} title="Fear gauge — Higher = more expected volatility = options become expensive">India VIX</div>
             <div className="text-4xl font-extrabold font-mono mb-1"
               style={{ color: (regime.vix || 0) > 20 ? '#ef4444' : (regime.vix || 0) > 15 ? '#eab308' : '#22c55e' }}>
               {regime.vix?.toFixed(2) || '--'}
@@ -298,7 +300,7 @@ export default function AISignals() {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Zap className="w-4.5 h-4.5" style={{ color: '#a855f7' }} />
-            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Strategy Signals</h2>
+            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }} title="AI-generated buy/sell/hold signals for each strategy">Strategy Signals</h2>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
               style={{ background: 'rgba(124,58,237,0.15)', color: '#a855f7' }}>
               {signals.length} strategies
@@ -341,7 +343,7 @@ export default function AISignals() {
                       </div>
                     )}
                   </div>
-                  <div className="flex-shrink-0 text-right">
+                  <div className="flex-shrink-0 text-right" title="AI's conviction level — Higher % = stronger signal based on current market conditions">
                     <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: '#475569' }}>Confidence</div>
                     <div className="text-2xl font-bold font-mono" style={{ color: conf >= 70 ? '#22c55e' : conf >= 50 ? '#eab308' : '#ef4444' }}>
                       {conf}%
@@ -364,7 +366,7 @@ export default function AISignals() {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Target className="w-4.5 h-4.5" style={{ color: '#22c55e' }} />
-            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }}>Auto-Deploy Recommendations</h2>
+            <h2 className="text-sm font-bold" style={{ color: '#ffffff' }} title="Strategies the AI recommends deploying now based on market conditions">Auto-Deploy Recommendations</h2>
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
               style={{ background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
               {recs.length} ready
@@ -375,6 +377,7 @@ export default function AISignals() {
               onClick={handleAutoDeployAll}
               disabled={autoDeploying}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+              title="One-click deploy all high-confidence AI recommendations to paper trading"
               style={{
                 background: 'linear-gradient(135deg, #22c55e, #16a34a)',
                 color: '#fff',
@@ -414,7 +417,7 @@ export default function AISignals() {
                         {rec.strategy_name || rec.strategy_id?.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                       </span>
                       {rec.signal && <SignalBadge signal={rec.signal} />}
-                      <span className="text-[11px] font-bold" style={{ color: '#22c55e' }}>
+                      <span className="text-[11px] font-bold" style={{ color: '#22c55e' }} title="AI's conviction level — Higher % = stronger signal">
                         {Math.min(Math.round(rec.confidence > 1 ? rec.confidence : rec.confidence * 100), 100)}% confidence
                       </span>
                     </div>
@@ -425,6 +428,7 @@ export default function AISignals() {
                     onClick={() => handleDeploy(rec)}
                     disabled={isDeploying || isDeployed}
                     className="flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-60"
+                    title="Deploy this strategy to paper trading mode"
                     style={isDeployed ? {
                       background: 'rgba(34,197,94,0.1)',
                       border: '1px solid rgba(34,197,94,0.25)',

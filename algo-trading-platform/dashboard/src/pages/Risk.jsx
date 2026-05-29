@@ -118,7 +118,7 @@ function KillSwitchBanner({ killSwitch, deactivateKillSwitch, isActiveOnBackend,
   };
 
   return (
-    <div style={cardStyle}>
+    <div style={cardStyle} title="Emergency stop — Immediately closes all positions and blocks new trades">
       {/* Subtle red glow stripe at top */}
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 2,
@@ -374,6 +374,7 @@ export default function Risk() {
             </span>
             <TrendingDown style={{ width: 14, height: 14, color: '#ef4444' }} />
           </div>
+          <div style={{ fontSize: 9, color: '#64748b', marginTop: 1 }}>How much you've lost from your highest point</div>
           <div style={{ fontSize: 26, fontWeight: 800, fontFamily: 'monospace', color: drawdownPct > 70 ? '#ef4444' : drawdownPct > 40 ? '#f59e0b' : '#22c55e' }}>
             {risk.drawdown.toFixed(1)}%
           </div>
@@ -400,6 +401,7 @@ export default function Risk() {
             </span>
             <Activity style={{ width: 14, height: 14, color: '#f59e0b' }} />
           </div>
+          <div style={{ fontSize: 9, color: '#64748b', marginTop: 1 }}>Maximum expected 1-day loss (95% confidence)</div>
           <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: '#f59e0b' }}>
             {formatIndian(risk.var95)}
           </div>
@@ -419,6 +421,7 @@ export default function Risk() {
             </span>
             <AlertTriangle style={{ width: 14, height: 14, color: dailyLossPct > 70 ? '#ef4444' : '#f59e0b' }} />
           </div>
+          <div style={{ fontSize: 9, color: '#64748b', marginTop: 1 }}>Total loss today vs your configured daily limit</div>
           <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: dailyLossPct > 70 ? '#ef4444' : '#f87171' }}>
             {formatIndian(risk.currentLoss)}
           </div>
@@ -445,6 +448,7 @@ export default function Risk() {
             </span>
             <BarChart3 style={{ width: 14, height: 14, color: '#3b82f6' }} />
           </div>
+          <div style={{ fontSize: 9, color: '#64748b', marginTop: 1 }}>Risk-adjusted return — Above 1.5 is good, above 2.0 is excellent</div>
           <div style={{
             fontSize: 26, fontWeight: 800, fontFamily: 'monospace',
             color: risk.sharpe >= 1.5 ? '#22c55e' : risk.sharpe >= 0.8 ? '#f59e0b' : '#ef4444',
@@ -455,7 +459,7 @@ export default function Risk() {
             {risk.sharpe >= 1.5 ? '✓ Excellent' : risk.sharpe >= 0.8 ? '~ Acceptable' : '✗ Below target'}
           </div>
           <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
-            Margin used: <span style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{risk.marginUsed}%</span>
+            <span title="How much of your capital is locked as margin for open positions">Margin used</span>: <span style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{risk.marginUsed}%</span>
           </div>
         </div>
       </div>
@@ -463,9 +467,12 @@ export default function Risk() {
       {/* ── Circuit Breakers Grid ─────────────────────────────────────────── */}
       <div style={{ ...cardStyle, padding: '16px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b', margin: 0 }}>
-            Circuit Breakers
-          </h3>
+          <div>
+            <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b', margin: 0 }}>
+              Circuit Breakers
+            </h3>
+            <p style={{ fontSize: 9, color: '#64748b', margin: '3px 0 0 0' }}>Automatic safety checks — triggers warning when limits are approached, halts trading when breached</p>
+          </div>
           <span style={{ fontSize: 11, color: '#475569' }}>
             {circuitBreakers.filter((c) => c.status === 'healthy').length} / {circuitBreakers.length} healthy
           </span>
@@ -533,9 +540,10 @@ export default function Risk() {
 
       {/* ── Greeks Exposure ───────────────────────────────────────────────── */}
       <div style={{ ...cardStyle, padding: '16px 20px' }}>
-        <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b', margin: '0 0 16px 0' }}>
+        <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b', margin: '0 0 4px 0' }}>
           Greeks Exposure vs Limits
         </h3>
+        <p style={{ fontSize: 9, color: '#64748b', margin: '0 0 12px 0' }}>How sensitive your portfolio is to market changes</p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
           {(['delta', 'gamma', 'theta', 'vega']).map((key) => {
             const val = greeks[key];
@@ -544,9 +552,16 @@ export default function Risk() {
             const color = greekColors[key];
             const isNeg = val < 0;
             const barColor = pct > 80 ? '#ef4444' : pct > 60 ? '#f59e0b' : color;
+            const greekTitles = {
+              delta: 'Portfolio moves this much per Rs 1 change in NIFTY',
+              gamma: 'Rate of Delta change — Higher = more sensitive to big moves',
+              theta: 'Daily time decay — Negative means you lose this amount per day',
+              vega: 'Sensitivity to volatility — P&L change per 1% IV move',
+            };
             return (
               <div
                 key={key}
+                title={greekTitles[key]}
                 style={{
                   background: isDark ? 'rgba(15,20,30,0.5)' : 'rgba(0,0,0,0.02)',
                   border: `1px solid ${pct > 80 ? 'rgba(239,68,68,0.2)' : 'rgba(100,116,139,0.12)'}`,
@@ -589,26 +604,34 @@ export default function Risk() {
 
       {/* ── Stress Test Table ─────────────────────────────────────────────── */}
       <div style={{ ...cardStyle, padding: '16px 20px' }}>
-        <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b', margin: '0 0 16px 0' }}>
+        <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#64748b', margin: '0 0 4px 0' }}>
           Stress Test Results
         </h3>
+        <p style={{ fontSize: 9, color: '#64748b', margin: '0 0 12px 0' }}>What would happen to your portfolio under extreme market scenarios</p>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr>
-                {['Scenario', 'P&L Impact', 'Delta Impact', 'Vega Impact', 'Severity'].map((col) => (
+                {[
+                  { label: 'Scenario', tip: 'Market shock scenario being simulated' },
+                  { label: 'P&L Impact', tip: 'Estimated profit or loss if this scenario occurs' },
+                  { label: 'Delta Impact', tip: 'How much your Delta exposure changes under this scenario' },
+                  { label: 'Vega Impact', tip: 'How much your Vega exposure changes under this scenario' },
+                  { label: 'Severity', tip: 'How dangerous this scenario is: LOW / MEDIUM / HIGH / CRITICAL' },
+                ].map((col) => (
                   <th
-                    key={col}
+                    key={col.label}
+                    title={col.tip}
                     style={{
                       padding: '8px 14px',
-                      textAlign: col === 'Scenario' ? 'left' : 'right',
+                      textAlign: col.label === 'Scenario' ? 'left' : 'right',
                       fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
                       letterSpacing: '0.07em', color: '#475569',
                       borderBottom: '1px solid rgba(100,116,139,0.12)',
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {col}
+                    {col.label}
                   </th>
                 ))}
               </tr>
@@ -672,6 +695,7 @@ export default function Risk() {
       </div>
 
       {/* ── Risk Limits Editor ───────────────────────────────────────────── */}
+      <p style={{ fontSize: 10, color: '#64748b', margin: '4px 0 -8px 0' }}>Configure your trading safety limits — the system auto-stops trading when these are breached</p>
       <RiskLimitsEditor isDark={isDark} />
     </div>
   );

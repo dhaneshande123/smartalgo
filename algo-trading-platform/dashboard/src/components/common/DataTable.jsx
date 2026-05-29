@@ -38,6 +38,7 @@ export default function DataTable({ columns, data = [], onRowClick, emptyMessage
               <th
                 key={col.key}
                 onClick={() => col.sortable !== false && handleSort(col.key)}
+                title={col.headerTitle}
                 className={`table-header ${col.sortable !== false ? 'cursor-pointer select-none hover:text-slate-200' : ''} ${col.align === 'right' ? 'text-right' : ''}`}
               >
                 <span className="inline-flex items-center gap-1">

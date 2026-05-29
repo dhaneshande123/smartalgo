@@ -65,7 +65,7 @@ function ActivityBadge({ activity }) {
   );
 }
 
-function SummaryCard({ label, value, subtext, color, arrow, theme }) {
+function SummaryCard({ label, value, subtext, description, color, arrow, theme }) {
   const isDark = theme === 'dark';
   const cardBg = isDark
     ? { background: 'rgba(19,23,32,0.6)', border: '1px solid rgba(100,116,139,0.12)' }
@@ -85,6 +85,11 @@ function SummaryCard({ label, value, subtext, color, arrow, theme }) {
         </span>
       </div>
       {subtext && <div className="text-[11px] text-slate-500">{subtext}</div>}
+      {description && (
+        <div style={{ fontSize: 10, color: isDark ? '#64748b' : '#94a3b8', marginTop: 2, textAlign: 'center', lineHeight: '1.3' }}>
+          {description}
+        </div>
+      )}
     </div>
   );
 }
@@ -386,6 +391,9 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
             >
               {summary.pcrLabel}
             </span>
+            <div style={{ fontSize: 10, color: isDark ? '#64748b' : '#94a3b8', marginTop: 2, textAlign: 'center', lineHeight: '1.3' }}>
+              Higher = more puts = bullish for market
+            </div>
           </div>
 
           {/* Net Call OI Change */}
@@ -393,6 +401,7 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
             label="Net Call OI Chg"
             value={fmt(summary.netCallOIChange)}
             subtext={summary.netCallOIChange > 0 ? 'Call Writing (Bearish)' : summary.netCallOIChange < 0 ? 'Call Unwinding (Bullish)' : '—'}
+            description="Rising = sellers expect price won't go above"
             color={summary.netCallOIChange > 0 ? '#ef4444' : summary.netCallOIChange < 0 ? '#10b981' : '#64748b'}
             arrow={summary.netCallOIChange > 0 ? 'up' : summary.netCallOIChange < 0 ? 'down' : null}
             theme={theme}
@@ -403,6 +412,7 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
             label="Net Put OI Chg"
             value={fmt(summary.netPutOIChange)}
             subtext={summary.netPutOIChange > 0 ? 'Put Writing (Bullish)' : summary.netPutOIChange < 0 ? 'Put Unwinding (Bearish)' : '—'}
+            description="Rising = sellers expect price won't fall below"
             color={summary.netPutOIChange > 0 ? '#10b981' : summary.netPutOIChange < 0 ? '#ef4444' : '#64748b'}
             arrow={summary.netPutOIChange > 0 ? 'up' : summary.netPutOIChange < 0 ? 'down' : null}
             theme={theme}
@@ -413,6 +423,7 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
             label="Max Pain"
             value={summary.maxPainStrike != null ? summary.maxPainStrike.toLocaleString('en-IN') : '—'}
             subtext="Highest combined OI"
+            description="Market often gravitates here by expiry"
             color="#f59e0b"
             theme={theme}
           />
@@ -422,6 +433,7 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
             label="Resistance"
             value={summary.resistanceStrike != null ? summary.resistanceStrike.toLocaleString('en-IN') : '—'}
             subtext="Max Call OI"
+            description="Sellers defend this — price struggles above"
             color="#ef4444"
             theme={theme}
           />
@@ -431,6 +443,7 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
             label="Support"
             value={summary.supportStrike != null ? summary.supportStrike.toLocaleString('en-IN') : '—'}
             subtext="Max Put OI"
+            description="Sellers defend this — price unlikely below"
             color="#10b981"
             theme={theme}
           />
@@ -444,13 +457,26 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
       <div className="rounded-xl overflow-hidden" style={cardStyle}>
         <div className={`px-4 py-3 border-b ${isDark ? 'border-slate-800/60' : 'border-slate-200'}`}>
           <SectionHeader theme={theme}>Market Maker Activity Analysis</SectionHeader>
-          <div className="flex flex-wrap gap-2 mt-1">
-            {Object.entries(ACTIVITY_COLORS).filter(([k]) => k !== 'No Change').map(([label, c]) => (
-              <span key={label} className="text-[10px] font-medium px-2 py-0.5 rounded-full"
-                style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
-                {label}
-              </span>
-            ))}
+          <div className="flex flex-wrap gap-3 mt-2">
+            {[
+              { label: 'Long Build-Up', desc: '(OI ↑ + Price ↑) Fresh buying — bullish' },
+              { label: 'Short Build-Up', desc: '(OI ↑ + Price ↓) Fresh selling — bearish' },
+              { label: 'Long Unwinding', desc: '(OI ↓ + Price ↓) Buyers exiting — fading' },
+              { label: 'Short Covering', desc: '(OI ↓ + Price ↑) Sellers closing — can push up' },
+            ].map(({ label, desc }) => {
+              const c = ACTIVITY_COLORS[label];
+              return (
+                <div key={label} className="flex items-start gap-1.5">
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap shrink-0"
+                    style={{ background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
+                    {label}
+                  </span>
+                  <span style={{ fontSize: 10, color: isDark ? '#64748b' : '#94a3b8', lineHeight: '1.4' }}>
+                    {desc}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -517,6 +543,9 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
 
       <div>
         <SectionHeader theme={theme}>Top Strikes Dashboard</SectionHeader>
+        <p style={{ fontSize: 10, color: isDark ? '#64748b' : '#94a3b8', marginTop: -8, marginBottom: 10, lineHeight: '1.3' }}>
+          Where market makers are building or exiting the most positions
+        </p>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
           {/* Left: Call Side */}
@@ -583,6 +612,9 @@ export default function OIAnalysis({ chain, spot, symbol, vix, theme }) {
             <SectionHeader theme={theme}>OI Change Distribution</SectionHeader>
             <p className={`text-[11px] -mt-2 ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
               Call vs Put OI change per strike ({'±'}15 strikes around ATM)
+            </p>
+            <p style={{ fontSize: 10, color: isDark ? '#64748b' : '#94a3b8', marginTop: 2, lineHeight: '1.3' }}>
+              Green bars = new call contracts, Red bars = new put contracts. Taller = more activity.
             </p>
           </div>
           <div className="flex items-center gap-3 text-[11px]">

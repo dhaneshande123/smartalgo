@@ -210,15 +210,17 @@ export default function Dashboard() {
       {/* P&L Summary (LIVE from WS) + Greeks (REST) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card title="P&L Summary — Live">
+          <div style={{ fontSize: 9, color: '#64748b', marginTop: -8, marginBottom: 8, fontWeight: 400 }}>Total profit or loss from all trades today</div>
           <div className="grid grid-cols-2 gap-3">
-            <MetricCard label="Realized" value={pnl.realized} prefix="Rs " icon={DollarSign} />
-            <MetricCard label="Unrealized" value={pnl.unrealized} prefix="Rs " icon={TrendingUp} />
-            <MetricCard label="Margin Used" value={pnl.marginUsed} prefix="Rs " icon={Activity} />
-            <MetricCard label="Net P&L" value={pnl.net} prefix="Rs " icon={Target} />
+            <span title="Locked-in profit/loss from closed trades"><MetricCard label="Realized" value={pnl.realized} prefix="Rs " icon={DollarSign} /></span>
+            <span title="Paper profit/loss on positions still open"><MetricCard label="Unrealized" value={pnl.unrealized} prefix="Rs " icon={TrendingUp} /></span>
+            <span title="Capital currently locked in open positions"><MetricCard label="Margin Used" value={pnl.marginUsed} prefix="Rs " icon={Activity} /></span>
+            <span title="Combined realized + unrealized profit or loss"><MetricCard label="Net P&L" value={pnl.net} prefix="Rs " icon={Target} /></span>
           </div>
         </Card>
 
         <Card title="Portfolio Greeks">
+          <div style={{ fontSize: 9, color: '#64748b', marginTop: -8, marginBottom: 8, fontWeight: 400 }}>Option sensitivity measures — how positions react to market changes</div>
           <GreeksGauge greeks={greeksData ? {
             delta: greeksData.net_delta ?? greeksData.delta ?? 0,
             gamma: greeksData.net_gamma ?? greeksData.gamma ?? 0,
@@ -230,11 +232,13 @@ export default function Dashboard() {
 
       {/* Equity Curve — built from live P&L stream */}
       <Card title="Equity Curve — Live">
+        <div style={{ fontSize: 9, color: '#64748b', marginTop: -8, marginBottom: 8, fontWeight: 400 }}>Your account value over time — shows how your trading is performing</div>
         <EquityCurve data={equityCurveData} height={280} />
       </Card>
 
       {/* Live deployed strategies — compact summary */}
       <Card title="Active Strategies">
+        <div style={{ fontSize: 9, color: '#64748b', marginTop: -8, marginBottom: 8, fontWeight: 400 }}>Strategies currently running and monitoring the market</div>
         <DeployedStrategiesPnL compact />
       </Card>
 
@@ -278,26 +282,28 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
           <Card title="Active Strategies">
+            <div style={{ fontSize: 9, color: '#64748b', marginTop: -8, marginBottom: 8, fontWeight: 400 }}>Strategies currently running and monitoring the market</div>
             <DataTable columns={strategyColumns} data={strategies} />
           </Card>
         </div>
 
         <Card title="Risk Summary">
+          <div style={{ fontSize: 9, color: '#64748b', marginTop: -8, marginBottom: 8, fontWeight: 400 }}>Key risk metrics for your portfolio</div>
           <div className="space-y-3">
             <div className="flex items-center justify-between py-2 border-b border-terminal-border">
-              <span className="text-sm text-slate-400">Drawdown</span>
+              <span className="text-sm text-slate-400" title="Peak-to-trough decline in portfolio value">Drawdown</span>
               <span className="font-mono text-loss text-sm">{risk.drawdown}%</span>
             </div>
             <div className="flex items-center justify-between py-2 border-b border-terminal-border">
-              <span className="text-sm text-slate-400">VaR (95%)</span>
+              <span className="text-sm text-slate-400" title="Value at Risk — maximum expected loss in a day with 95% confidence">VaR (95%)</span>
               <span className="font-mono text-yellow-400 text-sm">Rs {risk.var95?.toLocaleString('en-IN')}</span>
             </div>
             <div className="flex items-center justify-between py-2 border-b border-terminal-border">
-              <span className="text-sm text-slate-400">Margin Used</span>
+              <span className="text-sm text-slate-400" title="Percentage of your capital locked as margin for open positions">Margin Used</span>
               <span className="font-mono text-slate-300 text-sm">{risk.marginUsed}%</span>
             </div>
             <div className="flex items-center justify-between py-2">
-              <span className="text-sm text-slate-400">Max Loss Limit</span>
+              <span className="text-sm text-slate-400" title="Auto-stop trading if daily loss exceeds this amount">Max Loss Limit</span>
               <span className="font-mono text-loss text-sm">Rs {risk.maxLoss?.toLocaleString('en-IN')}</span>
             </div>
             <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden mt-2">

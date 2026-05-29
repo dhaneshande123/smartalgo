@@ -105,8 +105,8 @@ function PCRCard({ value, theme }) {
   return (
     <div className="rounded-xl p-4 flex flex-col items-center justify-center gap-1"
       style={theme === 'dark' ? { background: 'rgba(19,23,32,0.6)', border: '1px solid rgba(100,116,139,0.12)' } : { background: 'rgba(255,255,255,0.82)', border: '1px solid rgba(0,0,0,0.06)', boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 6px 24px rgba(0,0,0,0.04)' }}>
-      <div className="text-xs text-slate-500 uppercase tracking-widest">Put-Call Ratio</div>
-      <div className="text-3xl font-bold font-mono" style={{ color }}>{value?.toFixed(2)}</div>
+      <div className="text-xs text-slate-500 uppercase tracking-widest cursor-help" title="Put-Call Ratio — Ratio of put OI to call OI. Higher = bullish, Lower = bearish">Put-Call Ratio <span className="text-slate-600 text-[10px]">ⓘ</span></div>
+      <div className="text-3xl font-bold font-mono" style={{ color }} title="Put-Call Ratio — Ratio of put OI to call OI. Higher = bullish, Lower = bearish">{value?.toFixed(2)}</div>
       <div className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
         style={{ background: `${color}22`, color }}>
         {label}
@@ -121,7 +121,7 @@ function OIBar({ label, value, max, color, theme }) {
   return (
     <div>
       <div className="flex justify-between text-[11px] mb-1">
-        <span className="text-slate-400">{label}</span>
+        <span className="text-slate-400 cursor-help" title={label === 'Total Call OI' ? 'Total open call option contracts across all strikes' : label === 'Total Put OI' ? 'Total open put option contracts across all strikes' : ''}>{label} <span className="text-slate-600 text-[9px]">ⓘ</span></span>
         <span className="font-mono text-white">{(value / 1e7).toFixed(2)} Cr</span>
       </div>
       <div className={`h-2 rounded-full ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-200'}`}>
@@ -591,8 +591,9 @@ export default function MarketData() {
         {/* India VIX */}
         <div className="rounded-xl p-4 flex flex-col items-center justify-center gap-1"
           style={cardStyle}>
-          <div className="text-xs text-slate-500 uppercase tracking-widest">India VIX</div>
-          <div className={`text-3xl font-bold font-mono ${indiaVix > 20 ? 'text-red-400' : indiaVix > 15 ? 'text-yellow-400' : 'text-emerald-400'}`}>
+          <div className="text-xs text-slate-500 uppercase tracking-widest cursor-help" title="India VIX — Market fear gauge. Higher = more expected volatility = options become expensive">India VIX <span className="text-slate-600 text-[10px]">ⓘ</span></div>
+          <div className={`text-3xl font-bold font-mono ${indiaVix > 20 ? 'text-red-400' : indiaVix > 15 ? 'text-yellow-400' : 'text-emerald-400'}`}
+            title="India VIX — Market fear gauge. Higher = more expected volatility = options become expensive">
             {Number(indiaVix).toFixed(2)}
           </div>
           <div className="text-[11px] text-slate-500">Volatility Index</div>
@@ -608,8 +609,8 @@ export default function MarketData() {
             <p className="text-[11px] text-slate-500">Call OI vs Put OI in Lakhs &nbsp;|&nbsp; ATM highlighted in blue</p>
           </div>
           <div className="flex items-center gap-3 text-[11px]">
-            <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-emerald-500 inline-block" /> Call OI</span>
-            <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-red-500 inline-block" /> Put OI</span>
+            <span className="flex items-center gap-1 cursor-help" title="Total open call option contracts across all strikes"><span className="w-3 h-2 rounded-sm bg-emerald-500 inline-block" /> Call OI <span className="text-slate-600 text-[9px]">ⓘ</span></span>
+            <span className="flex items-center gap-1 cursor-help" title="Total open put option contracts across all strikes"><span className="w-3 h-2 rounded-sm bg-red-500 inline-block" /> Put OI <span className="text-slate-600 text-[9px]">ⓘ</span></span>
           </div>
         </div>
         <ResponsiveContainer width="100%" height={250}>
@@ -689,7 +690,7 @@ export default function MarketData() {
                   {Number(chainData.spot_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
                 {chainData?.atm_strike > 0 && (
-                  <span>ATM: <span className="font-mono text-blue-400 font-bold">{chainData.atm_strike}</span></span>
+                  <span className="cursor-help" title="At-The-Money — Strike closest to current spot price">ATM: <span className="font-mono text-blue-400 font-bold">{chainData.atm_strike}</span></span>
                 )}
               </div>
             )}
@@ -738,33 +739,37 @@ export default function MarketData() {
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-10">
               <tr>
-                <th colSpan="5" className={`py-2 text-center text-emerald-400 font-semibold border-b border-slate-800/60 ${theme === 'dark' ? 'bg-emerald-500/5 bg-[#0b0e14]' : 'bg-emerald-50'}`}
-                  style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(240,253,244,0.97)' }}>
-                  CALLS
+                <th colSpan="5" className={`py-2 text-center text-emerald-400 font-semibold border-b border-slate-800/60 cursor-help ${theme === 'dark' ? 'bg-emerald-500/5 bg-[#0b0e14]' : 'bg-emerald-50'}`}
+                  style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(240,253,244,0.97)' }}
+                  title="Call options — Right to BUY the underlying at strike price">
+                  CALLS <span className="text-emerald-500/50 text-[10px]">ⓘ</span>
                 </th>
-                <th className={`py-2 text-center text-slate-300 font-semibold border-b border-slate-800/60 w-20`}
-                  style={{ background: theme === 'dark' ? 'rgba(20,24,36,0.97)' : 'rgba(241,245,249,0.97)' }}>
-                  STRIKE
+                <th className={`py-2 text-center text-slate-300 font-semibold border-b border-slate-800/60 w-20 cursor-help`}
+                  style={{ background: theme === 'dark' ? 'rgba(20,24,36,0.97)' : 'rgba(241,245,249,0.97)' }}
+                  title="Exercise price — The price at which the option can be exercised">
+                  STRIKE <span className="text-slate-500/50 text-[10px]">ⓘ</span>
                 </th>
-                <th colSpan="5" className={`py-2 text-center text-red-400 font-semibold border-b border-slate-800/60`}
-                  style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(254,242,242,0.97)' }}>
-                  PUTS
+                <th colSpan="5" className={`py-2 text-center text-red-400 font-semibold border-b border-slate-800/60 cursor-help`}
+                  style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(254,242,242,0.97)' }}
+                  title="Put options — Right to SELL the underlying at strike price">
+                  PUTS <span className="text-red-500/50 text-[10px]">ⓘ</span>
                 </th>
               </tr>
               <tr className={`text-slate-500 border-b border-slate-800/40`}
                 style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(248,250,252,0.97)' }}>
-                <th className="px-2 py-2 text-right font-medium">OI</th>
-                <th className="px-2 py-2 text-right font-medium" title="OI Change from previous close">OI Chg</th>
-                <th className="px-2 py-2 text-right font-medium">Vol</th>
-                <th className="px-2 py-2 text-right font-medium">Chg%</th>
-                <th className="px-2 py-2 text-right font-medium">LTP</th>
-                <th className="px-2 py-2 text-center font-medium"
-                  style={{ background: theme === 'dark' ? 'rgba(20,24,36,0.97)' : 'rgba(241,245,249,0.97)' }}>Strike</th>
-                <th className="px-2 py-2 text-right font-medium">LTP</th>
-                <th className="px-2 py-2 text-right font-medium">Chg%</th>
-                <th className="px-2 py-2 text-right font-medium">Vol</th>
-                <th className="px-2 py-2 text-right font-medium" title="OI Change from previous close">OI Chg</th>
-                <th className="px-2 py-2 text-right font-medium">OI</th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Open Interest — Total contracts currently active at this strike">OI <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="OI Change — New contracts added (+) or closed (-) since yesterday's close">OI Chg <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Volume — Total contracts traded today at this strike">Vol <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Price Change % — Option premium change from yesterday's close">Chg% <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Last Traded Price — Most recent trade price for this option">LTP <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-center font-medium cursor-help"
+                  style={{ background: theme === 'dark' ? 'rgba(20,24,36,0.97)' : 'rgba(241,245,249,0.97)' }}
+                  title="Exercise price of the option contract">Strike <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Last Traded Price — Most recent trade price for this option">LTP <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Price Change % — Option premium change from yesterday's close">Chg% <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Volume — Total contracts traded today at this strike">Vol <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="OI Change — New contracts added (+) or closed (-) since yesterday's close">OI Chg <span className="text-slate-600 text-[9px]">ⓘ</span></th>
+                <th className="px-2 py-2 text-right font-medium cursor-help" title="Open Interest — Total contracts currently active at this strike">OI <span className="text-slate-600 text-[9px]">ⓘ</span></th>
               </tr>
             </thead>
             <tbody>
@@ -820,7 +825,7 @@ export default function MarketData() {
                       ${row.isATM ? 'text-blue-400' : 'text-white'}`}>
                       {row.strike}
                       {row.isATM && (
-                        <span className="ml-1 text-[9px] font-bold text-blue-400 align-middle">ATM</span>
+                        <span className="ml-1 text-[9px] font-bold text-blue-400 align-middle cursor-help" title="At-The-Money — Strike closest to current spot price">ATM</span>
                       )}
                     </td>
                     {/* Put LTP */}

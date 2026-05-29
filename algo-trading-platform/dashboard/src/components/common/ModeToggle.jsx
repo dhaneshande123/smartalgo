@@ -74,8 +74,8 @@ export default function ModeToggle() {
         disabled={setMode.isPending}
         title={
           isLive
-            ? 'Click to switch to PAPER trading (safe simulation)'
-            : 'Click to switch to LIVE trading (real orders)'
+            ? 'LIVE mode — Real orders are placed via Fyers. Click to switch to PAPER.'
+            : 'Simulated trading mode — No real orders are placed. Uses virtual money. Click to switch to LIVE.'
         }
         className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide transition-all border ${
           isLive
