@@ -206,11 +206,24 @@ class DashboardStrategyExecutor:
                     if not strike:
                         continue
                     if strike not in by_strike:
-                        by_strike[strike] = {"strike": strike}
+                        by_strike[strike] = {"strike": strike, "isATM": False}
                     side = "call" if opt.get("option_type") == "CE" else "put"
                     by_strike[strike][f"{side}_ltp"] = float(opt.get("ltp", 0))
                     by_strike[strike][f"{side}_iv"] = float(opt.get("iv", 0) or 0)
                     by_strike[strike][f"{side}_oi"] = int(opt.get("oi", 0))
+                    by_strike[strike][f"{side}_volume"] = int(opt.get("volume", 0))
+                    by_strike[strike][f"{side}_oi_change"] = int(opt.get("oi_change", 0))
+                    by_strike[strike][f"{side}_oi_change_pct"] = float(opt.get("oi_change_pct", 0))
+                    by_strike[strike][f"{side}_change"] = float(opt.get("change", 0))
+                    by_strike[strike][f"{side}_change_pct"] = float(opt.get("change_pct", 0))
+                    by_strike[strike][f"{side}_bid"] = float(opt.get("bid", 0))
+                    by_strike[strike][f"{side}_ask"] = float(opt.get("ask", 0))
+                    by_strike[strike][f"{side}_prev_oi"] = int(opt.get("prev_oi", 0))
+
+                # Mark ATM strike
+                atm = chain.get("atm_strike", 0)
+                for row in by_strike.values():
+                    row["isATM"] = abs(row["strike"] - atm) < 25
 
                 chain["chain"] = sorted(by_strike.values(), key=lambda r: r["strike"])
                 _api_mod._fyers_chain_cache[sym] = chain

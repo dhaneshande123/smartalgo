@@ -700,26 +700,28 @@ export default function MarketData() {
           <table className="w-full text-xs">
             <thead>
               <tr>
-                <th colSpan="4" className="py-2 text-center text-emerald-400 font-semibold bg-emerald-500/5 border-b border-slate-800/60">
+                <th colSpan="5" className="py-2 text-center text-emerald-400 font-semibold bg-emerald-500/5 border-b border-slate-800/60">
                   CALLS
                 </th>
                 <th className={`py-2 text-center text-slate-300 font-semibold ${theme === 'dark' ? 'bg-slate-800/40' : 'bg-slate-100'} border-b border-slate-800/60 w-20`}>
                   STRIKE
                 </th>
-                <th colSpan="4" className="py-2 text-center text-red-400 font-semibold bg-red-500/5 border-b border-slate-800/60">
+                <th colSpan="5" className="py-2 text-center text-red-400 font-semibold bg-red-500/5 border-b border-slate-800/60">
                   PUTS
                 </th>
               </tr>
               <tr className={`text-slate-500 ${theme === 'dark' ? 'bg-slate-900/30' : 'bg-slate-50'} border-b border-slate-800/40`}>
-                <th className="px-3 py-2 text-right font-medium">OI</th>
-                <th className="px-3 py-2 text-right font-medium">Vol</th>
-                <th className="px-3 py-2 text-right font-medium">Chg%</th>
-                <th className="px-3 py-2 text-right font-medium">LTP</th>
-                <th className={`px-3 py-2 text-center font-medium ${theme === 'dark' ? 'bg-slate-800/40' : 'bg-slate-100'}`}>Strike</th>
-                <th className="px-3 py-2 text-right font-medium">LTP</th>
-                <th className="px-3 py-2 text-right font-medium">Chg%</th>
-                <th className="px-3 py-2 text-right font-medium">Vol</th>
-                <th className="px-3 py-2 text-right font-medium">OI</th>
+                <th className="px-2 py-2 text-right font-medium">OI</th>
+                <th className="px-2 py-2 text-right font-medium" title="OI Change from previous close">OI Chg</th>
+                <th className="px-2 py-2 text-right font-medium">Vol</th>
+                <th className="px-2 py-2 text-right font-medium">Chg%</th>
+                <th className="px-2 py-2 text-right font-medium">LTP</th>
+                <th className={`px-2 py-2 text-center font-medium ${theme === 'dark' ? 'bg-slate-800/40' : 'bg-slate-100'}`}>Strike</th>
+                <th className="px-2 py-2 text-right font-medium">LTP</th>
+                <th className="px-2 py-2 text-right font-medium">Chg%</th>
+                <th className="px-2 py-2 text-right font-medium">Vol</th>
+                <th className="px-2 py-2 text-right font-medium" title="OI Change from previous close">OI Chg</th>
+                <th className="px-2 py-2 text-right font-medium">OI</th>
               </tr>
             </thead>
             <tbody>
@@ -737,26 +739,35 @@ export default function MarketData() {
                       ${row.isATM ? 'border-l-2 border-l-blue-500' : ''}`}
                   >
                     {/* Call OI */}
-                    <td className="px-3 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors"
+                    <td className="px-2 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors"
                       style={{ background: callTint }}
                       onClick={() => setTradeModal({ row, optionType: 'CE' })}>
                       {(Number(row.call_oi) || 0).toLocaleString()}
                     </td>
+                    {/* Call OI Change */}
+                    <td className={`px-2 py-2 text-right font-mono tabular-nums text-[11px] hover:bg-emerald-500/10 cursor-pointer transition-colors
+                      ${Number(row.call_oi_change) > 0 ? 'text-emerald-400' : Number(row.call_oi_change) < 0 ? 'text-red-400' : 'text-slate-600'}`}
+                      style={{ background: callTint }}
+                      onClick={() => setTradeModal({ row, optionType: 'CE' })}
+                      title={`OI Change: ${(Number(row.call_oi_change) || 0).toLocaleString()} (${Number(row.call_oi_change_pct || 0).toFixed(1)}%)`}>
+                      {Number(row.call_oi_change) > 0 ? '▲' : Number(row.call_oi_change) < 0 ? '▼' : '–'}
+                      {' '}{Math.abs(Number(row.call_oi_change) || 0).toLocaleString()}
+                    </td>
                     {/* Call Vol */}
-                    <td className="px-3 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors"
+                    <td className="px-2 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors"
                       style={{ background: callTint }}
                       onClick={() => setTradeModal({ row, optionType: 'CE' })}>
                       {(Number(row.call_volume) || 0).toLocaleString()}
                     </td>
                     {/* Call Chg% */}
-                    <td className={`px-3 py-2 text-right font-mono tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors
+                    <td className={`px-2 py-2 text-right font-mono tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors
                       ${Number(row.call_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}
                       style={{ background: callTint }}
                       onClick={() => setTradeModal({ row, optionType: 'CE' })}>
                       {Number(row.call_change_pct || 0).toFixed(1)}%
                     </td>
                     {/* Call LTP */}
-                    <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-400 tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors"
+                    <td className="px-2 py-2 text-right font-mono font-semibold text-emerald-400 tabular-nums hover:bg-emerald-500/10 cursor-pointer transition-colors"
                       style={{ background: callTint }}
                       onClick={() => setTradeModal({ row, optionType: 'CE' })}>
                       {Number(row.call_ltp || 0).toFixed(2)}
@@ -770,26 +781,35 @@ export default function MarketData() {
                       )}
                     </td>
                     {/* Put LTP */}
-                    <td className="px-3 py-2 text-right font-mono font-semibold text-red-400 tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors"
+                    <td className="px-2 py-2 text-right font-mono font-semibold text-red-400 tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors"
                       style={{ background: putTint }}
                       onClick={() => setTradeModal({ row, optionType: 'PE' })}>
                       {Number(row.put_ltp || 0).toFixed(2)}
                     </td>
                     {/* Put Chg% */}
-                    <td className={`px-3 py-2 text-right font-mono tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors
+                    <td className={`px-2 py-2 text-right font-mono tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors
                       ${Number(row.put_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}
                       style={{ background: putTint }}
                       onClick={() => setTradeModal({ row, optionType: 'PE' })}>
                       {Number(row.put_change_pct || 0).toFixed(1)}%
                     </td>
                     {/* Put Vol */}
-                    <td className="px-3 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors"
+                    <td className="px-2 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors"
                       style={{ background: putTint }}
                       onClick={() => setTradeModal({ row, optionType: 'PE' })}>
                       {(Number(row.put_volume) || 0).toLocaleString()}
                     </td>
+                    {/* Put OI Change */}
+                    <td className={`px-2 py-2 text-right font-mono tabular-nums text-[11px] hover:bg-red-500/10 cursor-pointer transition-colors
+                      ${Number(row.put_oi_change) > 0 ? 'text-emerald-400' : Number(row.put_oi_change) < 0 ? 'text-red-400' : 'text-slate-600'}`}
+                      style={{ background: putTint }}
+                      onClick={() => setTradeModal({ row, optionType: 'PE' })}
+                      title={`OI Change: ${(Number(row.put_oi_change) || 0).toLocaleString()} (${Number(row.put_oi_change_pct || 0).toFixed(1)}%)`}>
+                      {Number(row.put_oi_change) > 0 ? '▲' : Number(row.put_oi_change) < 0 ? '▼' : '–'}
+                      {' '}{Math.abs(Number(row.put_oi_change) || 0).toLocaleString()}
+                    </td>
                     {/* Put OI */}
-                    <td className="px-3 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors"
+                    <td className="px-2 py-2 text-right font-mono text-slate-400 tabular-nums hover:bg-red-500/10 cursor-pointer transition-colors"
                       style={{ background: putTint }}
                       onClick={() => setTradeModal({ row, optionType: 'PE' })}>
                       {(Number(row.put_oi) || 0).toLocaleString()}
