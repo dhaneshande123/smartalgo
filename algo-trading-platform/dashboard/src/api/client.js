@@ -74,10 +74,20 @@ export const evaluateConditions = (payload) =>
 // Risk
 export const getRiskMetrics = () => api.get('/risk/metrics');
 export const getRiskLimits = () => api.get('/risk/limits');
+export const updateRiskLimits = (payload) => api.post('/risk/limits', payload);
 export const getCircuitBreakers = () => api.get('/risk/circuit-breakers');
-export const activateKillSwitch = () => api.post('/risk/kill-switch');
-export const getStressTests = () => api.get('/risk/stress-tests');
-export const runStressTest = (params) => api.post('/risk/stress-tests', params);
+export const activateKillSwitch = (reason = 'manual') =>
+  api.post('/risk/kill-switch', { reason });
+export const deactivateKillSwitch = (reason = 'manual reset') =>
+  api.delete('/risk/kill-switch', { data: { reason } });
+export const getStressTests = () => api.get('/risk/stress-test');
+export const runStressTest = (params) => api.post('/risk/stress-test', params);
+export const getRiskDrawdown = () => api.get('/risk/drawdown');
+export const getRiskGreeksAggregation = () => api.get('/risk/greeks-aggregation');
+export const getRiskMarginCalc = () => api.get('/risk/margin-calculator');
+export const getRiskBreaches = () => api.get('/risk/breaches');
+export const getRiskAuditLog = (limit = 100) =>
+  api.get('/risk/audit-log', { params: { limit } });
 
 // Orders
 export const getOrders = (status = '') =>

@@ -25,6 +25,28 @@ from core.risk_engine.margin_calculator import MarginCalculator
 from core.risk_engine.position_tracker import PositionState, PositionTracker
 from core.risk_engine.risk_manager import RiskCheckResult, RiskLimits, RiskManager
 
+# Live calculation module (pure functions, used by the API and executor)
+from core.risk_engine.calcs import (
+    DEFAULT_RISK_LIMITS,
+    DEFAULT_STRESS_SCENARIOS,
+    LimitBreach,
+    bs_greeks,
+    bs_price,
+    implied_volatility,
+    position_greeks,
+    aggregate_portfolio_greeks,
+    parametric_var,
+    expected_shortfall,
+    stress_test_portfolio,
+    calculate_margin,
+    calculate_drawdown,
+    check_risk_limits,
+    should_auto_kill,
+    position_concentration,
+    days_to_expiry,
+    time_to_expiry_years,
+)
+
 __all__ = [
     # Core risk engine
     "MarginCalculator",
@@ -41,4 +63,23 @@ __all__ = [
     "CircuitBreakerEvent",
     "CircuitBreakerState",
     "GreeksAggregator",
+    # Live calculation functions (calcs.py)
+    "DEFAULT_RISK_LIMITS",
+    "DEFAULT_STRESS_SCENARIOS",
+    "LimitBreach",
+    "bs_greeks",
+    "bs_price",
+    "implied_volatility",
+    "position_greeks",
+    "aggregate_portfolio_greeks",
+    "parametric_var",
+    "expected_shortfall",
+    "stress_test_portfolio",
+    "calculate_margin",
+    "calculate_drawdown",
+    "check_risk_limits",
+    "should_auto_kill",
+    "position_concentration",
+    "days_to_expiry",
+    "time_to_expiry_years",
 ]

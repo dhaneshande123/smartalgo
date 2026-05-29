@@ -58,6 +58,10 @@ SQUARE_OFF_TIME = dtime(15, 15)  # NSE auto square-off buffer
 MARKET_OPEN = dtime(9, 15)
 MARKET_CLOSE = dtime(15, 30)
 
+# Risk enforcement cadence
+EQUITY_SNAPSHOT_INTERVAL = 60.0  # seconds between equity snapshots (1 per minute)
+RISK_CHECK_EVERY_N_TICKS = 1     # check risk every tick (5s)
+
 
 # ---------------------------------------------------------------------------
 # Executor
@@ -89,6 +93,10 @@ class DashboardStrategyExecutor:
         self._running = False
         self._ticks_processed = 0
         self._last_tick_at: datetime | None = None
+        # Risk enforcement state
+        self._last_equity_snapshot_at: datetime | None = None
+        self._last_breach_alert_at: dict[str, datetime] = {}  # debounce per-limit
+        self._auto_kill_armed = True   # set False to disable auto-kill (manual mode)
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -146,6 +154,18 @@ class DashboardStrategyExecutor:
                 await self._process_strategy(sid, strat, now_t)
             except Exception as e:
                 logger.warning(f"Strategy {sid} processing failed: {e}")
+
+        # 3. Risk enforcement (every tick) — check limits, fire alerts, auto-kill
+        try:
+            await self._enforce_risk_limits()
+        except Exception as e:
+            logger.warning(f"Risk enforcement tick failed: {e}")
+
+        # 4. Equity snapshot (every ~60s) — drives drawdown tracking
+        try:
+            await self._maybe_snapshot_equity()
+        except Exception as e:
+            logger.debug(f"Equity snapshot skipped: {e}")
 
     async def _refresh_option_chains_if_needed(self) -> None:
         """Pull fresh option chains for underlyings with running strategies.
@@ -585,3 +605,250 @@ class DashboardStrategyExecutor:
             store.save_strategy(sid, strat)
         except Exception:
             pass
+
+    # ── Risk Enforcement ────────────────────────────────────────────────
+
+    async def _enforce_risk_limits(self) -> None:
+        """Each tick: aggregate portfolio metrics, check against limits, fire
+        WebSocket alerts at 80% (WARN), auto-kill at 100% BREACH for daily-loss
+        and drawdown limits (conservative mode).
+        """
+        try:
+            from core import risk_engine as re
+            from core import api as api_mod
+            from core.state_store import get_store
+            store = get_store()
+        except ImportError:
+            return
+
+        # Already killed → nothing to enforce
+        if store.is_kill_switch_active():
+            return
+
+        # Gather inputs
+        try:
+            limits = {**re.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+            chain_cache = getattr(api_mod, "_fyers_chain_cache", {}) or {}
+            lot_sizes = {}
+            try:
+                from core import symbol_master
+                for sym in ("NIFTY", "BANKNIFTY", "FINNIFTY"):
+                    lot_sizes[sym] = symbol_master.get_lot_size(sym) or 1
+            except Exception:
+                pass
+
+            agg = re.aggregate_portfolio_greeks(
+                self._deployed, chain_cache, lot_sizes=lot_sizes,
+            )
+            pf = agg["portfolio"]
+
+            # Daily P&L
+            today_iso = datetime.now(IST).date().isoformat()
+            daily_pnl = 0.0
+            for strat in self._deployed.values():
+                entered_at = strat.get("entered_at", "")
+                if entered_at and not entered_at.startswith(today_iso):
+                    continue
+                daily_pnl += float(strat.get("pnl", 0) or 0)
+            daily_loss = abs(min(0.0, daily_pnl))
+
+            # Drawdown from snapshots
+            eq_curve = [r["equity"] for r in store.get_equity_curve(limit=500)]
+            dd_pct = 0.0
+            if eq_curve:
+                dd_pct = re.calculate_drawdown(eq_curve)["drawdown_pct"]
+
+            # Build metrics dict & check
+            metrics = {
+                "daily_loss_used": daily_loss,
+                "current_drawdown_pct": dd_pct,
+                "net_delta": pf["delta"],
+                "net_gamma": pf["gamma"],
+                "net_vega": pf["vega"],
+                "net_theta": pf["theta"],
+                "open_strategies_count": agg["strategies_count"],
+            }
+            breaches = re.check_risk_limits(metrics, limits)
+        except Exception as e:
+            logger.warning(f"Risk metric gathering failed: {e}")
+            return
+
+        if not breaches:
+            return
+
+        # Fire alerts (debounced 60s per limit)
+        now = datetime.now(IST)
+        for b in breaches:
+            last = self._last_breach_alert_at.get(b.limit_name)
+            if last and (now - last).total_seconds() < 60:
+                continue
+            self._last_breach_alert_at[b.limit_name] = now
+
+            # Log to audit
+            try:
+                store.log_risk_event(
+                    event_type=("BREACH" if b.severity == "BREACH" else "WARN"),
+                    severity=b.severity,
+                    limit_name=b.limit_name,
+                    current_value=b.current_value,
+                    limit_value=b.limit_value,
+                    utilization_pct=b.utilization_pct,
+                    message=b.message,
+                )
+            except Exception:
+                pass
+
+            # Broadcast WebSocket alert
+            await self._broadcast_risk_alert({
+                "type": "risk_breach",
+                "severity": b.severity,
+                "limit_name": b.limit_name,
+                "current_value": b.current_value,
+                "limit_value": b.limit_value,
+                "utilization_pct": b.utilization_pct,
+                "message": b.message,
+                "timestamp": now.isoformat(),
+            })
+
+            level = "warning" if b.severity == "WARN" else "error"
+            logger.log(
+                logging.WARNING if level == "warning" else logging.ERROR,
+                f"RISK {b.severity}: {b.message}",
+            )
+
+        # Auto-kill check (conservative mode: kill only on daily_loss / drawdown breach)
+        if self._auto_kill_armed and re.should_auto_kill(breaches, limits):
+            await self._trigger_auto_kill(breaches)
+
+    async def _trigger_auto_kill(self, breaches: list) -> None:
+        """Auto-engage kill switch + square off all open strategies."""
+        try:
+            from core.state_store import get_store
+            store = get_store()
+            if store.is_kill_switch_active():
+                return  # already killed
+            offending = [b.limit_name for b in breaches if b.severity == "BREACH"]
+            reason = f"auto_kill: {', '.join(offending)}"
+            store.set_kill_switch(True, reason=reason, triggered_by="auto")
+            store.log_risk_event(
+                event_type="AUTO_KILL", severity="CRITICAL",
+                limit_name=",".join(offending), message=reason,
+                metadata={"breaches": offending},
+            )
+
+            # Square off every running/entered strategy
+            squared = []
+            for sid, strat in list(self._deployed.items()):
+                status = str(strat.get("status", "")).upper()
+                if status in ("RUNNING", "ENTERED"):
+                    try:
+                        await self._place_exit_orders(sid, strat, reason="auto_kill_switch")
+                        squared.append(sid)
+                    except Exception as e:
+                        logger.warning(f"Auto-kill: stop {sid} failed: {e}")
+
+            await self._broadcast_risk_alert({
+                "type": "kill_switch",
+                "active": True,
+                "auto": True,
+                "reason": reason,
+                "squared_off_count": len(squared),
+                "timestamp": datetime.now(IST).isoformat(),
+            })
+            logger.critical(f"AUTO-KILL TRIGGERED: {reason}. Stopped {len(squared)} strategies.")
+        except Exception as e:
+            logger.error(f"Auto-kill failed: {e}", exc_info=True)
+
+    async def _maybe_snapshot_equity(self) -> None:
+        """Persist an equity snapshot once every EQUITY_SNAPSHOT_INTERVAL seconds."""
+        now = datetime.now(IST)
+        if self._last_equity_snapshot_at:
+            elapsed = (now - self._last_equity_snapshot_at).total_seconds()
+            if elapsed < EQUITY_SNAPSHOT_INTERVAL:
+                return
+        try:
+            from core.state_store import get_store
+            from core import api as api_mod, risk_engine as re
+            store = get_store()
+
+            # Starting capital (paper session or default)
+            starting_capital = 1_000_000.0
+            try:
+                pm = getattr(api_mod, "_paper_manager", None) or api_mod.__dict__.get("_paper_mgr")
+                if pm and getattr(pm, "_active_session", None):
+                    starting_capital = float(pm._active_session.get("starting_capital", 1_000_000.0))
+            except Exception:
+                pass
+
+            # Sum P&L of all entered strategies (today only)
+            today_iso = now.date().isoformat()
+            unrealized = 0.0
+            realized = 0.0
+            for strat in self._deployed.values():
+                entered_at = strat.get("entered_at", "")
+                if entered_at and not entered_at.startswith(today_iso):
+                    continue
+                status = str(strat.get("status", "")).upper()
+                if status in ("EXITED", "STOPPED"):
+                    realized += float(strat.get("realized_pnl", strat.get("pnl", 0)) or 0)
+                else:
+                    unrealized += float(strat.get("pnl", 0) or 0)
+            daily_pnl = unrealized + realized
+            equity = starting_capital + daily_pnl
+
+            # Margin used
+            chain_cache = getattr(api_mod, "_fyers_chain_cache", {}) or {}
+            lot_sizes = {}
+            try:
+                from core import symbol_master
+                for sym in ("NIFTY", "BANKNIFTY", "FINNIFTY"):
+                    lot_sizes[sym] = symbol_master.get_lot_size(sym) or 1
+            except Exception:
+                pass
+            margin = re.calculate_margin(
+                self._deployed, chain_cache, lot_sizes=lot_sizes,
+                available_capital=starting_capital,
+            )
+
+            open_count = sum(
+                1 for s in self._deployed.values()
+                if str(s.get("status", "")).upper() in ("RUNNING", "ENTERED")
+            )
+
+            store.save_equity_snapshot(
+                equity=equity,
+                daily_pnl=daily_pnl,
+                cash=starting_capital - margin.get("total_margin_required", 0),
+                margin_used=margin.get("total_margin_required", 0),
+                open_strategies=open_count,
+            )
+            self._last_equity_snapshot_at = now
+        except Exception as e:
+            logger.debug(f"Equity snapshot failed: {e}")
+
+    async def _broadcast_risk_alert(self, payload: dict) -> None:
+        """Broadcast a risk alert via WebSocket if available."""
+        try:
+            from core import api as api_mod
+            ws = getattr(api_mod, "_ws_manager", None)
+            if ws and hasattr(ws, "broadcast"):
+                await ws.broadcast(payload)
+        except Exception as e:
+            logger.debug(f"Risk alert broadcast failed: {e}")
+
+    # ── Public helpers (used by api.py deploy endpoints) ────────────────
+
+    def is_blocked_for_new_deploys(self) -> tuple[bool, str]:
+        """Return (blocked, reason) — used by deploy endpoints to refuse new
+        strategies when the kill switch is active.
+        """
+        try:
+            from core.state_store import get_store
+            store = get_store()
+            if store.is_kill_switch_active():
+                meta = store.get_kill_switch_meta() or {}
+                reason = meta.get("reason", "kill switch active")
+                return True, f"Kill switch active: {reason}"
+        except Exception:
+            pass
+        return False, ""

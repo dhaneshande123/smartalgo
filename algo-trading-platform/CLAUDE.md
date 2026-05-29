@@ -81,6 +81,7 @@ Auto-fetched when strategies deploy (`_auto_fetch_chain_for_strategies` backgrou
 | **Condition Evaluator** | `core/condition_evaluator.py` | Evaluates entry conditions against live indicator values |
 | **Dashboard Executor** | `core/strategy_engine/dashboard_executor.py` | Background task that monitors and executes deployed strategies |
 | **Charges Calculator** | `core/charges.py` | Indian F&O charges: brokerage, STT, exchange fees, GST, SEBI, stamp duty, slippage |
+| **Risk Engine** | `core/risk_engine/calcs.py` | Black-Scholes Greeks, parametric VaR, Taylor stress test, NSE margin approximation, limit checker, drawdown |
 | **State Store** | `core/state_store.py` | SQLite persistence for strategies, trades, P&L snapshots, settings (WAL mode) |
 | **Symbol Master** | `core/symbol_master.py` | Dynamic lot sizes from Fyers symbol master |
 | **Paper Broker** | `core/paper_trading/paper_broker.py` | Simulated broker with slippage, commission, order matching |
@@ -112,6 +113,20 @@ Auto-fetched when strategies deploy (`_auto_fetch_chain_for_strategies` backgrou
 - `GET /api/strategy-signals` — Live indicator values + strategy signals
 - `GET /api/auto-deploy/recommendations` — AI strategy recommendations
 - `GET /api/indicators/{symbol}` — Raw indicator values
+
+### Risk Engine (real, no mocks)
+- `GET /api/risk/metrics` — Live VaR, drawdown, margin, Greeks, kill-switch status
+- `GET /api/risk/stress-test` — Taylor-expansion stress test across 10 scenarios
+- `GET /api/risk/limits` — Configured risk limits (defaults + SQLite overrides)
+- `POST /api/risk/limits` — Update + persist risk limits
+- `GET /api/risk/drawdown` — Drawdown from persisted equity snapshots
+- `GET /api/risk/circuit-breakers` — Live breaker states (daily_loss, drawdown, Greeks, margin, open_strategies)
+- `POST /api/risk/kill-switch` — Engage kill switch + square off all open strategies
+- `DELETE /api/risk/kill-switch` — Reset kill switch
+- `GET /api/risk/greeks-aggregation` — Real Black-Scholes Greeks per strategy + portfolio
+- `GET /api/risk/margin-calculator` — NSE F&O margin approximation (SPAN + Exposure)
+- `GET /api/risk/breaches` — Live limit breaches (WARN at 80%, BREACH at 100%)
+- `GET /api/risk/audit-log` — Full audit trail of risk events
 
 ### Analytics
 - `GET /api/trade-analytics` — Net/gross P&L, Sharpe, win rate, drawdown, equity curve
@@ -189,9 +204,39 @@ Frontend expects unsigned `quantity` + separate `side` field. Normalization in A
 ## Database
 
 - **SQLite** (`data/platform_state.db`) — WAL mode, thread-safe
-  - Tables: `deployed_strategies`, `pnl_snapshots`, `trade_log`, `settings`
+  - Tables: `deployed_strategies`, `pnl_snapshots`, `trade_log`, `settings`, `equity_snapshots`, `risk_events`
   - Module: `core/state_store.py`, singleton via `get_store()`
   - Loaded at startup, saved on deploy/stop/shutdown
+  - Risk limits and kill-switch state stored in `settings` table (keys: `risk_limits`, `kill_switch_active`, `kill_switch_meta`)
+
+## Risk Engine Architecture
+
+### Conservative Auto-Kill Policy
+- WARN alert at 80% of any limit (debounced 60s per limit)
+- Auto-engage kill switch at 100% of `max_daily_loss` OR `max_drawdown_pct` only
+- Other limits (Greeks, position size, concentration) only WARN, never auto-kill
+
+### Risk Flow
+```
+DashboardExecutor tick (every 5s)
+  → aggregate_portfolio_greeks (Black-Scholes per leg)
+  → calculate_drawdown (from equity_snapshots)
+  → check_risk_limits → list of LimitBreach
+  → fire WebSocket alerts (debounced 60s)
+  → if should_auto_kill → engage kill switch + square off all
+  → save_equity_snapshot every 60s
+```
+
+### Kill Switch Persistence
+- Stored in `settings.kill_switch_active` (survives restart)
+- Blocks `POST /api/strategies/deploy` and `POST /api/auto-deploy/execute`
+- Reset via `DELETE /api/risk/kill-switch`
+
+### Greeks Computation
+- Fyers does NOT provide Greeks in option chain — computed locally via Black-Scholes
+- IV per strike back-solved via Newton-Raphson from option market price
+- Falls back to India VIX (chain-wide) if per-strike IV unavailable
+- All Greeks signed by position side: BUY = +qty, SELL = -qty
 
 ## Git Workflow
 

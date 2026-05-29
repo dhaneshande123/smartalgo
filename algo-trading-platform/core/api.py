@@ -2937,6 +2937,22 @@ async def set_trading_mode(body: dict = Body(...)):
 async def deploy_strategy(body: dict = Body(...)):
     import uuid as _uuid
 
+    # Kill switch guard — reject all new deploys when active
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        if store.is_kill_switch_active():
+            meta = store.get_kill_switch_meta() or {}
+            return {
+                "ok": False,
+                "error": "kill_switch_active",
+                "message": f"Kill switch active: {meta.get('reason', 'risk limits breached')}. Reset via DELETE /api/risk/kill-switch.",
+                "kill_switch_meta": meta,
+                "timestamp": datetime.now(IST).isoformat(),
+            }
+    except Exception as _exc:
+        logger.debug(f"Kill switch check failed (allowing deploy): {_exc}")
+
     sid = f"strategy-{_uuid.uuid4().hex[:8]}"
     underlying = body.get("underlying", "NIFTY")
     legs = body.get("legs", [])
@@ -3577,45 +3593,158 @@ async def resume_strategy(strategy_id: str):
 # ===================================================================
 
 
+def _get_risk_inputs():
+    """Helper — gather real inputs (strategies, chain cache, lot sizes, capital)
+    for the Risk Engine. Returns a dict bundle.
+    """
+    from core import symbol_master
+    from core import risk_engine
+
+    # Lot sizes for known underlyings
+    lot_sizes = {}
+    for sym in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"):
+        try:
+            lot_sizes[sym] = symbol_master.get_lot_size(sym) or 1
+        except Exception:
+            pass
+
+    # Available capital — from PaperBroker for paper, from Fyers funds for live
+    capital = 1_000_000.0  # default
+    try:
+        if _TRADING_MODE == "paper":
+            from core.paper_trading.paper_trading_manager import PaperTradingManager
+            # Try to read from the active session if any
+            pm = globals().get("_paper_manager") or None
+            if pm and getattr(pm, "_active_session", None):
+                capital = float(pm._active_session.get("starting_capital", 1_000_000.0))
+    except Exception:
+        pass
+
+    return {
+        "strategies": _deployed_strategies,
+        "chain_cache": _fyers_chain_cache,
+        "lot_sizes": lot_sizes,
+        "capital": capital,
+        "risk_engine": risk_engine,
+    }
+
+
+def _compute_daily_pnl() -> float:
+    """Sum P&L of all RUNNING/ENTERED strategies entered today."""
+    today = datetime.now(IST).date().isoformat()
+    total = 0.0
+    for strat in _deployed_strategies.values():
+        status = str(strat.get("status", "")).upper()
+        if status not in ("RUNNING", "ENTERED", "EXITED", "STOPPED"):
+            continue
+        entered_at = strat.get("entered_at", "")
+        if entered_at and not entered_at.startswith(today):
+            continue
+        total += float(strat.get("pnl", 0) or 0)
+    return total
+
+
 @app.get(
     "/api/risk/metrics",
     tags=["Risk"],
     summary="Current risk metrics",
-    description="Returns portfolio VaR, drawdown, margin utilization, greeks exposure, and kill-switch status.",
+    description="Real portfolio VaR, drawdown, margin utilization, Greeks exposure, kill-switch status.",
 )
 async def risk_metrics():
-    # Try computing risk metrics from live data
+    """Computes real risk metrics from live deployed positions + option chain.
+    Replaces the prior mock implementation.
+    """
     try:
-        if _live_feed and _live_feed._fyers:
-            pos_result = await _fyers_call(_live_feed._fyers.positions)
-            fund_result = await _fyers_call(_live_feed._fyers.funds)
-            if pos_result and pos_result.get("s") == "ok":
-                positions = pos_result.get("netPositions", pos_result.get("overall", []))
-                if isinstance(positions, list):
-                    unrealized = sum(float(p.get("unrealizedProfit", p.get("pl", 0))) for p in positions)
-                    daily_loss = abs(min(0, unrealized))
-                    margin_used = 0
-                    total_margin = 2000000  # Default
-                    if fund_result and fund_result.get("s") == "ok":
-                        for item in (fund_result.get("fund_limit", []) if isinstance(fund_result.get("fund_limit"), list) else []):
-                            title = item.get("title", "").lower()
-                            val = float(item.get("equityAmount", item.get("amount", 0)))
-                            if "total" in title and "balance" in title:
-                                total_margin = val
-                            elif "utilized" in title or "used" in title:
-                                margin_used = val
+        bundle = _get_risk_inputs()
+        re = bundle["risk_engine"]
+        from core.state_store import get_store
+        store = get_store()
 
-                    mock_risk = _mock.risk_metrics()
-                    mock_risk.update({
-                        "daily_loss_used": round(daily_loss, 2),
-                        "margin_utilization": round(margin_used / total_margin, 4) if total_margin > 0 else 0,
-                        "position_count": len(positions),
-                        "source": "fyers_derived",
-                    })
-                    return mock_risk
-    except Exception as e:
-        logger.warning(f"Fyers risk metrics derivation failed: {e}")
-    return _mock.risk_metrics()
+        # Aggregate Greeks across portfolio
+        agg = re.aggregate_portfolio_greeks(
+            bundle["strategies"], bundle["chain_cache"],
+            lot_sizes=bundle["lot_sizes"],
+        )
+        pf = agg["portfolio"]
+
+        # Get spot + India VIX from any cached chain (NIFTY preferred)
+        nifty_chain = bundle["chain_cache"].get("NIFTY") or {}
+        spot = float(nifty_chain.get("spot_price", 0) or 0)
+        india_vix_pct = float(nifty_chain.get("india_vix", 14.0) or 14.0)
+        annual_vol = india_vix_pct / 100.0
+
+        # VaR (95% and 99%, 1-day)
+        var95 = re.parametric_var(pf["delta"], spot, annual_vol, 0.95, 1) if spot > 0 else 0.0
+        var99 = re.parametric_var(pf["delta"], spot, annual_vol, 0.99, 1) if spot > 0 else 0.0
+
+        # Margin
+        margin = re.calculate_margin(
+            bundle["strategies"], bundle["chain_cache"],
+            lot_sizes=bundle["lot_sizes"],
+            available_capital=bundle["capital"],
+        )
+
+        # Drawdown
+        eq_curve = [r["equity"] for r in store.get_equity_curve(limit=500)]
+        if eq_curve:
+            dd = re.calculate_drawdown(eq_curve)
+        else:
+            dd = {"peak_equity": bundle["capital"], "current_equity": bundle["capital"],
+                  "drawdown_pct": 0.0, "max_drawdown_pct": 0.0, "duration_days": 0}
+
+        # Daily loss
+        daily_pnl = _compute_daily_pnl()
+        daily_loss_used = abs(min(0.0, daily_pnl))
+
+        # Risk limits from SQLite
+        limits = {**re.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+
+        return {
+            "portfolio_var_1d_95": round(var95, 2),
+            "portfolio_var_1d_99": round(var99, 2),
+            "max_drawdown": limits["max_drawdown_pct"] / 100.0,
+            "current_drawdown": dd["drawdown_pct"] / 100.0,
+            "current_drawdown_pct": dd["drawdown_pct"],
+            "max_drawdown_pct": dd["max_drawdown_pct"],
+            "peak_equity": dd["peak_equity"],
+            "current_equity": dd["current_equity"],
+            "margin_utilization": margin["utilization_pct"] / 100.0,
+            "total_margin_used": margin["total_margin_required"],
+            "available_margin": margin["available_margin"],
+            "net_delta_exposure": round(pf["delta"], 4),
+            "net_gamma_exposure": round(pf["gamma"], 6),
+            "net_theta_exposure": round(pf["theta"], 2),
+            "net_vega_exposure": round(pf["vega"], 2),
+            "daily_loss_limit": limits["max_daily_loss"],
+            "daily_loss_used": round(daily_loss_used, 2),
+            "daily_pnl": round(daily_pnl, 2),
+            "positions_count": agg["positions_count"],
+            "open_strategies_count": agg["strategies_count"],
+            "kill_switch_active": store.is_kill_switch_active(),
+            "source": "risk_engine_live",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"risk_metrics computation failed: {exc}", exc_info=True)
+        # Graceful fallback
+        return {
+            "portfolio_var_1d_95": 0.0,
+            "portfolio_var_1d_99": 0.0,
+            "max_drawdown": 0.05,
+            "current_drawdown": 0.0,
+            "margin_utilization": 0.0,
+            "net_delta_exposure": 0.0,
+            "net_gamma_exposure": 0.0,
+            "net_theta_exposure": 0.0,
+            "net_vega_exposure": 0.0,
+            "daily_loss_limit": 50_000.0,
+            "daily_loss_used": 0.0,
+            "positions_count": 0,
+            "kill_switch_active": False,
+            "source": "fallback_empty",
+            "error": str(exc),
+            "timestamp": datetime.now(IST).isoformat(),
+        }
 
 
 @app.get(
@@ -3623,12 +3752,54 @@ async def risk_metrics():
     tags=["Risk"],
     summary="Stress test results",
     description=(
-        "Returns estimated P&L under various stress scenarios including "
-        "NIFTY spot moves (+-2%, +-5%, +-10%), IV spikes/crush, and overnight gaps."
+        "Taylor-expansion stress test (Delta, Gamma, Vega, Theta) across standard "
+        "scenarios: NIFTY +-2%, +-5%, +-10%, IV spike/crush, overnight gap."
     ),
 )
 async def risk_stress_test():
-    return _mock.stress_test()
+    """Real stress test using portfolio Greeks + scenario shocks."""
+    try:
+        bundle = _get_risk_inputs()
+        re = bundle["risk_engine"]
+
+        agg = re.aggregate_portfolio_greeks(
+            bundle["strategies"], bundle["chain_cache"],
+            lot_sizes=bundle["lot_sizes"],
+        )
+        pf = agg["portfolio"]
+
+        nifty_chain = bundle["chain_cache"].get("NIFTY") or {}
+        spot = float(nifty_chain.get("spot_price", 0) or 0)
+        india_vix_pct = float(nifty_chain.get("india_vix", 14.0) or 14.0)
+        current_iv = india_vix_pct / 100.0
+
+        # No exposure → return empty scenarios
+        if pf["delta"] == 0 and pf["gamma"] == 0 and pf["vega"] == 0:
+            return {
+                "base_spot": spot,
+                "base_pnl": _compute_daily_pnl(),
+                "base_iv_pct": india_vix_pct,
+                "scenarios": [],
+                "worst_case_pnl": 0.0,
+                "best_case_pnl": 0.0,
+                "message": "No exposed positions to stress-test",
+                "source": "risk_engine_live",
+                "timestamp": datetime.now(IST).isoformat(),
+            }
+
+        result = re.stress_test_portfolio(pf, spot, current_iv)
+        result["base_pnl"] = round(_compute_daily_pnl(), 2)
+        result["source"] = "risk_engine_live"
+        result["timestamp"] = datetime.now(IST).isoformat()
+        return result
+    except Exception as exc:
+        logger.error(f"risk_stress_test computation failed: {exc}", exc_info=True)
+        return {
+            "base_spot": 0.0, "base_pnl": 0.0, "scenarios": [],
+            "worst_case_pnl": 0.0, "best_case_pnl": 0.0,
+            "error": str(exc), "source": "fallback_empty",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
 
 
 # ===================================================================
@@ -3997,165 +4168,456 @@ async def event_bus_metrics():
     "/api/risk/limits",
     tags=["Risk Engine"],
     summary="Current risk limits",
-    description="Returns the active risk limit configuration (max order value, loss limits, greeks limits, etc.).",
+    description="Configured risk limit thresholds (max daily loss, drawdown, Greeks exposure, etc.).",
 )
 async def risk_limits():
-    return {
-        "max_order_value": 5_000_000,
-        "max_position_value": 20_000_000,
-        "max_portfolio_value": 100_000_000,
-        "max_loss_per_order": 50_000,
-        "max_loss_per_strategy": 500_000,
-        "max_loss_per_day": 1_000_000,
-        "max_open_orders": 50,
-        "max_orders_per_minute": 30,
-        "max_quantity_per_order": 1800,
-        "max_greeks_delta": 500.0,
-        "max_greeks_gamma": 100.0,
-        "max_greeks_vega": 50_000.0,
-        "position_concentration_limit": 0.25,
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+    """Return active risk limits (merge of defaults + user overrides from SQLite)."""
+    try:
+        from core.state_store import get_store
+        from core import risk_engine
+        store = get_store()
+        merged = {**risk_engine.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+        merged["timestamp"] = datetime.now(IST).isoformat()
+        merged["source"] = "state_store"
+        return merged
+    except Exception as exc:
+        logger.error(f"risk_limits failed: {exc}", exc_info=True)
+        from core import risk_engine
+        return {**risk_engine.DEFAULT_RISK_LIMITS,
+                "timestamp": datetime.now(IST).isoformat(),
+                "source": "defaults", "error": str(exc)}
+
+
+@app.post(
+    "/api/risk/limits",
+    tags=["Risk Engine"],
+    summary="Update risk limits",
+    description="Persist user-configured risk limits to SQLite. Partial updates supported.",
+)
+async def update_risk_limits(payload: dict):
+    """Merge incoming limit changes with stored config and persist."""
+    try:
+        from core.state_store import get_store
+        from core import risk_engine
+        store = get_store()
+        current = {**risk_engine.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+        allowed_keys = set(risk_engine.DEFAULT_RISK_LIMITS.keys())
+        updates = {}
+        for k, v in (payload or {}).items():
+            if k in allowed_keys:
+                try:
+                    updates[k] = float(v) if not isinstance(v, bool) else v
+                except (TypeError, ValueError):
+                    continue
+        if not updates:
+            return {"ok": False, "message": "No valid limit fields provided",
+                    "allowed_keys": sorted(allowed_keys)}
+        new_limits = {**current, **updates}
+        store.save_risk_limits(new_limits)
+        store.log_risk_event("LIMITS_UPDATED", "INFO", message=f"Updated: {list(updates.keys())}",
+                              metadata={"updates": updates})
+        return {"ok": True, "limits": new_limits, "updated": list(updates.keys()),
+                "timestamp": datetime.now(IST).isoformat()}
+    except Exception as exc:
+        logger.error(f"update_risk_limits failed: {exc}", exc_info=True)
+        return {"ok": False, "error": str(exc), "timestamp": datetime.now(IST).isoformat()}
 
 
 @app.get(
     "/api/risk/drawdown",
     tags=["Risk Engine"],
     summary="Drawdown monitor status",
-    description="Returns current drawdown metrics: peak equity, current equity, drawdown amount/percentage, and breach status.",
+    description="Real drawdown from persisted equity curve in SQLite.",
 )
 async def risk_drawdown():
-    peak = 1_500_000 + _mock._jitter(50000, 0.02)
-    current = peak - _mock._rng.uniform(5000, 40000)
-    dd = peak - current
-    dd_pct = dd / peak * 100
-    return {
-        "peak_equity": round(peak, 2),
-        "current_equity": round(current, 2),
-        "drawdown_amount": round(dd, 2),
-        "drawdown_pct": round(dd_pct, 4),
-        "max_allowed_drawdown_pct": 5.0,
-        "breach": dd_pct > 5.0,
-        "trailing_stop_active": False,
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+    """Compute drawdown from real equity snapshots."""
+    try:
+        from core.state_store import get_store
+        from core import risk_engine
+        store = get_store()
+        eq_curve = [r["equity"] for r in store.get_equity_curve(limit=1000)]
+        limits = {**risk_engine.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+
+        if not eq_curve:
+            # Bootstrap with current capital
+            bundle = _get_risk_inputs()
+            cap = bundle["capital"]
+            return {
+                "peak_equity": cap, "current_equity": cap,
+                "drawdown_amount": 0.0, "drawdown_pct": 0.0,
+                "max_drawdown_pct": 0.0,
+                "max_allowed_drawdown_pct": limits["max_drawdown_pct"],
+                "breach": False, "trailing_stop_active": False,
+                "duration_days": 0,
+                "message": "No equity history yet — start trading to build curve",
+                "source": "risk_engine_live",
+                "timestamp": datetime.now(IST).isoformat(),
+            }
+
+        dd = risk_engine.calculate_drawdown(eq_curve)
+        return {
+            **dd,
+            "max_allowed_drawdown_pct": limits["max_drawdown_pct"],
+            "breach": dd["drawdown_pct"] > limits["max_drawdown_pct"],
+            "trailing_stop_active": False,
+            "source": "risk_engine_live",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"risk_drawdown failed: {exc}", exc_info=True)
+        return {"peak_equity": 0, "current_equity": 0, "drawdown_pct": 0,
+                "breach": False, "error": str(exc),
+                "timestamp": datetime.now(IST).isoformat()}
 
 
 @app.get(
     "/api/risk/circuit-breakers",
     tags=["Risk Engine"],
     summary="Circuit breaker status",
-    description="Returns the state of all configured circuit breakers (CLOSED/OPEN/HALF_OPEN).",
+    description="Real circuit breaker states derived from current portfolio vs configured limits.",
 )
 async def risk_circuit_breakers():
-    return {
-        "breakers": [
-            {
-                "name": "daily_loss",
-                "state": "closed",
-                "max_loss_amount": 1_000_000,
-                "current_loss": round(_mock._rng.uniform(5000, 80000), 2),
-                "cooldown_seconds": 300,
-                "auto_recover": True,
+    """Compute live breaker state from real metrics + persisted limits."""
+    try:
+        from core.state_store import get_store
+        from core import risk_engine
+        store = get_store()
+        limits = {**risk_engine.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+
+        # Pull metrics
+        metrics_payload = await risk_metrics()
+
+        daily_loss = float(metrics_payload.get("daily_loss_used", 0))
+        drawdown_pct = float(metrics_payload.get("current_drawdown_pct", 0))
+        delta_exp = abs(float(metrics_payload.get("net_delta_exposure", 0)))
+        vega_exp = abs(float(metrics_payload.get("net_vega_exposure", 0)))
+        margin_pct = float(metrics_payload.get("margin_utilization", 0)) * 100.0
+
+        def _breaker_state(current, limit_val):
+            if limit_val <= 0:
+                return "closed", 0.0
+            util = current / limit_val
+            if util >= 1.0:
+                return "open", util * 100.0
+            if util >= 0.80:
+                return "half_open", util * 100.0
+            return "closed", util * 100.0
+
+        breakers = []
+        for spec in [
+            ("daily_loss", daily_loss, limits["max_daily_loss"]),
+            ("drawdown", drawdown_pct, limits["max_drawdown_pct"]),
+            ("delta_exposure", delta_exp, limits["max_delta_exposure"]),
+            ("vega_exposure", vega_exp, limits["max_vega_exposure"]),
+            ("margin_utilization", margin_pct, 90.0),  # alert at 90% margin
+            ("open_strategies", metrics_payload.get("open_strategies_count", 0),
+             limits["max_open_strategies"]),
+        ]:
+            name, current, limit_val = spec
+            state, util = _breaker_state(current, limit_val)
+            breakers.append({
+                "name": name,
+                "state": state,
+                "current": round(current, 4),
+                "threshold": round(limit_val, 4),
+                "utilization_pct": round(util, 2),
+                "auto_recover": name in ("daily_loss", "margin_utilization"),
+                "cooldown_seconds": 300 if name == "daily_loss" else 0,
                 "last_triggered": None,
-            },
-            {
-                "name": "consecutive_losses",
-                "state": "closed",
-                "max_consecutive_losses": 5,
-                "current_consecutive": _mock._rng.randint(0, 2),
-                "cooldown_seconds": 600,
-                "auto_recover": False,
-                "last_triggered": None,
-            },
-            {
-                "name": "drawdown",
-                "state": "closed",
-                "max_drawdown_pct": 5.0,
-                "current_drawdown_pct": round(_mock._rng.uniform(0.5, 3.0), 2),
-                "cooldown_seconds": 0,
-                "auto_recover": False,
-                "last_triggered": None,
-            },
-        ],
-        "kill_switch_active": False,
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+            })
+
+        return {
+            "breakers": breakers,
+            "kill_switch_active": store.is_kill_switch_active(),
+            "any_open": any(b["state"] == "open" for b in breakers),
+            "source": "risk_engine_live",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"risk_circuit_breakers failed: {exc}", exc_info=True)
+        return {"breakers": [], "kill_switch_active": False,
+                "error": str(exc), "timestamp": datetime.now(IST).isoformat()}
 
 
 @app.post(
     "/api/risk/kill-switch",
     tags=["Risk Engine"],
     summary="Activate kill switch",
-    description="Activates the emergency kill switch — cancels all open orders and blocks new order flow.",
+    description=(
+        "EMERGENCY: blocks all new deploys + squares-off all open strategies "
+        "via PaperBroker. Persisted to SQLite (survives restart)."
+    ),
 )
-async def activate_kill_switch():
-    return {
-        "kill_switch_active": True,
-        "action": "activated",
-        "message": "Kill switch activated. All new order flow blocked. Open orders cancelled.",
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+async def activate_kill_switch(payload: dict | None = None):
+    """Real kill switch: persists flag + squares off all open positions."""
+    payload = payload or {}
+    reason = str(payload.get("reason", "manual user request"))
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        store.set_kill_switch(True, reason=reason, triggered_by="user")
+        store.log_risk_event("KILL_SWITCH_ON", "CRITICAL",
+                              message=f"Kill switch activated: {reason}",
+                              metadata={"reason": reason})
+
+        # Square off every RUNNING/ENTERED strategy
+        squared_off = []
+        for sid, strat in list(_deployed_strategies.items()):
+            status = str(strat.get("status", "")).upper()
+            if status in ("RUNNING", "ENTERED"):
+                try:
+                    # Direct field mutations + persist
+                    strat["status"] = "STOPPED"
+                    strat["exit_reason"] = "kill_switch"
+                    strat["exited_at"] = datetime.now(IST).isoformat()
+                    # Lock realized P&L at current value
+                    strat["realized_pnl"] = float(strat.get("pnl", 0) or 0)
+                    store.save_strategy(sid, strat)
+                    squared_off.append(sid)
+                except Exception as e:
+                    logger.warning(f"Kill switch: failed to stop {sid}: {e}")
+
+        # Notify via WebSocket
+        try:
+            from core.websocket.manager import WebSocketManager  # noqa: F401
+            ws = globals().get("_ws_manager")
+            if ws and hasattr(ws, "broadcast"):
+                await ws.broadcast({
+                    "type": "kill_switch",
+                    "active": True,
+                    "reason": reason,
+                    "squared_off_count": len(squared_off),
+                    "timestamp": datetime.now(IST).isoformat(),
+                })
+        except Exception:
+            pass
+
+        return {
+            "kill_switch_active": True,
+            "action": "activated",
+            "reason": reason,
+            "squared_off_strategies": squared_off,
+            "squared_off_count": len(squared_off),
+            "message": f"Kill switch ON. Stopped {len(squared_off)} strategies. New deploys blocked.",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"activate_kill_switch failed: {exc}", exc_info=True)
+        return {"kill_switch_active": False, "error": str(exc),
+                "timestamp": datetime.now(IST).isoformat()}
+
+
+@app.delete(
+    "/api/risk/kill-switch",
+    tags=["Risk Engine"],
+    summary="Deactivate kill switch",
+    description="Resets the kill switch flag. New strategy deploys allowed again.",
+)
+async def deactivate_kill_switch(payload: dict | None = None):
+    """Reset the kill switch flag."""
+    payload = payload or {}
+    reason = str(payload.get("reason", "manual reset"))
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        store.set_kill_switch(False, reason=reason, triggered_by="user")
+        store.log_risk_event("KILL_SWITCH_OFF", "INFO",
+                              message=f"Kill switch reset: {reason}",
+                              metadata={"reason": reason})
+        return {
+            "kill_switch_active": False,
+            "action": "deactivated",
+            "message": "Kill switch OFF. Strategy deploys allowed again.",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"deactivate_kill_switch failed: {exc}", exc_info=True)
+        return {"kill_switch_active": True, "error": str(exc),
+                "timestamp": datetime.now(IST).isoformat()}
 
 
 @app.get(
     "/api/risk/greeks-aggregation",
     tags=["Risk Engine"],
     summary="Aggregated portfolio greeks",
-    description="Returns Greeks aggregated by strategy and instrument with exposure limits.",
+    description="Real per-strategy Greeks aggregated from live deployed positions and option chain IV.",
 )
 async def risk_greeks_aggregation():
-    greeks = _mock.portfolio_greeks()
-    return {
-        "portfolio": greeks,
-        "by_strategy": {
-            "iron-condor-weekly": {
-                "delta": round(_mock._rng.uniform(-20, 20), 2),
-                "gamma": round(_mock._rng.uniform(-5, 5), 4),
-                "theta": round(_mock._rng.uniform(50, 150), 2),
-                "vega": round(_mock._rng.uniform(-200, -50), 2),
+    """Real Greeks computed via Black-Scholes from positions + chain IV."""
+    try:
+        from core.state_store import get_store
+        from core import risk_engine
+        store = get_store()
+        bundle = _get_risk_inputs()
+        re = bundle["risk_engine"]
+
+        agg = re.aggregate_portfolio_greeks(
+            bundle["strategies"], bundle["chain_cache"],
+            lot_sizes=bundle["lot_sizes"],
+        )
+        limits = {**risk_engine.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+
+        pf = agg["portfolio"]
+        max_delta = limits["max_delta_exposure"]
+        max_gamma = limits["max_gamma_exposure"]
+        max_vega = limits["max_vega_exposure"]
+
+        def _util(val, lim):
+            if lim == 0: return 0.0
+            return round(abs(val) / abs(lim) * 100.0, 2)
+
+        return {
+            "portfolio": {
+                "net_delta": round(pf["delta"], 4),
+                "net_gamma": round(pf["gamma"], 6),
+                "net_theta": round(pf["theta"], 2),
+                "net_vega": round(pf["vega"], 2),
+                "net_rho": round(pf["rho"], 4),
+                "total_notional": round(pf["total_notional"], 2),
+                "total_premium": round(pf["total_premium"], 2),
             },
-            "straddle-banknifty": {
-                "delta": round(_mock._rng.uniform(-30, 30), 2),
-                "gamma": round(_mock._rng.uniform(-3, 3), 4),
-                "theta": round(_mock._rng.uniform(80, 200), 2),
-                "vega": round(_mock._rng.uniform(-300, -80), 2),
+            "by_strategy": {
+                sid: {
+                    "delta": round(s["delta"], 4),
+                    "gamma": round(s["gamma"], 6),
+                    "theta": round(s["theta"], 2),
+                    "vega": round(s["vega"], 2),
+                    "name": s["name"],
+                    "underlying": s["underlying"],
+                    "status": s["status"],
+                    "pnl": s["pnl"],
+                } for sid, s in agg["by_strategy"].items()
             },
-        },
-        "limits": {
-            "max_delta": 500.0,
-            "max_gamma": 100.0,
-            "max_vega": 50_000.0,
-            "delta_utilization_pct": round(_mock._rng.uniform(5, 40), 2),
-            "gamma_utilization_pct": round(_mock._rng.uniform(2, 25), 2),
-            "vega_utilization_pct": round(_mock._rng.uniform(1, 15), 2),
-        },
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+            "by_underlying": {
+                u: {
+                    "delta": round(g["delta"], 4),
+                    "gamma": round(g["gamma"], 6),
+                    "theta": round(g["theta"], 2),
+                    "vega": round(g["vega"], 2),
+                    "notional": round(g["notional"], 2),
+                } for u, g in agg["by_underlying"].items()
+            },
+            "limits": {
+                "max_delta": max_delta,
+                "max_gamma": max_gamma,
+                "max_vega": max_vega,
+                "delta_utilization_pct": _util(pf["delta"], max_delta),
+                "gamma_utilization_pct": _util(pf["gamma"], max_gamma),
+                "vega_utilization_pct": _util(pf["vega"], max_vega),
+            },
+            "positions_count": agg["positions_count"],
+            "strategies_count": agg["strategies_count"],
+            "source": "risk_engine_live",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"risk_greeks_aggregation failed: {exc}", exc_info=True)
+        return {"portfolio": {"net_delta": 0, "net_gamma": 0, "net_theta": 0, "net_vega": 0},
+                "by_strategy": {}, "limits": {}, "error": str(exc),
+                "timestamp": datetime.now(IST).isoformat()}
 
 
 @app.get(
     "/api/risk/margin-calculator",
     tags=["Risk Engine"],
-    summary="SPAN margin calculation",
-    description="Returns SPAN-like margin requirements for the current portfolio.",
+    summary="NSE F&O margin (approximate)",
+    description="SPAN + Exposure margin approximation (~5% of actual NSE SPAN).",
 )
 async def risk_margin_calculator():
-    margin = _mock.margin_info()
-    return {
-        "total_margin_required": margin["used_margin"],
-        "span_margin": margin["span_margin"],
-        "exposure_margin": margin["exposure_margin"],
-        "premium_received": round(_mock._rng.uniform(50000, 200000), 2),
-        "net_option_value": round(_mock._rng.uniform(-30000, 30000), 2),
-        "available_margin": margin["available_margin"],
-        "utilization_pct": margin["utilization_pct"],
-        "margin_by_strategy": {
-            "iron-condor-weekly": round(_mock._rng.uniform(200000, 400000), 2),
-            "straddle-banknifty": round(_mock._rng.uniform(150000, 350000), 2),
-        },
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+    """Real margin calculation using NSE F&O approximation."""
+    try:
+        bundle = _get_risk_inputs()
+        re = bundle["risk_engine"]
+        margin = re.calculate_margin(
+            bundle["strategies"], bundle["chain_cache"],
+            lot_sizes=bundle["lot_sizes"],
+            available_capital=bundle["capital"],
+        )
+        margin["source"] = "risk_engine_live"
+        margin["timestamp"] = datetime.now(IST).isoformat()
+        margin["available_capital"] = bundle["capital"]
+        return margin
+    except Exception as exc:
+        logger.error(f"risk_margin_calculator failed: {exc}", exc_info=True)
+        return {"total_margin_required": 0, "span_margin": 0, "exposure_margin": 0,
+                "available_margin": 0, "utilization_pct": 0, "margin_by_strategy": {},
+                "error": str(exc), "timestamp": datetime.now(IST).isoformat()}
+
+
+@app.get(
+    "/api/risk/breaches",
+    tags=["Risk Engine"],
+    summary="Current limit breaches",
+    description="Live list of risk limit breaches (WARN at 80%, BREACH at 100%).",
+)
+async def risk_breaches():
+    """Return current breaches against configured limits."""
+    try:
+        from core.state_store import get_store
+        from core import risk_engine
+        store = get_store()
+        metrics_payload = await risk_metrics()
+        limits = {**risk_engine.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+
+        # Build metrics dict for limit checker
+        check_metrics = {
+            "daily_loss_used": metrics_payload.get("daily_loss_used", 0),
+            "current_drawdown_pct": metrics_payload.get("current_drawdown_pct", 0),
+            "net_delta": metrics_payload.get("net_delta_exposure", 0),
+            "net_gamma": metrics_payload.get("net_gamma_exposure", 0),
+            "net_vega": metrics_payload.get("net_vega_exposure", 0),
+            "net_theta": metrics_payload.get("net_theta_exposure", 0),
+            "open_strategies_count": metrics_payload.get("open_strategies_count", 0),
+        }
+
+        breaches = risk_engine.check_risk_limits(check_metrics, limits)
+        should_kill = risk_engine.should_auto_kill(breaches, limits)
+        return {
+            "breaches": [
+                {
+                    "limit_name": b.limit_name,
+                    "current_value": b.current_value,
+                    "limit_value": b.limit_value,
+                    "utilization_pct": b.utilization_pct,
+                    "severity": b.severity,
+                    "message": b.message,
+                } for b in breaches
+            ],
+            "count": len(breaches),
+            "warn_count": sum(1 for b in breaches if b.severity == "WARN"),
+            "breach_count": sum(1 for b in breaches if b.severity == "BREACH"),
+            "should_auto_kill": should_kill,
+            "kill_switch_active": store.is_kill_switch_active(),
+            "source": "risk_engine_live",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"risk_breaches failed: {exc}", exc_info=True)
+        return {"breaches": [], "count": 0, "should_auto_kill": False,
+                "error": str(exc), "timestamp": datetime.now(IST).isoformat()}
+
+
+@app.get(
+    "/api/risk/audit-log",
+    tags=["Risk Engine"],
+    summary="Risk audit log",
+    description="History of risk events (breaches, kill switch toggles, limit updates).",
+)
+async def risk_audit_log(limit: int = 100, event_type: str | None = None):
+    """Return persisted risk audit events."""
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        events = store.get_risk_events(limit=min(max(1, limit), 500), event_type=event_type)
+        return {
+            "events": events,
+            "count": len(events),
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"risk_audit_log failed: {exc}", exc_info=True)
+        return {"events": [], "count": 0, "error": str(exc),
+                "timestamp": datetime.now(IST).isoformat()}
 
 
 # ===================================================================
@@ -5719,6 +6181,23 @@ async def get_auto_deploy_recommendations(symbol: str = "NIFTY"):
 async def execute_auto_deploy(body: dict = Body(default={})):
     from core.ai_signal_engine import generate_signals, build_deploy_payload
     from core import symbol_master
+
+    # Kill switch guard — refuse auto-deploy when active
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        if store.is_kill_switch_active():
+            meta = store.get_kill_switch_meta() or {}
+            return {
+                "ok": False,
+                "error": "kill_switch_active",
+                "message": f"Kill switch active: {meta.get('reason', 'risk limits breached')}. Auto-deploy blocked.",
+                "deployed": [], "deploy_count": 0,
+                "kill_switch_meta": meta,
+                "timestamp": datetime.now(IST).isoformat(),
+            }
+    except Exception:
+        pass
 
     symbol = (body.get("symbol") or "NIFTY").upper()
     threshold = float(body.get("threshold") or 0)

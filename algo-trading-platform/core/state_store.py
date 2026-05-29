@@ -106,6 +106,35 @@ class StateStore:
                     value       TEXT,
                     updated_at  TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS equity_snapshots (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp   TEXT,
+                    equity      REAL,
+                    daily_pnl   REAL,
+                    cash        REAL,
+                    margin_used REAL,
+                    open_strategies INTEGER
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_equity_ts
+                    ON equity_snapshots(timestamp);
+
+                CREATE TABLE IF NOT EXISTS risk_events (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp   TEXT,
+                    event_type  TEXT,
+                    severity    TEXT,
+                    limit_name  TEXT,
+                    current_value REAL,
+                    limit_value REAL,
+                    utilization_pct REAL,
+                    message     TEXT,
+                    metadata_json TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_risk_events_ts
+                    ON risk_events(timestamp);
                 """
             )
 
@@ -358,6 +387,193 @@ class StateStore:
         except Exception as exc:
             logger.warning(f"StateStore.load_setting failed: {exc}")
             return default
+
+    # ------------------------------------------------------------------
+    # Risk: limits & kill switch (stored in settings table)
+    # ------------------------------------------------------------------
+
+    RISK_LIMITS_KEY = "risk_limits"
+    KILL_SWITCH_KEY = "kill_switch_active"
+    KILL_SWITCH_META_KEY = "kill_switch_meta"
+
+    def save_risk_limits(self, limits: dict) -> None:
+        """Persist user-configured risk limits."""
+        self.save_setting(self.RISK_LIMITS_KEY, limits)
+
+    def load_risk_limits(self, default: dict | None = None) -> dict:
+        """Load risk limits. Returns *default* (or {}) if none stored."""
+        return self.load_setting(self.RISK_LIMITS_KEY, default or {}) or {}
+
+    def set_kill_switch(self, active: bool, reason: str = "", triggered_by: str = "user") -> None:
+        """Persist kill switch state + audit metadata."""
+        self.save_setting(self.KILL_SWITCH_KEY, bool(active))
+        self.save_setting(self.KILL_SWITCH_META_KEY, {
+            "active": bool(active),
+            "reason": reason,
+            "triggered_by": triggered_by,
+            "timestamp": datetime.now(IST).isoformat(),
+        })
+
+    def is_kill_switch_active(self) -> bool:
+        return bool(self.load_setting(self.KILL_SWITCH_KEY, False))
+
+    def get_kill_switch_meta(self) -> dict:
+        return self.load_setting(self.KILL_SWITCH_META_KEY, {}) or {}
+
+    # ------------------------------------------------------------------
+    # Risk: equity snapshots (for drawdown tracking)
+    # ------------------------------------------------------------------
+
+    def save_equity_snapshot(
+        self,
+        equity: float,
+        daily_pnl: float = 0.0,
+        cash: float = 0.0,
+        margin_used: float = 0.0,
+        open_strategies: int = 0,
+    ) -> None:
+        """Append a snapshot of current portfolio equity."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                now = datetime.now(IST).isoformat()
+                with self._conn:
+                    self._conn.execute(
+                        """
+                        INSERT INTO equity_snapshots
+                            (timestamp, equity, daily_pnl, cash, margin_used, open_strategies)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (now, equity, daily_pnl, cash, margin_used, open_strategies),
+                    )
+        except Exception as exc:
+            logger.warning(f"StateStore.save_equity_snapshot failed: {exc}")
+
+    def get_equity_curve(self, limit: int = 1000, since_iso: str | None = None) -> list[dict]:
+        """Return equity snapshots oldest-first (suitable for drawdown calc)."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return []
+                if since_iso:
+                    cursor = self._conn.execute(
+                        """SELECT * FROM equity_snapshots
+                           WHERE timestamp >= ?
+                           ORDER BY timestamp ASC LIMIT ?""",
+                        (since_iso, limit),
+                    )
+                else:
+                    # Get newest N then reverse so oldest is first
+                    cursor = self._conn.execute(
+                        """SELECT * FROM (
+                             SELECT * FROM equity_snapshots
+                             ORDER BY timestamp DESC LIMIT ?
+                           ) ORDER BY timestamp ASC""",
+                        (limit,),
+                    )
+                rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except Exception as exc:
+            logger.warning(f"StateStore.get_equity_curve failed: {exc}")
+            return []
+
+    def get_peak_equity(self) -> float:
+        """Return the all-time peak equity (for drawdown reference)."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return 0.0
+                cursor = self._conn.execute(
+                    "SELECT MAX(equity) AS peak FROM equity_snapshots"
+                )
+                row = cursor.fetchone()
+            return float(row["peak"] or 0.0) if row else 0.0
+        except Exception as exc:
+            logger.warning(f"StateStore.get_peak_equity failed: {exc}")
+            return 0.0
+
+    # ------------------------------------------------------------------
+    # Risk: audit log
+    # ------------------------------------------------------------------
+
+    def log_risk_event(
+        self,
+        event_type: str,
+        severity: str,
+        limit_name: str = "",
+        current_value: float = 0.0,
+        limit_value: float = 0.0,
+        utilization_pct: float = 0.0,
+        message: str = "",
+        metadata: dict | None = None,
+    ) -> None:
+        """Append a risk event to the audit log.
+
+        event_type examples: BREACH, WARN, KILL_SWITCH_ON, KILL_SWITCH_OFF,
+                             LIMITS_UPDATED, AUTO_KILL, MANUAL_KILL
+        severity:           INFO, WARN, BREACH, CRITICAL
+        """
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return
+                now = datetime.now(IST).isoformat()
+                meta_json = json.dumps(metadata or {}, default=str)
+                with self._conn:
+                    self._conn.execute(
+                        """
+                        INSERT INTO risk_events
+                            (timestamp, event_type, severity, limit_name,
+                             current_value, limit_value, utilization_pct,
+                             message, metadata_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (now, event_type, severity, limit_name,
+                         current_value, limit_value, utilization_pct,
+                         message, meta_json),
+                    )
+        except Exception as exc:
+            logger.warning(f"StateStore.log_risk_event failed: {exc}")
+
+    def get_risk_events(
+        self,
+        limit: int = 200,
+        event_type: str | None = None,
+        since_iso: str | None = None,
+    ) -> list[dict]:
+        """Return risk audit events, newest first."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return []
+                conditions = []
+                params: list = []
+                if event_type:
+                    conditions.append("event_type = ?")
+                    params.append(event_type)
+                if since_iso:
+                    conditions.append("timestamp >= ?")
+                    params.append(since_iso)
+                where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+                params.append(limit)
+                cursor = self._conn.execute(
+                    f"SELECT * FROM risk_events {where} ORDER BY timestamp DESC LIMIT ?",
+                    params,
+                )
+                rows = cursor.fetchall()
+            result: list[dict] = []
+            for row in rows:
+                entry = dict(row)
+                try:
+                    entry["metadata"] = json.loads(entry.pop("metadata_json", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    entry["metadata"] = {}
+                result.append(entry)
+            return result
+        except Exception as exc:
+            logger.warning(f"StateStore.get_risk_events failed: {exc}")
+            return []
 
     # ------------------------------------------------------------------
     # Utility

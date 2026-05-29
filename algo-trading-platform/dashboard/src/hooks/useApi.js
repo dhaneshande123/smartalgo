@@ -15,9 +15,9 @@ export const useGreeks = () => useQuery({ queryKey: ['greeks'], queryFn: api.get
 export const usePnL = () => useQuery({ queryKey: ['pnl'], queryFn: api.getPnL, refetchInterval: 2000 });
 export const useMarginUsage = () => useQuery({ queryKey: ['margin'], queryFn: api.getMarginUsage });
 export const useStrategies = () => useQuery({ queryKey: ['strategies'], queryFn: api.getStrategies });
-export const useRiskMetrics = () => useQuery({ queryKey: ['riskMetrics'], queryFn: api.getRiskMetrics });
-export const useRiskLimits = () => useQuery({ queryKey: ['riskLimits'], queryFn: api.getRiskLimits });
-export const useCircuitBreakers = () => useQuery({ queryKey: ['circuitBreakers'], queryFn: api.getCircuitBreakers });
+export const useRiskMetrics = () => useQuery({ queryKey: ['riskMetrics'], queryFn: api.getRiskMetrics, refetchInterval: 3000 });
+export const useRiskLimits = () => useQuery({ queryKey: ['riskLimits'], queryFn: api.getRiskLimits, refetchInterval: 10000 });
+export const useCircuitBreakers = () => useQuery({ queryKey: ['circuitBreakers'], queryFn: api.getCircuitBreakers, refetchInterval: 5000 });
 export const useOrders = (status) =>
   useQuery({ queryKey: ['orders', status], queryFn: () => api.getOrders(status) });
 export const useTrades = () => useQuery({ queryKey: ['trades'], queryFn: api.getTrades });
@@ -27,11 +27,55 @@ export const useMonitoringHealth = () => useQuery({ queryKey: ['monitoringHealth
 export const useAlerts = () => useQuery({ queryKey: ['alerts'], queryFn: api.getAlerts });
 export const usePerformanceMetrics = () => useQuery({ queryKey: ['perfMetrics'], queryFn: api.getPerformanceMetrics });
 export const useSystemResources = () => useQuery({ queryKey: ['sysResources'], queryFn: api.getSystemResources });
-export const useStressTests = () => useQuery({ queryKey: ['stressTests'], queryFn: api.getStressTests });
+export const useStressTests = () => useQuery({ queryKey: ['stressTests'], queryFn: api.getStressTests, refetchInterval: 5000 });
 
 export const useKillSwitch = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: api.activateKillSwitch, onSuccess: () => qc.invalidateQueries() });
+  return useMutation({
+    mutationFn: (reason) => api.activateKillSwitch(reason || 'manual'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['riskMetrics'] });
+      qc.invalidateQueries({ queryKey: ['circuitBreakers'] });
+      qc.invalidateQueries({ queryKey: ['riskBreaches'] });
+      qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
+    },
+  });
+};
+
+export const useDeactivateKillSwitch = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (reason) => api.deactivateKillSwitch(reason || 'manual reset'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['riskMetrics'] });
+      qc.invalidateQueries({ queryKey: ['circuitBreakers'] });
+      qc.invalidateQueries({ queryKey: ['riskBreaches'] });
+    },
+  });
+};
+
+// Risk Engine — additional live data
+export const useRiskBreaches = () =>
+  useQuery({ queryKey: ['riskBreaches'], queryFn: api.getRiskBreaches, refetchInterval: 5000 });
+export const useRiskDrawdown = () =>
+  useQuery({ queryKey: ['riskDrawdown'], queryFn: api.getRiskDrawdown, refetchInterval: 10000 });
+export const useRiskGreeksAggregation = () =>
+  useQuery({ queryKey: ['riskGreeksAgg'], queryFn: api.getRiskGreeksAggregation, refetchInterval: 5000 });
+export const useRiskMargin = () =>
+  useQuery({ queryKey: ['riskMargin'], queryFn: api.getRiskMarginCalc, refetchInterval: 5000 });
+export const useRiskAuditLog = (limit = 50) =>
+  useQuery({ queryKey: ['riskAudit', limit], queryFn: () => api.getRiskAuditLog(limit), refetchInterval: 10000 });
+
+export const useUpdateRiskLimits = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.updateRiskLimits,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['riskLimits'] });
+      qc.invalidateQueries({ queryKey: ['riskMetrics'] });
+      qc.invalidateQueries({ queryKey: ['riskBreaches'] });
+    },
+  });
 };
 
 export const useStrategyAction = () => {

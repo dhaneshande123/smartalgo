@@ -3,8 +3,10 @@ import {
   Zap, ShieldAlert, TrendingUp, TrendingDown,
   AlertTriangle, Activity, BarChart3,
 } from 'lucide-react';
-import { useRiskMetrics, useCircuitBreakers, useKillSwitch, useStressTests, useGreeks } from '../hooks/useApi';
+import { useRiskMetrics, useCircuitBreakers, useKillSwitch, useStressTests, useGreeks, useDeactivateKillSwitch } from '../hooks/useApi';
 import { useTheme } from '../context/ThemeContext';
+import RiskLimitsEditor from './Risk/RiskLimitsEditor';
+import BreachBanner from './Risk/BreachBanner';
 
 // ── Fallback data ────────────────────────────────────────────────────────────
 const fallbackCircuitBreakers = [
@@ -58,9 +60,21 @@ function formatIndian(num) {
 }
 
 // ── Kill Switch component ─────────────────────────────────────────────────────
-function KillSwitchBanner({ killSwitch, isDark }) {
-  const [state, setState] = useState('idle'); // 'idle' | 'confirm' | 'activated'
+function KillSwitchBanner({ killSwitch, deactivateKillSwitch, isActiveOnBackend, killMeta, isDark }) {
+  // 'idle' | 'confirm' | 'activated' (locally driven for confirm flow)
+  // When the backend already has the kill switch ON we show "activated" mode
+  // regardless of local state.
+  const [state, setState] = useState('idle');
   const [countdown, setCountdown] = useState(3);
+
+  // Sync local state with backend
+  useEffect(() => {
+    if (isActiveOnBackend && state !== 'activated') {
+      setState('activated');
+    } else if (!isActiveOnBackend && state === 'activated') {
+      setState('idle');
+    }
+  }, [isActiveOnBackend]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleActivate = useCallback(() => {
     setState('confirm');
@@ -68,13 +82,17 @@ function KillSwitchBanner({ killSwitch, isDark }) {
   }, []);
 
   const handleConfirm = useCallback(() => {
-    killSwitch.mutate();
+    killSwitch.mutate('manual via Risk page');
     setState('activated');
   }, [killSwitch]);
 
   const handleCancel = useCallback(() => {
     setState('idle');
   }, []);
+
+  const handleDeactivate = useCallback(() => {
+    deactivateKillSwitch.mutate('manual reset via Risk page');
+  }, [deactivateKillSwitch]);
 
   // Countdown tick when in confirm state
   useEffect(() => {
@@ -211,23 +229,48 @@ function KillSwitchBanner({ killSwitch, isDark }) {
       )}
 
       {state === 'activated' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          {/* Spinning activation indicator */}
-          <div style={{
-            width: 44, height: 44, borderRadius: '50%',
-            border: '3px solid rgba(239,68,68,0.3)',
-            borderTop: '3px solid #ef4444',
-            animation: 'spinKill 0.8s linear infinite',
-            flexShrink: 0,
-          }} />
-          <div>
-            <p style={{ fontSize: 16, fontWeight: 800, color: '#ef4444', margin: 0, letterSpacing: '0.04em' }}>
-              ⚡ KILL SWITCH ACTIVATED
-            </p>
-            <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 3 }}>
-              Closing all positions and cancelling orders…
-            </p>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: 1 }}>
+            {/* Spinning activation indicator (only when freshly triggered) */}
+            <div style={{
+              width: 44, height: 44, borderRadius: 10,
+              background: 'rgba(239,68,68,0.15)',
+              border: '2px solid rgba(239,68,68,0.5)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              <Zap style={{ width: 22, height: 22, color: '#ef4444' }} />
+            </div>
+            <div>
+              <p style={{ fontSize: 16, fontWeight: 800, color: '#ef4444', margin: 0, letterSpacing: '0.04em' }}>
+                ⚡ KILL SWITCH ACTIVE
+              </p>
+              <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 3 }}>
+                {killMeta?.reason ? (
+                  <>
+                    Reason: <strong style={{ color: '#fca5a5' }}>{killMeta.reason}</strong>
+                    {killMeta?.triggered_by && (
+                      <> · By <strong style={{ color: '#fca5a5' }}>{killMeta.triggered_by}</strong></>
+                    )}
+                  </>
+                ) : 'All new deploys blocked. All open strategies stopped.'}
+              </p>
+            </div>
           </div>
+          <button
+            onClick={handleDeactivate}
+            disabled={deactivateKillSwitch.isPending}
+            style={{
+              padding: '9px 18px',
+              background: 'rgba(100,116,139,0.18)',
+              border: '1px solid rgba(100,116,139,0.4)',
+              borderRadius: 8, color: '#cbd5e1', fontSize: 12, fontWeight: 700,
+              cursor: deactivateKillSwitch.isPending ? 'wait' : 'pointer',
+              letterSpacing: '0.04em', flexShrink: 0,
+            }}
+          >
+            {deactivateKillSwitch.isPending ? 'Resetting…' : 'RESET KILL SWITCH'}
+          </button>
         </div>
       )}
 
@@ -255,6 +298,9 @@ export default function Risk() {
   const { data: stressData } = useStressTests();
   const { data: greeksData } = useGreeks();
   const killSwitch = useKillSwitch();
+  const deactivateKillSwitch = useDeactivateKillSwitch();
+  const isKillSwitchActive = !!riskData?.kill_switch_active;
+  const killMeta = cbData?.kill_switch_meta || riskData?.kill_switch_meta;
 
   // ── Normalize risk ────────────────────────────────────────────────────────
   const risk = riskData
@@ -306,7 +352,16 @@ export default function Risk() {
       </div>
 
       {/* ── Kill Switch Banner ────────────────────────────────────────────── */}
-      <KillSwitchBanner killSwitch={killSwitch} isDark={isDark} />
+      <KillSwitchBanner
+        killSwitch={killSwitch}
+        deactivateKillSwitch={deactivateKillSwitch}
+        isActiveOnBackend={isKillSwitchActive}
+        killMeta={killMeta}
+        isDark={isDark}
+      />
+
+      {/* ── Live Breach Banner (auto-hides when no breaches) ───────────────── */}
+      <BreachBanner isDark={isDark} />
 
       {/* ── 4 Risk Metric Cards ───────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
@@ -615,6 +670,9 @@ export default function Risk() {
           </table>
         </div>
       </div>
+
+      {/* ── Risk Limits Editor ───────────────────────────────────────────── */}
+      <RiskLimitsEditor isDark={isDark} />
     </div>
   );
 }
