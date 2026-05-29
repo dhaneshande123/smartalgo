@@ -1,0 +1,1174 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   SmartAlgo — Sci-Fi / Futuristic Theme
+   ═══════════════════════════════════════════════════════════════════════════
+   Scoped under html.scifi so it only activates when the class is present.
+   Neon-cyan primary, magenta accents, animated grid background, glass panels.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────────────────
+   1. CSS VARIABLES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi {
+  --sf-bg-deep:       #0a0a1a;
+  --sf-bg-card:       rgba(15, 20, 45, 0.65);
+  --sf-bg-card-solid: #0f1430;
+  --sf-bg-sidebar:    rgba(8, 10, 28, 0.85);
+  --sf-bg-header:     rgba(10, 12, 30, 0.8);
+
+  --sf-cyan:          #00f0ff;
+  --sf-cyan-dim:      rgba(0, 240, 255, 0.6);
+  --sf-cyan-muted:    rgba(0, 240, 255, 0.15);
+  --sf-cyan-ghost:    rgba(0, 240, 255, 0.06);
+  --sf-magenta:       #ff006e;
+  --sf-magenta-dim:   rgba(255, 0, 110, 0.6);
+  --sf-green:         #00ff88;
+  --sf-green-dim:     rgba(0, 255, 136, 0.5);
+  --sf-red:           #ff4444;
+  --sf-red-dim:       rgba(255, 68, 68, 0.5);
+  --sf-gold:          #ffd700;
+  --sf-gold-dim:      rgba(255, 215, 0, 0.5);
+
+  --sf-border:        rgba(0, 240, 255, 0.1);
+  --sf-border-hover:  rgba(0, 240, 255, 0.3);
+  --sf-border-glow:   rgba(0, 240, 255, 0.15);
+  --sf-text-primary:  #e8ecf4;
+  --sf-text-muted:    #7a8ba8;
+  --sf-text-dim:      #4a5a78;
+
+  --sf-glow-cyan:     0 0 12px rgba(0, 240, 255, 0.25);
+  --sf-glow-magenta:  0 0 12px rgba(255, 0, 110, 0.25);
+  --sf-glow-green:    0 0 10px rgba(0, 255, 136, 0.2);
+  --sf-glow-red:      0 0 10px rgba(255, 68, 68, 0.2);
+
+  --sf-font-mono:     'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Override Tailwind custom-property-based colors */
+  --color-profit:     #00ff88;
+  --color-loss:       #ff4444;
+  --color-warning:    #ffd700;
+  --color-accent:     #00f0ff;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   2. BODY & BACKGROUND
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi body {
+  background-color: var(--sf-bg-deep) !important;
+  color: var(--sf-text-primary) !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}
+
+/* Animated grid overlay */
+html.scifi body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  animation: scifi-grid-pulse 8s ease-in-out infinite;
+}
+
+/* Subtle nebula radial gradients */
+html.scifi body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 900px 600px at 15% 20%, rgba(0, 240, 255, 0.04) 0%, transparent 70%),
+    radial-gradient(ellipse 700px 500px at 85% 75%, rgba(255, 0, 110, 0.03) 0%, transparent 70%),
+    radial-gradient(ellipse 500px 400px at 50% 50%, rgba(0, 100, 255, 0.02) 0%, transparent 60%);
+  animation: scifi-nebula-shift 25s ease-in-out infinite alternate;
+}
+
+/* All real content above the pseudo-element layers */
+html.scifi body > * {
+  position: relative;
+  z-index: 1;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   3. SCROLLBAR
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+html.scifi ::-webkit-scrollbar-track {
+  background: var(--sf-bg-deep);
+}
+
+html.scifi ::-webkit-scrollbar-thumb {
+  background: rgba(0, 240, 255, 0.2);
+  border-radius: 4px;
+}
+
+html.scifi ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 240, 255, 0.4);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   4. SIDEBAR
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi aside {
+  background: var(--sf-bg-sidebar) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-color: var(--sf-border) !important;
+}
+
+/* Logo area glow */
+html.scifi aside > div:first-child {
+  border-color: var(--sf-border) !important;
+}
+
+html.scifi aside .text-accent,
+html.scifi aside [class*="text-accent"] {
+  color: var(--sf-cyan) !important;
+}
+
+html.scifi aside .bg-accent\/15,
+html.scifi aside [class*="bg-accent/15"],
+html.scifi aside [class*="bg-accent/"] {
+  background-color: rgba(0, 240, 255, 0.1) !important;
+}
+
+/* Nav items — hover glow with 3D perspective lift */
+html.scifi aside nav a {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  perspective: 600px;
+}
+
+html.scifi aside nav a:hover {
+  background: rgba(0, 240, 255, 0.06) !important;
+  color: var(--sf-cyan) !important;
+  transform: perspective(600px) translateZ(4px);
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+}
+
+/* Active nav item — cyan right-edge bar with glow */
+html.scifi aside nav a.bg-accent\/15,
+html.scifi aside nav a[class*="border-accent"] {
+  background: rgba(0, 240, 255, 0.08) !important;
+  color: var(--sf-cyan) !important;
+  border-left-color: var(--sf-cyan) !important;
+  box-shadow: inset -2px 0 8px rgba(0, 240, 255, 0.1);
+  text-shadow: 0 0 6px rgba(0, 240, 255, 0.3);
+}
+
+/* Override any accent purple to cyan in sidebar */
+html.scifi aside .border-accent {
+  border-color: var(--sf-cyan) !important;
+}
+
+html.scifi aside .shadow-accent\/5,
+html.scifi aside [class*="shadow-accent"] {
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.08) !important;
+}
+
+/* Bottom collapse link */
+html.scifi aside .hover\:text-accent:hover {
+  color: var(--sf-cyan) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   5. HEADER
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi header {
+  background: var(--sf-bg-header) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border-color: var(--sf-border) !important;
+}
+
+/* Connection / market badges — neon versions */
+html.scifi header .bg-profit\/10 {
+  background-color: rgba(0, 255, 136, 0.1) !important;
+}
+
+html.scifi header .text-profit {
+  color: var(--sf-green) !important;
+}
+
+html.scifi header .bg-loss\/10 {
+  background-color: rgba(255, 68, 68, 0.1) !important;
+}
+
+html.scifi header .text-loss {
+  color: var(--sf-red) !important;
+}
+
+html.scifi header .text-accent,
+html.scifi header [class*="text-accent"] {
+  color: var(--sf-cyan) !important;
+}
+
+html.scifi header .bg-accent\/20,
+html.scifi header [class*="bg-accent/"] {
+  background-color: rgba(0, 240, 255, 0.12) !important;
+}
+
+html.scifi header [class*="bg-white/[0.0"] {
+  background-color: rgba(0, 240, 255, 0.04) !important;
+}
+
+html.scifi header [class*="hover:bg-white/"]:hover {
+  background-color: rgba(0, 240, 255, 0.08) !important;
+}
+
+/* Theme toggle and user menu icons */
+html.scifi header .hover\:text-accent:hover {
+  color: var(--sf-cyan) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   6. CARDS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .glass-card {
+  background: var(--sf-bg-card) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border: 1px solid var(--sf-border-glow) !important;
+  border-radius: 16px;
+  position: relative;
+  transition: border-color 0.35s ease, box-shadow 0.35s ease, transform 0.35s ease !important;
+}
+
+/* Top accent line on cards */
+html.scifi .glass-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 16px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--sf-cyan-muted), transparent);
+  border-radius: 0 0 2px 2px;
+  pointer-events: none;
+}
+
+html.scifi .glass-card:hover {
+  border-color: var(--sf-border-hover) !important;
+  box-shadow: var(--sf-glow-cyan), 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+  transform: translateY(-2px);
+}
+
+html.scifi .glass-card-interactive:hover {
+  border-color: rgba(0, 240, 255, 0.35) !important;
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.12), 0 12px 40px rgba(0, 0, 0, 0.35) !important;
+  transform: translateY(-3px) perspective(600px) translateZ(2px);
+}
+
+/* Standard .card override */
+html.scifi .card {
+  background: var(--sf-bg-card) !important;
+  border-color: var(--sf-border) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* bg-terminal-card used inline */
+html.scifi .bg-terminal-card,
+html.scifi [class*="bg-terminal-card"] {
+  background: var(--sf-bg-card) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Category cards */
+html.scifi .category-card {
+  background: rgba(10, 14, 38, 0.5) !important;
+  border-color: var(--sf-border) !important;
+  backdrop-filter: blur(12px);
+}
+
+html.scifi .category-card:hover {
+  background: rgba(10, 14, 38, 0.75) !important;
+  border-color: var(--sf-border-hover) !important;
+  box-shadow: var(--sf-glow-cyan) !important;
+  transform: translateY(-3px);
+}
+
+html.scifi .category-card.active {
+  border-color: rgba(0, 240, 255, 0.3) !important;
+  background: rgba(0, 240, 255, 0.04) !important;
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.06) !important;
+}
+
+/* Glass sidebar panel */
+html.scifi .glass-sidebar {
+  background: rgba(10, 14, 38, 0.6) !important;
+  border-color: var(--sf-border) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Card header text */
+html.scifi .card-header {
+  color: var(--sf-text-muted) !important;
+  letter-spacing: 0.1em;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   7. TABLES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .table-header {
+  color: var(--sf-cyan-dim) !important;
+  background: rgba(0, 240, 255, 0.03) !important;
+  border-bottom: 1px solid var(--sf-border) !important;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+}
+
+html.scifi .table-cell {
+  color: var(--sf-text-primary) !important;
+  border-color: rgba(0, 240, 255, 0.05) !important;
+}
+
+html.scifi thead th,
+html.scifi thead td {
+  background: rgba(0, 240, 255, 0.03) !important;
+  color: var(--sf-cyan-dim) !important;
+  border-bottom: 1px solid var(--sf-border) !important;
+}
+
+html.scifi tbody tr {
+  transition: background-color 0.2s ease;
+}
+
+html.scifi tbody tr:hover {
+  background-color: rgba(0, 240, 255, 0.03) !important;
+}
+
+html.scifi tbody td {
+  border-color: rgba(0, 240, 255, 0.04) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   8. BUTTONS
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Primary — cyan gradient */
+html.scifi .btn-primary {
+  background: linear-gradient(135deg, #006a73, #00b4cc) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  box-shadow: 0 2px 8px rgba(0, 240, 255, 0.15);
+  transition: all 0.3s ease !important;
+}
+
+html.scifi .btn-primary:hover {
+  background: linear-gradient(135deg, #008899, #00d4ee) !important;
+  box-shadow: 0 4px 16px rgba(0, 240, 255, 0.3);
+  transform: translateY(-1px);
+}
+
+/* Danger — red glow */
+html.scifi .btn-danger {
+  background: linear-gradient(135deg, #8b0000, #cc2222) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 68, 68, 0.2);
+  box-shadow: 0 2px 8px rgba(255, 68, 68, 0.15);
+  transition: all 0.3s ease !important;
+}
+
+html.scifi .btn-danger:hover {
+  background: linear-gradient(135deg, #aa1111, #ee3333) !important;
+  box-shadow: 0 4px 16px rgba(255, 68, 68, 0.3);
+  transform: translateY(-1px);
+}
+
+/* Deploy — cyan gradient instead of purple */
+html.scifi .btn-deploy {
+  background: linear-gradient(135deg, #007a88, #00d4ee) !important;
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  box-shadow: 0 2px 10px rgba(0, 240, 255, 0.15);
+  transition: all 0.3s ease !important;
+}
+
+html.scifi .btn-deploy:hover {
+  background: linear-gradient(135deg, #009cb0, #00f0ff) !important;
+  box-shadow: 0 6px 24px rgba(0, 240, 255, 0.35);
+  transform: translateY(-2px);
+}
+
+html.scifi .btn-deploy:active {
+  transform: translateY(0);
+}
+
+html.scifi .btn-deploy:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+  transform: none;
+}
+
+/* Deploy live variant */
+html.scifi .btn-deploy-live {
+  background: linear-gradient(135deg, #006644, #00cc88) !important;
+  border: 1px solid rgba(0, 255, 136, 0.2);
+}
+
+html.scifi .btn-deploy-live:hover {
+  background: linear-gradient(135deg, #008855, #00ee99) !important;
+  box-shadow: 0 6px 24px rgba(0, 255, 136, 0.3);
+}
+
+/* Secondary — subtle glass */
+html.scifi .btn-secondary {
+  background: rgba(0, 240, 255, 0.06) !important;
+  color: var(--sf-text-primary) !important;
+  border: 1px solid var(--sf-border);
+  transition: all 0.3s ease !important;
+}
+
+html.scifi .btn-secondary:hover {
+  background: rgba(0, 240, 255, 0.12) !important;
+  border-color: var(--sf-border-hover);
+  transform: translateY(-1px);
+}
+
+/* Generic button hover lift for bg-blue / bg-red buttons */
+html.scifi button[class*="bg-blue-600"] {
+  background: linear-gradient(135deg, #006a73, #00b4cc) !important;
+  transition: all 0.3s ease !important;
+}
+
+html.scifi button[class*="bg-blue-600"]:hover {
+  box-shadow: 0 4px 16px rgba(0, 240, 255, 0.25) !important;
+  transform: translateY(-1px);
+}
+
+html.scifi button[class*="bg-red-600"] {
+  background: linear-gradient(135deg, #8b0000, #cc2222) !important;
+  transition: all 0.3s ease !important;
+}
+
+html.scifi button[class*="bg-red-600"]:hover {
+  box-shadow: 0 4px 16px rgba(255, 68, 68, 0.25) !important;
+  transform: translateY(-1px);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   9. TYPOGRAPHY
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .text-white {
+  color: #eef2ff !important;
+}
+
+html.scifi .text-slate-100 { color: #e2e8f8 !important; }
+html.scifi .text-slate-200 { color: #c8d0e0 !important; }
+html.scifi .text-slate-300 { color: #9aa8c4 !important; }
+html.scifi .text-slate-400 { color: var(--sf-text-muted) !important; }
+html.scifi .text-slate-500 { color: var(--sf-text-dim) !important; }
+
+html.scifi .text-profit {
+  color: var(--sf-green) !important;
+  text-shadow: 0 0 6px rgba(0, 255, 136, 0.3);
+}
+
+html.scifi .text-loss {
+  color: var(--sf-red) !important;
+  text-shadow: 0 0 6px rgba(255, 68, 68, 0.3);
+}
+
+html.scifi .text-accent,
+html.scifi [class*="text-accent"] {
+  color: var(--sf-cyan) !important;
+}
+
+html.scifi .value-positive {
+  color: var(--sf-green) !important;
+  text-shadow: 0 0 5px rgba(0, 255, 136, 0.25);
+}
+
+html.scifi .value-negative {
+  color: var(--sf-red) !important;
+  text-shadow: 0 0 5px rgba(255, 68, 68, 0.25);
+}
+
+/* Monospace numbers — subtle glow */
+html.scifi .font-mono {
+  font-family: var(--sf-font-mono) !important;
+  text-shadow: 0 0 4px rgba(0, 240, 255, 0.1);
+}
+
+/* Gradient text overrides */
+html.scifi .from-accent {
+  --tw-gradient-from: #00f0ff;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   10. BADGES & TAGS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .return-badge {
+  font-family: var(--sf-font-mono);
+}
+
+html.scifi .return-badge-positive {
+  background: rgba(0, 255, 136, 0.06) !important;
+  color: var(--sf-green) !important;
+  border: 1px solid rgba(0, 255, 136, 0.2) !important;
+  box-shadow: 0 0 6px rgba(0, 255, 136, 0.08);
+  text-shadow: 0 0 4px rgba(0, 255, 136, 0.2);
+}
+
+html.scifi .return-badge-negative {
+  background: rgba(255, 68, 68, 0.06) !important;
+  color: var(--sf-red) !important;
+  border: 1px solid rgba(255, 68, 68, 0.2) !important;
+  box-shadow: 0 0 6px rgba(255, 68, 68, 0.08);
+  text-shadow: 0 0 4px rgba(255, 68, 68, 0.2);
+}
+
+html.scifi .strategy-tag {
+  background: rgba(0, 240, 255, 0.05) !important;
+  color: var(--sf-cyan-dim) !important;
+  border: 1px solid rgba(0, 240, 255, 0.12) !important;
+  transition: all 0.25s ease !important;
+}
+
+html.scifi .strategy-tag:hover {
+  background: rgba(0, 240, 255, 0.1) !important;
+  color: var(--sf-cyan) !important;
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.1);
+}
+
+/* Ticker badges — BUY/SELL neon */
+html.scifi .ticker-up {
+  color: var(--sf-green) !important;
+  background: rgba(0, 255, 136, 0.08) !important;
+  text-shadow: 0 0 4px rgba(0, 255, 136, 0.2);
+}
+
+html.scifi .ticker-down {
+  color: var(--sf-red) !important;
+  background: rgba(255, 68, 68, 0.08) !important;
+  text-shadow: 0 0 4px rgba(255, 68, 68, 0.2);
+}
+
+/* Featured ribbon */
+html.scifi .featured-ribbon {
+  background: linear-gradient(135deg, #0a1535, #0e2050) !important;
+  color: var(--sf-cyan-dim) !important;
+  border-bottom: 1px solid var(--sf-border);
+}
+
+/* Market status badges */
+html.scifi .bg-profit\/10 {
+  background-color: rgba(0, 255, 136, 0.08) !important;
+}
+
+html.scifi .bg-loss\/10 {
+  background-color: rgba(255, 68, 68, 0.08) !important;
+}
+
+html.scifi .bg-accent\/10,
+html.scifi [class*="bg-accent/10"] {
+  background-color: rgba(0, 240, 255, 0.06) !important;
+}
+
+html.scifi .bg-accent\/15,
+html.scifi [class*="bg-accent/15"] {
+  background-color: rgba(0, 240, 255, 0.1) !important;
+}
+
+html.scifi .bg-accent\/20,
+html.scifi [class*="bg-accent/20"] {
+  background-color: rgba(0, 240, 255, 0.12) !important;
+}
+
+/* Strategy status badges — ENTERED/WAITING */
+html.scifi .bg-loss\/15 {
+  background-color: rgba(255, 68, 68, 0.1) !important;
+}
+
+html.scifi .border-loss\/30 {
+  border-color: rgba(255, 68, 68, 0.2) !important;
+}
+
+html.scifi .border-accent\/30,
+html.scifi [class*="border-accent/"] {
+  border-color: rgba(0, 240, 255, 0.2) !important;
+}
+
+html.scifi .bg-accent\/15.text-accent {
+  color: var(--sf-cyan) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   11. FORMS & INPUTS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .input-field,
+html.scifi .search-input,
+html.scifi select,
+html.scifi input[type="text"],
+html.scifi input[type="number"],
+html.scifi input[type="date"],
+html.scifi input[type="time"],
+html.scifi textarea {
+  background: rgba(8, 12, 35, 0.7) !important;
+  border: 1px solid var(--sf-border) !important;
+  color: var(--sf-text-primary) !important;
+  transition: all 0.3s ease !important;
+}
+
+html.scifi .input-field:focus,
+html.scifi .search-input:focus,
+html.scifi select:focus,
+html.scifi input:focus,
+html.scifi textarea:focus {
+  border-color: rgba(0, 240, 255, 0.4) !important;
+  box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.08), 0 0 12px rgba(0, 240, 255, 0.1) !important;
+  background: rgba(8, 12, 35, 0.9) !important;
+  outline: none !important;
+}
+
+html.scifi .search-input::placeholder,
+html.scifi input::placeholder,
+html.scifi textarea::placeholder {
+  color: var(--sf-text-dim) !important;
+}
+
+html.scifi select option {
+  background-color: #0e1230;
+  color: var(--sf-text-primary);
+}
+
+/* Focus ring override — cyan instead of blue/purple */
+html.scifi *:focus-visible {
+  outline: 2px solid rgba(0, 240, 255, 0.35);
+  outline-offset: 2px;
+}
+
+html.scifi [class*="focus:ring-blue-500"] {
+  --tw-ring-color: rgba(0, 240, 255, 0.3) !important;
+}
+
+html.scifi [class*="focus:border-blue-500"] {
+  border-color: rgba(0, 240, 255, 0.4) !important;
+}
+
+/* Checkbox overrides */
+html.scifi .premium-checkbox {
+  border-color: rgba(0, 240, 255, 0.25) !important;
+}
+
+html.scifi .premium-checkbox:checked {
+  background: var(--sf-cyan) !important;
+  border-color: var(--sf-cyan) !important;
+}
+
+html.scifi .premium-checkbox:hover {
+  border-color: rgba(0, 240, 255, 0.5) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   12. CHARTS (Recharts)
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .recharts-cartesian-grid line {
+  stroke: rgba(0, 240, 255, 0.06) !important;
+}
+
+html.scifi .recharts-text {
+  fill: var(--sf-text-muted) !important;
+}
+
+html.scifi .recharts-default-tooltip {
+  background: rgba(10, 14, 38, 0.92) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--sf-border-glow) !important;
+  box-shadow: var(--sf-glow-cyan), 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  border-radius: 10px !important;
+}
+
+html.scifi .recharts-tooltip-label {
+  color: var(--sf-cyan) !important;
+}
+
+html.scifi .recharts-bar-background rect {
+  fill: rgba(0, 240, 255, 0.01) !important;
+}
+
+/* Chart container subtle glow frame */
+html.scifi .recharts-responsive-container {
+  border-radius: 8px;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   13. ANIMATIONS & KEYFRAMES
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Grid opacity oscillation */
+@keyframes scifi-grid-pulse {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Subtle background nebula movement */
+@keyframes scifi-nebula-shift {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(-15px, 10px) scale(1.02);
+  }
+  66% {
+    transform: translate(10px, -8px) scale(0.98);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+/* Element glow breathing */
+@keyframes scifi-glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(0, 240, 255, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.25);
+  }
+}
+
+/* Rising particles */
+@keyframes scifi-float-particle {
+  0% {
+    transform: translateY(100vh) translateX(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.6;
+  }
+  90% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateY(-20px) translateX(30px);
+    opacity: 0;
+  }
+}
+
+/* Pulsing live indicator dot */
+@keyframes scifi-live-dot {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 4px rgba(0, 255, 136, 0.4);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+    box-shadow: 0 0 10px rgba(0, 255, 136, 0.7);
+  }
+}
+
+/* Card border breathing */
+@keyframes scifi-border-glow {
+  0%, 100% {
+    border-color: rgba(0, 240, 255, 0.1);
+  }
+  50% {
+    border-color: rgba(0, 240, 255, 0.25);
+  }
+}
+
+/* Scanline sweep (optional subtle effect) */
+@keyframes scifi-scanline {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100vh);
+  }
+}
+
+/* Neon text pulse */
+@keyframes scifi-text-glow {
+  0%, 100% {
+    text-shadow: 0 0 4px rgba(0, 240, 255, 0.3), 0 0 8px rgba(0, 240, 255, 0.1);
+  }
+  50% {
+    text-shadow: 0 0 8px rgba(0, 240, 255, 0.5), 0 0 16px rgba(0, 240, 255, 0.2);
+  }
+}
+
+/* Apply breathing glow to live pulse indicators */
+html.scifi .pulse-live {
+  animation: scifi-live-dot 2s ease-in-out infinite !important;
+}
+
+/* Apply border breathing on glass-card-interactive elements */
+html.scifi .glass-card-interactive {
+  animation: scifi-border-glow 4s ease-in-out infinite;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   14. UTILITY CLASSES
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Neon glow text */
+html.scifi .scifi-glow-text {
+  color: var(--sf-cyan);
+  text-shadow:
+    0 0 6px rgba(0, 240, 255, 0.4),
+    0 0 12px rgba(0, 240, 255, 0.2),
+    0 0 24px rgba(0, 240, 255, 0.1);
+}
+
+/* Reusable glass panel */
+html.scifi .scifi-glass-panel {
+  background: var(--sf-bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--sf-border-glow);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Animated neon border */
+html.scifi .scifi-neon-border {
+  border: 1px solid var(--sf-border-glow);
+  animation: scifi-border-glow 3s ease-in-out infinite;
+  border-radius: 12px;
+}
+
+/* Particle container — CSS-only floating particles */
+html.scifi .scifi-particles {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+html.scifi .scifi-particles::before,
+html.scifi .scifi-particles::after {
+  content: '';
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: var(--sf-cyan);
+  border-radius: 50%;
+  opacity: 0;
+  box-shadow: 0 0 4px var(--sf-cyan);
+}
+
+html.scifi .scifi-particles::before {
+  left: 20%;
+  bottom: 0;
+  animation: scifi-float-particle 12s linear infinite;
+}
+
+html.scifi .scifi-particles::after {
+  left: 65%;
+  bottom: 0;
+  animation: scifi-float-particle 18s linear infinite 6s;
+}
+
+/* Cyan highlight for active / selected states */
+html.scifi .scifi-active {
+  background: rgba(0, 240, 255, 0.06);
+  border-left: 2px solid var(--sf-cyan);
+  box-shadow: inset 4px 0 8px rgba(0, 240, 255, 0.05);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   15. OVERRIDE EXISTING TAILWIND CLASSES
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Terminal background colors */
+html.scifi .bg-terminal-bg {
+  background-color: var(--sf-bg-deep) !important;
+}
+
+html.scifi .bg-terminal-card {
+  background: var(--sf-bg-card) !important;
+}
+
+html.scifi .bg-terminal-hover {
+  background-color: rgba(0, 240, 255, 0.04) !important;
+}
+
+html.scifi .hover\:bg-terminal-hover:hover {
+  background-color: rgba(0, 240, 255, 0.06) !important;
+}
+
+html.scifi .border-terminal-border {
+  border-color: var(--sf-border) !important;
+}
+
+/* Accent color overrides — purple to cyan */
+html.scifi .bg-accent {
+  background-color: var(--sf-cyan) !important;
+}
+
+html.scifi .bg-accent-light {
+  background-color: rgba(0, 240, 255, 0.7) !important;
+}
+
+html.scifi .bg-accent-dark {
+  background-color: #00a8b8 !important;
+}
+
+html.scifi .border-accent {
+  border-color: var(--sf-cyan) !important;
+}
+
+html.scifi .ring-accent {
+  --tw-ring-color: var(--sf-cyan) !important;
+}
+
+/* Slate background overrides */
+html.scifi .bg-slate-700 {
+  background-color: rgba(10, 14, 38, 0.6) !important;
+}
+
+html.scifi .bg-slate-800 {
+  background-color: rgba(8, 10, 30, 0.7) !important;
+}
+
+html.scifi .bg-slate-900 {
+  background-color: rgba(6, 8, 24, 0.8) !important;
+}
+
+html.scifi .bg-slate-950 {
+  background-color: rgba(4, 6, 18, 0.9) !important;
+}
+
+html.scifi .hover\:bg-slate-600:hover {
+  background-color: rgba(0, 240, 255, 0.06) !important;
+}
+
+html.scifi .hover\:bg-slate-700:hover {
+  background-color: rgba(0, 240, 255, 0.06) !important;
+}
+
+/* Semi-transparent overlays */
+html.scifi [class*="bg-white/[0.0"] {
+  background-color: rgba(0, 240, 255, 0.02) !important;
+}
+
+html.scifi [class*="hover:bg-white/"]:hover {
+  background-color: rgba(0, 240, 255, 0.06) !important;
+}
+
+/* Border overrides */
+html.scifi .border-slate-600 {
+  border-color: var(--sf-border) !important;
+}
+
+html.scifi .border-slate-700 {
+  border-color: var(--sf-border) !important;
+}
+
+html.scifi .border-slate-800 {
+  border-color: rgba(0, 240, 255, 0.06) !important;
+}
+
+/* Hover text overrides */
+html.scifi .hover\:text-slate-200:hover {
+  color: var(--sf-text-primary) !important;
+}
+
+html.scifi .hover\:text-slate-300:hover {
+  color: var(--sf-text-primary) !important;
+}
+
+html.scifi .hover\:text-accent:hover {
+  color: var(--sf-cyan) !important;
+}
+
+/* Tinted overlay backgrounds — profit/loss/accent */
+html.scifi [class*="bg-emerald-500/"],
+html.scifi [class*="bg-emerald-400/"] {
+  background-color: rgba(0, 255, 136, 0.06) !important;
+}
+
+html.scifi [class*="bg-red-500/"],
+html.scifi [class*="bg-red-400/"] {
+  background-color: rgba(255, 68, 68, 0.06) !important;
+}
+
+html.scifi [class*="bg-blue-500/"] {
+  background-color: rgba(0, 240, 255, 0.08) !important;
+}
+
+/* Dropdown & floating menus */
+html.scifi .bg-slate-900\/90,
+html.scifi [class*="bg-slate-900/"] {
+  background-color: rgba(8, 10, 28, 0.92) !important;
+  backdrop-filter: blur(16px);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   16. MAIN CONTENT AREA OVERRIDE
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Let body grid show through the main content area */
+html.scifi main.bg-terminal-bg,
+html.scifi main[class*="bg-terminal-bg"] {
+  background: transparent !important;
+}
+
+/* Page content areas — transparent */
+html.scifi main > div {
+  position: relative;
+  z-index: 1;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   17. REDUCED MOTION
+   ───────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html.scifi *,
+  html.scifi *::before,
+  html.scifi *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   18. TOAST NOTIFICATIONS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .toast-item {
+  background: rgba(10, 14, 38, 0.92) !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--sf-border-glow) !important;
+  box-shadow: var(--sf-glow-cyan), 0 8px 24px rgba(0, 0, 0, 0.4) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   19. SHIMMER & LOADING STATES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .shimmer-loading::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 240, 255, 0.03),
+    transparent
+  ) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   20. PROGRESS BARS & GAUGES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .bg-slate-800.rounded-full,
+html.scifi .h-2.bg-slate-800,
+html.scifi .h-3.bg-slate-800 {
+  background-color: rgba(0, 240, 255, 0.08) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   21. CHART TOOLTIP CUSTOM PANELS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi [class*="bg-terminal-card/"] {
+  background: rgba(10, 14, 38, 0.95) !important;
+  border: 1px solid var(--sf-border-glow);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   22. STRATEGY BUILDER LEG CARDS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi [class*="rounded-xl"][class*="bg-white/[0.02]"] {
+  background: rgba(10, 14, 38, 0.5) !important;
+  border-color: var(--sf-border) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   23. AUTH PAGES PROTECTION (preserve original dark style)
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .auth-page,
+html.scifi .auth-page * {
+  /* Auth pages keep their own dark styling — no sci-fi overrides */
+}
+
+html.scifi .auth-page .text-white { color: #ffffff !important; }
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   24. IV SURFACE & HEATMAP OVERRIDES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi .bg-slate-900\/90 {
+  background-color: rgba(8, 10, 28, 0.93) !important;
+  backdrop-filter: blur(12px);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   25. SMOOTH THEME TRANSITIONS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.scifi body,
+html.scifi .glass-card,
+html.scifi .glass-sidebar,
+html.scifi header,
+html.scifi aside,
+html.scifi main,
+html.scifi .card,
+html.scifi input,
+html.scifi select,
+html.scifi button {
+  transition:
+    background-color 0.35s ease,
+    color 0.25s ease,
+    border-color 0.35s ease,
+    box-shadow 0.35s ease;
+}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wifi, WifiOff, Clock, Sun, Moon, Menu, LogOut, User, Crown } from 'lucide-react';
+import { Wifi, WifiOff, Clock, Sun, Moon, Menu, LogOut, User, Crown, Sparkles, Undo2 } from 'lucide-react';
 import { useHealth } from '../../hooks/useApi';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -18,7 +18,7 @@ function safeFormatTime(date) {
 
 export default function Header({ onMobileMenuToggle }) {
   const { data: health, isError } = useHealth();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme, uiStyle, toggleUiStyle } = useTheme();
   const { user, logout, isAdmin } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [time, setTime] = useState(new Date());
@@ -89,10 +89,39 @@ export default function Header({ onMobileMenuToggle }) {
           <span className="hidden sm:inline">{connected ? 'Connected' : 'Disconnected'}</span>
         </div>
 
+        {/* UI Style Toggle — Classic ↔ Sci-Fi */}
+        <button
+          onClick={toggleUiStyle}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-300 ${
+            uiStyle === 'scifi'
+              ? 'bg-[#00f0ff]/10 text-[#00f0ff] border border-[#00f0ff]/25 shadow-[0_0_12px_rgba(0,240,255,0.15)] hover:shadow-[0_0_20px_rgba(0,240,255,0.25)]'
+              : 'bg-white/[0.04] text-slate-400 border border-transparent hover:bg-white/[0.08] hover:text-slate-200'
+          }`}
+          title={uiStyle === 'scifi' ? 'Switch to Classic UI' : 'Switch to New UI'}
+        >
+          {uiStyle === 'scifi' ? (
+            <>
+              <Undo2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Classic</span>
+            </>
+          ) : (
+            <>
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">New UI</span>
+            </>
+          )}
+        </button>
+
+        {/* Dark/Light Toggle (disabled when scifi is active) */}
         <button
           onClick={toggleTheme}
-          className="flex items-center justify-center w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 hover:text-accent transition-all"
-          title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          className={`flex items-center justify-center w-8 h-8 rounded-xl transition-all ${
+            uiStyle === 'scifi'
+              ? 'bg-white/[0.02] text-slate-600 cursor-not-allowed opacity-40'
+              : 'bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 hover:text-accent'
+          }`}
+          title={uiStyle === 'scifi' ? 'Dark/Light toggle disabled in Sci-Fi mode' : theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          disabled={uiStyle === 'scifi'}
         >
           {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
