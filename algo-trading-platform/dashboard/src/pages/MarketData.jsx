@@ -11,6 +11,7 @@ import Card from '../components/common/Card';
 import { useIndices, useOptionChain, useExpiries, useLotSizes, usePaperTradingStatus, usePlacePaperOrder, useStartPaperTrading } from '../hooks/useApi';
 import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../components/common/ToastProvider';
+import OIAnalysis from './MarketData/OIAnalysis';
 
 // ─── Fallback data ────────────────────────────────────────────────────────────
 const fallbackIndices = [
@@ -471,6 +472,7 @@ export default function MarketData() {
   const [symbol, setSymbol] = useState('NIFTY');
   const [expiry, setExpiry] = useState('');
   const [tradeModal, setTradeModal] = useState(null); // { row, optionType }
+  const [activeTab, setActiveTab] = useState('chain'); // 'chain' | 'oi-analysis'
 
   const { data: paperStatus } = usePaperTradingStatus();
   const placePaperOrder = usePlacePaperOrder();
@@ -648,22 +650,48 @@ export default function MarketData() {
         </ResponsiveContainer>
       </div>
 
-      {/* ── 5. Option Chain Table ───────────────────────────────────── */}
+      {/* ── 5. Option Chain / OI Analysis ───────────────────────────── */}
       <div className="rounded-xl overflow-hidden"
         style={cardStyle}>
-        {/* Header */}
+        {/* Header with tab switcher */}
         <div className={`flex items-center justify-between px-4 py-3 border-b ${theme === 'dark' ? 'border-slate-800/60' : 'border-slate-200'}`}>
-          <div>
-            <h3 className="text-sm font-bold text-white">Option Chain</h3>
+          <div className="flex items-center gap-4">
+            {/* Tab buttons */}
+            <div className="flex items-center gap-1 p-0.5 rounded-lg" style={{ background: theme === 'dark' ? 'rgba(15,20,30,0.6)' : 'rgba(0,0,0,0.04)' }}>
+              {[
+                { id: 'chain', label: 'Option Chain' },
+                { id: 'oi-analysis', label: 'OI Analysis' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className="transition-all duration-200"
+                  style={{
+                    padding: '5px 14px',
+                    borderRadius: 7,
+                    fontSize: 12,
+                    fontWeight: activeTab === tab.id ? 700 : 500,
+                    color: activeTab === tab.id ? (theme === 'dark' ? '#00f0ff' : '#7c3aed') : (theme === 'dark' ? '#94a3b8' : '#64748b'),
+                    background: activeTab === tab.id ? (theme === 'dark' ? 'rgba(0,240,255,0.1)' : 'rgba(124,58,237,0.08)') : 'transparent',
+                    border: activeTab === tab.id ? `1px solid ${theme === 'dark' ? 'rgba(0,240,255,0.2)' : 'rgba(124,58,237,0.15)'}` : '1px solid transparent',
+                    cursor: 'pointer',
+                    letterSpacing: '0.01em',
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {/* Spot + ATM info */}
             {chainData?.spot_price > 0 && (
-              <p className="text-[11px] text-slate-400 mt-0.5">
+              <div className="hidden sm:flex items-center gap-3 text-[11px] text-slate-400">
                 Spot: <span className="font-mono font-bold text-white">
                   {Number(chainData.spot_price).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </span>
                 {chainData?.atm_strike > 0 && (
-                  <span className="ml-3">ATM: <span className="font-mono text-blue-400 font-bold">{chainData.atm_strike}</span></span>
+                  <span>ATM: <span className="font-mono text-blue-400 font-bold">{chainData.atm_strike}</span></span>
                 )}
-              </p>
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -695,28 +723,43 @@ export default function MarketData() {
           </div>
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto">
+        {/* Tab content */}
+        {activeTab === 'oi-analysis' ? (
+          <OIAnalysis
+            chain={chain}
+            spot={chainData?.spot_price || 0}
+            symbol={symbol}
+            vix={indiaVix}
+            theme={theme}
+          />
+        ) : (
+        /* Table — scrollable with sticky header */
+        <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
           <table className="w-full text-xs">
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr>
-                <th colSpan="5" className="py-2 text-center text-emerald-400 font-semibold bg-emerald-500/5 border-b border-slate-800/60">
+                <th colSpan="5" className={`py-2 text-center text-emerald-400 font-semibold border-b border-slate-800/60 ${theme === 'dark' ? 'bg-emerald-500/5 bg-[#0b0e14]' : 'bg-emerald-50'}`}
+                  style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(240,253,244,0.97)' }}>
                   CALLS
                 </th>
-                <th className={`py-2 text-center text-slate-300 font-semibold ${theme === 'dark' ? 'bg-slate-800/40' : 'bg-slate-100'} border-b border-slate-800/60 w-20`}>
+                <th className={`py-2 text-center text-slate-300 font-semibold border-b border-slate-800/60 w-20`}
+                  style={{ background: theme === 'dark' ? 'rgba(20,24,36,0.97)' : 'rgba(241,245,249,0.97)' }}>
                   STRIKE
                 </th>
-                <th colSpan="5" className="py-2 text-center text-red-400 font-semibold bg-red-500/5 border-b border-slate-800/60">
+                <th colSpan="5" className={`py-2 text-center text-red-400 font-semibold border-b border-slate-800/60`}
+                  style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(254,242,242,0.97)' }}>
                   PUTS
                 </th>
               </tr>
-              <tr className={`text-slate-500 ${theme === 'dark' ? 'bg-slate-900/30' : 'bg-slate-50'} border-b border-slate-800/40`}>
+              <tr className={`text-slate-500 border-b border-slate-800/40`}
+                style={{ background: theme === 'dark' ? 'rgba(11,14,20,0.97)' : 'rgba(248,250,252,0.97)' }}>
                 <th className="px-2 py-2 text-right font-medium">OI</th>
                 <th className="px-2 py-2 text-right font-medium" title="OI Change from previous close">OI Chg</th>
                 <th className="px-2 py-2 text-right font-medium">Vol</th>
                 <th className="px-2 py-2 text-right font-medium">Chg%</th>
                 <th className="px-2 py-2 text-right font-medium">LTP</th>
-                <th className={`px-2 py-2 text-center font-medium ${theme === 'dark' ? 'bg-slate-800/40' : 'bg-slate-100'}`}>Strike</th>
+                <th className="px-2 py-2 text-center font-medium"
+                  style={{ background: theme === 'dark' ? 'rgba(20,24,36,0.97)' : 'rgba(241,245,249,0.97)' }}>Strike</th>
                 <th className="px-2 py-2 text-right font-medium">LTP</th>
                 <th className="px-2 py-2 text-right font-medium">Chg%</th>
                 <th className="px-2 py-2 text-right font-medium">Vol</th>
@@ -820,6 +863,7 @@ export default function MarketData() {
             </tbody>
           </table>
         </div>
+        )}
       </div>
 
       {/* ── Trade Modal ───────────────────────────────────────────── */}
