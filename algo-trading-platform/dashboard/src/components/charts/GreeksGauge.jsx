@@ -2,7 +2,7 @@ import React from 'react';
 
 function GaugeBar({ label, value, limit, unit = '' }) {
   const safeValue = value ?? 0;
-  const pct = limit ? Math.min(Math.abs(safeValue / limit) * 100, 100) : 50;
+  const pct = limit ? Math.min(Math.abs(safeValue / limit) * 100, 100) : 0;
   const color = pct > 80 ? 'bg-loss' : pct > 60 ? 'bg-yellow-500' : 'bg-blue-500';
 
   return (
@@ -25,8 +25,8 @@ function GaugeBar({ label, value, limit, unit = '' }) {
 }
 
 export default function GreeksGauge({ greeks, limits }) {
-  const defaultGreeks = greeks || { delta: 15.5, gamma: 2.3, theta: -4500, vega: 8200 };
-  const defaultLimits = limits || { delta: 50, gamma: 10, theta: -10000, vega: 20000 };
+  const defaultGreeks = greeks || { delta: 0, gamma: 0, theta: 0, vega: 0 };
+  const defaultLimits = limits || { delta: 500, gamma: 100, theta: -25000, vega: 50000 };
 
   return (
     <div className="space-y-3">
