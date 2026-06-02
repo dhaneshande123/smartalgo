@@ -2708,21 +2708,39 @@ async def portfolio_positions():
         except Exception as e:
             logger.warning(f"Paper positions fetch failed: {e}")
 
-    # Last resort: mock — add frontend-compatible aliases
-    raw_mock = _mock.positions()
-    for mp in raw_mock:
-        mp.setdefault("type", mp.get("option_type", ""))
-        mp.setdefault("qty", mp.get("quantity", 0))
-        mp.setdefault("avgPrice", mp.get("avg_price", 0))
-        mp.setdefault("pnl", mp.get("pnl_unrealized", 0))
-        mp.setdefault("strategy", mp.get("strategy_id", ""))
-        # Make symbol the full instrument name for the table
-        if mp.get("instrument") and mp.get("symbol") != mp.get("instrument"):
-            mp["symbol"] = mp["instrument"]
+    # Build positions from deployed strategies (no mock)
+    parsed = []
+    for sid, strat in _deployed_strategies.items():
+        status = str(strat.get("status", "")).upper()
+        if status not in ("RUNNING", "ENTERED"):
+            continue
+        if not strat.get("entered"):
+            continue
+        strat_name = strat.get("name", sid)
+        for pos in strat.get("positions", []):
+            sym = pos.get("symbol", "")
+            p_strike = pos.get("strike", 0)
+            p_opt_type = pos.get("option_type", "")
+            p_qty = int(pos.get("qty", 0))
+            p_entry = float(pos.get("entry_price", 0))
+            p_ltp = float(pos.get("ltp", p_entry))
+            p_pnl = float(pos.get("pnl", 0))
+            signed_qty = p_qty if pos.get("side") == "BUY" else -p_qty
+            parsed.append({
+                "instrument": sym, "symbol": sym,
+                "underlying": (strat.get("underlying") or "NIFTY").upper(),
+                "strike": p_strike, "option_type": p_opt_type, "type": p_opt_type,
+                "expiry": pos.get("expiry", ""),
+                "quantity": signed_qty, "qty": signed_qty,
+                "avg_price": p_entry, "avgPrice": p_entry,
+                "ltp": p_ltp, "pnl_unrealized": p_pnl, "pnl_realized": 0.0, "pnl": p_pnl,
+                "product_type": "NRML", "strategy_id": sid, "strategy": strat_name,
+                "delta": 0, "gamma": 0, "theta": 0, "vega": 0,
+            })
     return {
-        "positions": raw_mock,
-        "count": len(raw_mock),
-        "source": "mock",
+        "positions": parsed,
+        "count": len(parsed),
+        "source": "deployed_strategies",
         "timestamp": datetime.now(IST).isoformat(),
     }
 
@@ -2771,26 +2789,49 @@ async def portfolio_greeks():
     description="Returns current realized, unrealized, and net P&L with transaction charges breakdown.",
 )
 async def portfolio_pnl():
-    # Try computing P&L from live positions
-    try:
-        if _live_feed and _live_feed._fyers:
-            result = await _fyers_call(_live_feed._fyers.positions)
-            if result and result.get("s") == "ok":
-                positions = result.get("netPositions", result.get("overall", []))
-                if isinstance(positions, list) and len(positions) > 0:
-                    realized = sum(float(p.get("realized_profit", p.get("realizedProfit", 0))) for p in positions)
-                    unrealized = sum(float(p.get("unrealizedProfit", p.get("pl", 0))) for p in positions)
-                    return {
-                        "realized_pnl": round(realized, 2),
-                        "unrealized_pnl": round(unrealized, 2),
-                        "net_pnl": round(realized + unrealized, 2),
-                        "charges": {"total": 0, "brokerage": 0, "stt": 0, "gst": 0},
-                        "source": "fyers_live",
-                        "timestamp": datetime.now(IST).isoformat(),
-                    }
-    except Exception as e:
-        logger.warning(f"Fyers P&L derivation failed: {e}")
-    return _mock.pnl_snapshot()
+    """Real P&L from deployed strategies (paper mode) or Fyers (live mode)."""
+    # Try Fyers live positions first (live mode only)
+    if _TRADING_MODE == "live":
+        try:
+            if _live_feed and _live_feed._fyers:
+                result = await _fyers_call(_live_feed._fyers.positions)
+                if result and result.get("s") == "ok":
+                    positions = result.get("netPositions", result.get("overall", []))
+                    if isinstance(positions, list) and len(positions) > 0:
+                        realized = sum(float(p.get("realized_profit", p.get("realizedProfit", 0))) for p in positions)
+                        unrealized = sum(float(p.get("unrealizedProfit", p.get("pl", 0))) for p in positions)
+                        return {
+                            "realized_pnl": round(realized, 2),
+                            "unrealized_pnl": round(unrealized, 2),
+                            "net_pnl": round(realized + unrealized, 2),
+                            "charges": {"total": 0},
+                            "source": "fyers_live",
+                            "timestamp": datetime.now(IST).isoformat(),
+                        }
+        except Exception as e:
+            logger.warning(f"Fyers P&L derivation failed: {e}")
+
+    # Paper mode: compute from deployed strategies
+    realized = 0.0
+    unrealized = 0.0
+    total_charges = 0.0
+    for strat in _deployed_strategies.values():
+        status = str(strat.get("status", "")).upper()
+        if status in ("EXITED", "STOPPED"):
+            realized += float(strat.get("realized_pnl", strat.get("pnl", 0)) or 0)
+        elif status in ("RUNNING", "ENTERED") and strat.get("entered"):
+            unrealized += float(strat.get("pnl", 0) or 0)
+        total_charges += float(strat.get("total_charges", 0) or 0)
+    net = realized + unrealized - total_charges
+    return {
+        "realized_pnl": round(realized, 2),
+        "unrealized_pnl": round(unrealized, 2),
+        "total_pnl": round(realized + unrealized, 2),
+        "charges": {"total": round(total_charges, 2)},
+        "net_pnl": round(net, 2),
+        "source": "deployed_strategies",
+        "timestamp": datetime.now(IST).isoformat(),
+    }
 
 
 @app.get(
@@ -2831,7 +2872,36 @@ async def portfolio_margin():
                     }
     except Exception as e:
         logger.warning(f"Fyers margin fetch failed: {e}")
-    return _mock.margin_info()
+
+    # Paper mode: compute from Risk Engine
+    try:
+        bundle = _get_risk_inputs()
+        re = bundle["risk_engine"]
+        margin = re.calculate_margin(
+            bundle["strategies"], bundle["chain_cache"],
+            lot_sizes=bundle["lot_sizes"],
+            available_capital=bundle["capital"],
+        )
+        return {
+            "margin_used": margin["total_margin_required"],
+            "used_margin": margin["total_margin_required"],
+            "available_margin": margin["available_margin"],
+            "total_margin": bundle["capital"],
+            "span_margin": margin["span_margin"],
+            "exposure_margin": margin["exposure_margin"],
+            "margin_utilization": margin["utilization_pct"],
+            "utilization_pct": margin["utilization_pct"],
+            "source": "risk_engine_live",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as e:
+        logger.warning(f"Risk engine margin failed: {e}")
+        return {
+            "margin_used": 0, "available_margin": 0, "total_margin": 0,
+            "margin_utilization": 0, "utilization_pct": 0,
+            "source": "empty",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
 
 
 # ===================================================================

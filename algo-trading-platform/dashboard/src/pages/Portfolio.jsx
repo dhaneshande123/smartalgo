@@ -11,24 +11,12 @@ import Card from '../components/common/Card';
 import { useTheme } from '../context/ThemeContext';
 import { usePositions, usePnL, useGreeks, useMarginUsage, usePnLEquityCurve } from '../hooks/useApi';
 
-// ── Fallback data ────────────────────────────────────────────────────────────
-const fallbackPositions = [
-  { id: 1, symbol: 'NIFTY 24100 CE', type: 'CE', qty: -50, avgPrice: 185.50, ltp: 172.30, pnl: 660, strategy: 'Iron Condor NIFTY', expiry: '26-Apr-2026' },
-  { id: 2, symbol: 'NIFTY 24300 CE', type: 'CE', qty: 50, avgPrice: 95.20, ltp: 88.40, pnl: -340, strategy: 'Iron Condor NIFTY', expiry: '26-Apr-2026' },
-  { id: 3, symbol: 'NIFTY 23900 PE', type: 'PE', qty: -50, avgPrice: 142.80, ltp: 130.10, pnl: 635, strategy: 'Iron Condor NIFTY', expiry: '26-Apr-2026' },
-  { id: 4, symbol: 'NIFTY 23700 PE', type: 'PE', qty: 50, avgPrice: 78.60, ltp: 70.25, pnl: -417.5, strategy: 'Iron Condor NIFTY', expiry: '26-Apr-2026' },
-  { id: 5, symbol: 'BANKNIFTY 51200 CE', type: 'CE', qty: -25, avgPrice: 320.40, ltp: 345.80, pnl: -635, strategy: 'Straddle BNF', expiry: '26-Apr-2026' },
-  { id: 6, symbol: 'BANKNIFTY 51200 PE', type: 'PE', qty: -25, avgPrice: 290.60, ltp: 265.20, pnl: 635, strategy: 'Straddle BNF', expiry: '26-Apr-2026' },
-];
-
-const fallbackEquityCurve = Array.from({ length: 30 }, (_, i) => ({
-  time: `${9 + Math.floor(i / 4)}:${String((i % 4) * 15).padStart(2, '0')}`,
-  value: 2000000 + i * 3500 + Math.sin(i / 2) * 25000 + (i * 137 % 8000),
-}));
-
-const fallbackPnL = { realized: 125840, unrealized: 34500, charges: 8200, net: 152140 };
-const fallbackMargin = { used: 1240000, available: 760000, total: 2000000, utilization: 62 };
-const fallbackGreeks = { delta: 0.35, gamma: -0.08, theta: 154.5, vega: -279.3 };
+// ── Fallback data (zeros — no mock) ──────────────────────────────────────────
+const fallbackPositions = [];
+const fallbackEquityCurve = [];
+const fallbackPnL = { realized: 0, unrealized: 0, charges: 0, net: 0 };
+const fallbackMargin = { used: 0, available: 0, total: 0, utilization: 0 };
+const fallbackGreeks = { delta: 0, gamma: 0, theta: 0, vega: 0 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatIndian(num) {
@@ -100,7 +88,7 @@ const PnLTooltip = ({ active, payload, label, theme }) => {
 };
 
 // ── Greek limits for progress bars ───────────────────────────────────────────
-const greekLimits = { delta: 1, gamma: 0.2, theta: 500, vega: 600 };
+const greekLimits = { delta: 500, gamma: 100, theta: 25000, vega: 50000 };
 const greekColors = { delta: '#3b82f6', gamma: '#f59e0b', theta: '#10b981', vega: '#a78bfa' };
 
 // ── ATM detection helper ──────────────────────────────────────────────────────
