@@ -135,6 +135,21 @@ class StateStore:
 
                 CREATE INDEX IF NOT EXISTS idx_risk_events_ts
                     ON risk_events(timestamp);
+
+                CREATE TABLE IF NOT EXISTS candles_cache (
+                    symbol      TEXT NOT NULL,
+                    resolution  TEXT NOT NULL,
+                    ts          INTEGER NOT NULL,
+                    open        REAL,
+                    high        REAL,
+                    low         REAL,
+                    close       REAL,
+                    volume      INTEGER,
+                    PRIMARY KEY (symbol, resolution, ts)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_candles_sym_res
+                    ON candles_cache(symbol, resolution, ts);
                 """
             )
 
@@ -574,6 +589,126 @@ class StateStore:
         except Exception as exc:
             logger.warning(f"StateStore.get_risk_events failed: {exc}")
             return []
+
+    # ------------------------------------------------------------------
+    # Candle cache (for backtesting + chart data)
+    # ------------------------------------------------------------------
+
+    def save_candles(
+        self,
+        symbol: str,
+        resolution: str,
+        candles: list[dict],
+    ) -> int:
+        """Bulk upsert candles into the cache.
+
+        Each candle dict must have: ts (unix epoch int), open, high, low, close, volume.
+        Returns number of rows inserted/updated.
+        """
+        if not candles:
+            return 0
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return 0
+                with self._conn:
+                    self._conn.executemany(
+                        """
+                        INSERT INTO candles_cache (symbol, resolution, ts, open, high, low, close, volume)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(symbol, resolution, ts) DO UPDATE SET
+                            open = excluded.open, high = excluded.high,
+                            low = excluded.low, close = excluded.close,
+                            volume = excluded.volume
+                        """,
+                        [
+                            (
+                                symbol.upper(),
+                                resolution,
+                                int(c["ts"]),
+                                float(c.get("open", 0)),
+                                float(c.get("high", 0)),
+                                float(c.get("low", 0)),
+                                float(c.get("close", 0)),
+                                int(c.get("volume", 0)),
+                            )
+                            for c in candles
+                        ],
+                    )
+            return len(candles)
+        except Exception as exc:
+            logger.warning(f"StateStore.save_candles failed: {exc}")
+            return 0
+
+    def get_candles(
+        self,
+        symbol: str,
+        resolution: str,
+        from_ts: int | None = None,
+        to_ts: int | None = None,
+        limit: int = 5000,
+    ) -> list[dict]:
+        """Fetch cached candles, oldest first.
+
+        If from_ts/to_ts are provided, filter by timestamp range.
+        """
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return []
+                conditions = ["symbol = ?", "resolution = ?"]
+                params: list = [symbol.upper(), resolution]
+                if from_ts is not None:
+                    conditions.append("ts >= ?")
+                    params.append(int(from_ts))
+                if to_ts is not None:
+                    conditions.append("ts <= ?")
+                    params.append(int(to_ts))
+                params.append(limit)
+                where = " AND ".join(conditions)
+                cursor = self._conn.execute(
+                    f"SELECT ts, open, high, low, close, volume FROM candles_cache "
+                    f"WHERE {where} ORDER BY ts ASC LIMIT ?",
+                    params,
+                )
+                rows = cursor.fetchall()
+            return [
+                {
+                    "ts": row["ts"],
+                    "open": row["open"],
+                    "high": row["high"],
+                    "low": row["low"],
+                    "close": row["close"],
+                    "volume": row["volume"],
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.warning(f"StateStore.get_candles failed: {exc}")
+            return []
+
+    def get_candle_date_range(self, symbol: str, resolution: str) -> dict:
+        """Return the min/max timestamps cached for a symbol + resolution."""
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return {"min_ts": None, "max_ts": None, "count": 0}
+                cursor = self._conn.execute(
+                    """SELECT MIN(ts) AS min_ts, MAX(ts) AS max_ts, COUNT(*) AS cnt
+                       FROM candles_cache WHERE symbol = ? AND resolution = ?""",
+                    (symbol.upper(), resolution),
+                )
+                row = cursor.fetchone()
+            if row and row["cnt"] > 0:
+                return {
+                    "min_ts": row["min_ts"],
+                    "max_ts": row["max_ts"],
+                    "count": row["cnt"],
+                }
+            return {"min_ts": None, "max_ts": None, "count": 0}
+        except Exception as exc:
+            logger.warning(f"StateStore.get_candle_date_range failed: {exc}")
+            return {"min_ts": None, "max_ts": None, "count": 0}
 
     # ------------------------------------------------------------------
     # Utility

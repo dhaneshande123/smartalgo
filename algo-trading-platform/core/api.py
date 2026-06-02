@@ -2454,7 +2454,8 @@ async def market_candles(
     ),
     count: int = Query(default=50, ge=1, le=500, description="Number of candles to return"),
 ):
-    # Use real Fyers candle data if connected
+    """Candle data — cache-first, then Fyers live, then mock as last resort."""
+    # 1. Try Fyers (which internally checks SQLite cache first, then Fyers API)
     if _live_feed and _live_feed.is_connected:
         try:
             candles = await _live_feed.get_candles(symbol, timeframe, count)
@@ -2467,8 +2468,38 @@ async def market_candles(
                     "source": "fyers_live",
                 }
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Fyers candles failed, using mock: {e}")
+            logger.warning(f"Fyers candles failed: {e}")
+
+    # 2. Try SQLite cache directly (even if Fyers is disconnected)
+    try:
+        from core.state_store import get_store
+        RESOLUTION_MAP_LOCAL = {"M1": "1", "M5": "5", "M15": "15", "M30": "30", "H1": "60", "D1": "D"}
+        res = RESOLUTION_MAP_LOCAL.get(timeframe, "D")
+        store = get_store()
+        cached = store.get_candles(symbol.upper(), res, limit=count + 50)
+        if cached and len(cached) >= min(count, 3):
+            from datetime import datetime as _dt, timezone as _tz
+            result = cached[-count:] if len(cached) > count else cached
+            candles = [
+                {
+                    "timestamp": _dt.fromtimestamp(c["ts"], tz=_tz.utc).isoformat(),
+                    "open": c["open"], "high": c["high"],
+                    "low": c["low"], "close": c["close"],
+                    "volume": c["volume"],
+                }
+                for c in result
+            ]
+            return {
+                "symbol": symbol.upper(),
+                "timeframe": timeframe,
+                "count": len(candles),
+                "candles": candles,
+                "source": "sqlite_cache",
+            }
+    except Exception as e:
+        logger.debug(f"Candle cache fallback failed: {e}")
+
+    # 3. Last resort: mock
     return {
         "symbol": symbol.upper(),
         "timeframe": timeframe,

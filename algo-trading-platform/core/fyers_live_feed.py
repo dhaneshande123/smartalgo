@@ -297,16 +297,165 @@ class FyersLiveFeed:
         symbol: str,
         timeframe: str = "D1",
         count: int = 50,
+        use_cache: bool = True,
     ) -> list[dict[str, Any]]:
-        """Fetch historical candle data.
+        """Fetch historical candle data — cache-first with Fyers fill.
+
+        Strategy:
+        1. Check SQLite candle cache for the requested range
+        2. If cache has enough data, return it (zero API calls)
+        3. If cache is empty/stale, fetch from Fyers with retry on 429
+        4. Cache the result for next time
 
         Args:
             symbol: Internal name (NIFTY, BANKNIFTY, etc.)
             timeframe: M1, M5, M15, M30, H1, D1
             count: Number of candles to return
+            use_cache: If True (default), check SQLite first
 
         Returns:
-            list of candle dicts with Date, Open, High, Low, Close, Volume.
+            list of candle dicts with timestamp, open, high, low, close, volume.
+        """
+        resolution = RESOLUTION_MAP.get(timeframe, "D")
+
+        # ── 1. Try SQLite cache first ────────────────────────────────
+        if use_cache:
+            try:
+                from core.state_store import get_store
+                store = get_store()
+                cached = store.get_candles(symbol.upper(), resolution, limit=count + 50)
+                if cached and len(cached) >= min(count, 3):
+                    # Return the last `count` cached candles
+                    result = cached[-count:] if len(cached) > count else cached
+                    return [
+                        {
+                            "timestamp": datetime.fromtimestamp(c["ts"], tz=timezone.utc).isoformat(),
+                            "open": c["open"],
+                            "high": c["high"],
+                            "low": c["low"],
+                            "close": c["close"],
+                            "volume": c["volume"],
+                        }
+                        for c in result
+                    ]
+            except Exception as e:
+                logger.debug(f"Candle cache read failed: {e}")
+
+        # ── 2. Fetch from Fyers (with retry on 429) ────────────────
+        if not self._connected or not self._fyers:
+            return []
+
+        fyers_sym = INDEX_SYMBOLS.get(symbol.upper())
+        if not fyers_sym:
+            return []
+
+        now = datetime.now()
+        if resolution == "D":
+            days_back = count * 2
+        else:
+            minutes = int(resolution) if resolution.isdigit() else 60
+            days_back = max(5, (count * minutes) // (6 * 60) + 2)
+
+        range_from = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        range_to = now.strftime("%Y-%m-%d")
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._fyers.history(
+                        data={
+                            "symbol": fyers_sym,
+                            "resolution": resolution,
+                            "date_format": "1",
+                            "range_from": range_from,
+                            "range_to": range_to,
+                            "cont_flag": "1",
+                        }
+                    ),
+                )
+
+                # Rate limited — wait and retry
+                if response and response.get("code") == 429:
+                    wait = (attempt + 1) * 2  # 2s, 4s, 6s
+                    logger.warning(f"Fyers rate limited (429), retry in {wait}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                    continue
+
+                if response and response.get("s") == "ok" and response.get("candles"):
+                    raw = response["candles"]
+                    raw = raw[-count:] if len(raw) > count else raw
+
+                    candles = []
+                    cache_rows = []
+                    for c in raw:
+                        ts = c[0]
+                        if isinstance(ts, (int, float)):
+                            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                        else:
+                            dt = datetime.now(timezone.utc)
+
+                        candles.append({
+                            "timestamp": dt.isoformat(),
+                            "open": float(c[1]),
+                            "high": float(c[2]),
+                            "low": float(c[3]),
+                            "close": float(c[4]),
+                            "volume": int(c[5]),
+                        })
+                        cache_rows.append({
+                            "ts": int(ts) if isinstance(ts, (int, float)) else int(dt.timestamp()),
+                            "open": float(c[1]),
+                            "high": float(c[2]),
+                            "low": float(c[3]),
+                            "close": float(c[4]),
+                            "volume": int(c[5]),
+                        })
+
+                    # ── 3. Cache to SQLite ──────────────────────────
+                    if cache_rows:
+                        try:
+                            from core.state_store import get_store
+                            store = get_store()
+                            store.save_candles(symbol.upper(), resolution, cache_rows)
+                            logger.info(f"Cached {len(cache_rows)} {resolution} candles for {symbol}")
+                        except Exception as e:
+                            logger.debug(f"Candle cache write failed: {e}")
+
+                    return candles
+                else:
+                    msg = response.get("message", "") if response else "no response"
+                    logger.warning(f"Fyers candles failed: code={response.get('code', '?')}, msg={msg}")
+                    return []
+
+            except Exception as e:
+                logger.error(f"Fyers candles error (attempt {attempt+1}): {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                    continue
+                return []
+
+        return []
+
+    async def fetch_history_range(
+        self,
+        symbol: str,
+        resolution: str,
+        from_date: str,
+        to_date: str,
+    ) -> list[dict]:
+        """Fetch candles for a specific date range (for backtest bulk download).
+
+        Args:
+            symbol: NIFTY, BANKNIFTY, etc.
+            resolution: D, 5, 15, 30, 60, etc. (Fyers format)
+            from_date: YYYY-MM-DD
+            to_date: YYYY-MM-DD
+
+        Returns:
+            list of raw candle dicts [{ts, open, high, low, close, volume}]
         """
         if not self._connected or not self._fyers:
             return []
@@ -315,65 +464,55 @@ class FyersLiveFeed:
         if not fyers_sym:
             return []
 
-        resolution = RESOLUTION_MAP.get(timeframe, "D")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._fyers.history(
+                        data={
+                            "symbol": fyers_sym,
+                            "resolution": resolution,
+                            "date_format": "1",
+                            "range_from": from_date,
+                            "range_to": to_date,
+                            "cont_flag": "1",
+                        }
+                    ),
+                )
 
-        # Calculate date range based on count and resolution
-        now = datetime.now()
-        if resolution == "D":
-            days_back = count * 2  # extra buffer for weekends/holidays
-        else:
-            minutes = int(resolution) if resolution.isdigit() else 60
-            days_back = max(5, (count * minutes) // (6 * 60) + 2)
+                if response and response.get("code") == 429:
+                    wait = (attempt + 1) * 3
+                    logger.warning(f"History rate limited, retry in {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
 
-        range_from = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        range_to = now.strftime("%Y-%m-%d")
+                if response and response.get("s") == "ok" and response.get("candles"):
+                    return [
+                        {
+                            "ts": int(c[0]),
+                            "open": float(c[1]),
+                            "high": float(c[2]),
+                            "low": float(c[3]),
+                            "close": float(c[4]),
+                            "volume": int(c[5]),
+                        }
+                        for c in response["candles"]
+                    ]
+                else:
+                    msg = response.get("message", "") if response else "no response"
+                    logger.warning(f"History fetch failed: {msg}")
+                    return []
 
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self._fyers.history(
-                    data={
-                        "symbol": fyers_sym,
-                        "resolution": resolution,
-                        "date_format": "1",
-                        "range_from": range_from,
-                        "range_to": range_to,
-                        "cont_flag": "1",
-                    }
-                ),
-            )
-
-            if response and response.get("s") == "ok" and response.get("candles"):
-                raw = response["candles"]
-                # Take the last `count` candles
-                raw = raw[-count:] if len(raw) > count else raw
-
-                candles = []
-                for c in raw:
-                    # c = [timestamp, open, high, low, close, volume]
-                    ts = c[0]
-                    if isinstance(ts, (int, float)):
-                        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-                    else:
-                        dt = datetime.now(timezone.utc)
-
-                    candles.append({
-                        "timestamp": dt.isoformat(),
-                        "open": float(c[1]),
-                        "high": float(c[2]),
-                        "low": float(c[3]),
-                        "close": float(c[4]),
-                        "volume": int(c[5]),
-                    })
-                return candles
-            else:
-                logger.warning(f"Fyers candles failed: {response}")
+            except Exception as e:
+                logger.error(f"History fetch error: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                    continue
                 return []
 
-        except Exception as e:
-            logger.error(f"Fyers candles error: {e}")
-            return []
+        return []
 
     # ------------------------------------------------------------------
     # Market Depth
