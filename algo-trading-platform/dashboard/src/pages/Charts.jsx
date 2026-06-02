@@ -277,11 +277,11 @@ export default function Charts() {
     const volumeSeries = chart.addSeries(HistogramSeries, {
       color: '#7c3aed',
       priceFormat: { type: 'volume' },
-      priceScaleId: 'volume',
-    }, 1);
+      priceScaleId: '',
+    });
 
-    chart.priceScale('volume').applyOptions({
-      scaleMargins: { top: 0.1, bottom: 0 },
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: { top: 0.8, bottom: 0 },
     });
 
     chartRef.current = chart;
