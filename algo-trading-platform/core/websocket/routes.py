@@ -166,21 +166,64 @@ def _generate_portfolio_snapshot() -> dict[str, Any]:
         except Exception as e:
             logger.warning(f"Fyers portfolio snapshot failed: {e}")
 
-    # Fallback to mock
-    num_positions = random.randint(2, 5)
-    positions = [_generate_position() for _ in range(num_positions)]
-    total_unrealized = sum(p["pnl_unrealized"] for p in positions)
-    total_realized = sum(p["pnl_realized"] for p in positions)
+    # Fallback: compute from deployed strategies (paper mode) instead of mock
+    try:
+        from core import api as _api_mod
+        deployed = getattr(_api_mod, "_deployed_strategies", {}) or {}
+        total_unrealized = 0.0
+        total_realized = 0.0
+        positions = []
+        for strat in deployed.values():
+            status = str(strat.get("status", "")).upper()
+            if status in ("EXITED", "STOPPED"):
+                total_realized += float(strat.get("realized_pnl", strat.get("pnl", 0)) or 0)
+            elif status in ("RUNNING", "ENTERED") and strat.get("entered"):
+                total_unrealized += float(strat.get("pnl", 0) or 0)
+                for pos in strat.get("positions", []):
+                    positions.append({
+                        "symbol": pos.get("symbol", ""),
+                        "quantity": pos.get("qty", 0),
+                        "avg_price": round(float(pos.get("entry_price", 0) or 0), 2),
+                        "ltp": round(float(pos.get("ltp", pos.get("entry_price", 0)) or 0), 2),
+                        "pnl_unrealized": round(float(pos.get("pnl", 0) or 0), 2),
+                        "pnl_realized": 0.0,
+                    })
 
-    return {
-        "positions": positions,
-        "total_unrealized_pnl": round(total_unrealized, 2),
-        "total_realized_pnl": round(total_realized, 2),
-        "total_pnl": round(total_unrealized + total_realized, 2),
-        "margin_used": round(random.uniform(100_000, 500_000), 2),
-        "margin_available": round(random.uniform(200_000, 800_000), 2),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+        # Margin from Risk Engine
+        margin_used = 0.0
+        margin_available = 1_000_000.0
+        try:
+            from core import risk_engine as re
+            chain_cache = getattr(_api_mod, "_fyers_chain_cache", {}) or {}
+            margin = re.calculate_margin(deployed, chain_cache, available_capital=1_000_000.0)
+            margin_used = margin.get("total_margin_required", 0)
+            margin_available = margin.get("available_margin", 1_000_000.0)
+        except Exception:
+            pass
+
+        return {
+            "positions": positions,
+            "total_unrealized_pnl": round(total_unrealized, 2),
+            "total_realized_pnl": round(total_realized, 2),
+            "total_pnl": round(total_unrealized + total_realized, 2),
+            "margin_used": round(margin_used, 2),
+            "margin_available": round(margin_available, 2),
+            "source": "deployed_strategies",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.warning(f"Deployed strategies portfolio fallback failed: {e}")
+        # Zero-state instead of random mock
+        return {
+            "positions": [],
+            "total_unrealized_pnl": 0.0,
+            "total_realized_pnl": 0.0,
+            "total_pnl": 0.0,
+            "margin_used": 0.0,
+            "margin_available": 0.0,
+            "source": "empty",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 def _generate_order_update() -> dict[str, Any]:

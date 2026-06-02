@@ -2734,26 +2734,34 @@ async def portfolio_positions():
     description="Returns aggregated net delta, gamma, theta, and vega across all positions.",
 )
 async def portfolio_greeks():
-    # Try computing from live positions
+    """Real portfolio Greeks from Black-Scholes via the Risk Engine."""
     try:
-        if _live_feed and _live_feed._fyers:
-            result = await _fyers_call(_live_feed._fyers.positions)
-            if result and result.get("s") == "ok":
-                positions = result.get("netPositions", result.get("overall", []))
-                if isinstance(positions, list) and len(positions) > 0:
-                    # Aggregate approximate greeks from position data
-                    return {
-                        "net_delta": sum(float(p.get("pl", 0)) * 0.001 for p in positions),
-                        "net_gamma": -0.05,
-                        "net_theta": sum(float(p.get("netQty", 0)) * 0.1 for p in positions),
-                        "net_vega": sum(float(p.get("netQty", 0)) * -0.5 for p in positions),
-                        "position_count": len(positions),
-                        "source": "fyers_derived",
-                        "timestamp": datetime.now(IST).isoformat(),
-                    }
+        bundle = _get_risk_inputs()
+        re = bundle["risk_engine"]
+        agg = re.aggregate_portfolio_greeks(
+            bundle["strategies"], bundle["chain_cache"],
+            lot_sizes=bundle["lot_sizes"],
+        )
+        pf = agg["portfolio"]
+        return {
+            "net_delta": round(pf["delta"], 4),
+            "net_gamma": round(pf["gamma"], 6),
+            "net_theta": round(pf["theta"], 2),
+            "net_vega": round(pf["vega"], 2),
+            "position_count": agg["positions_count"],
+            "strategies_count": agg["strategies_count"],
+            "source": "risk_engine_live",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
     except Exception as e:
-        logger.warning(f"Fyers greeks derivation failed: {e}")
-    return _mock.portfolio_greeks()
+        logger.warning(f"Portfolio greeks computation failed: {e}")
+        return {
+            "net_delta": 0.0, "net_gamma": 0.0,
+            "net_theta": 0.0, "net_vega": 0.0,
+            "position_count": 0,
+            "source": "empty",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
 
 
 @app.get(
