@@ -2,10 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as api from '../api/client';
 
 export const useHealth = () => useQuery({ queryKey: ['health'], queryFn: api.getHealth });
-export const useIndices = () => useQuery({ queryKey: ['indices'], queryFn: api.getIndices, refetchInterval: 500 });
+export const useIndices = () => useQuery({ queryKey: ['indices'], queryFn: api.getIndices, refetchInterval: 2000 });
 export const useMarketStatus = () => useQuery({ queryKey: ['marketStatus'], queryFn: api.getMarketStatus });
 export const useOptionChain = (symbol, expiry) =>
-  useQuery({ queryKey: ['optionChain', symbol, expiry], queryFn: () => api.getOptionChain(symbol, expiry), refetchInterval: 1000 });
+  useQuery({ queryKey: ['optionChain', symbol, expiry], queryFn: () => api.getOptionChain(symbol, expiry), refetchInterval: 3000 });
 export const useExpiries = (symbol) =>
   useQuery({ queryKey: ['expiries', symbol], queryFn: () => api.getExpiries(symbol) });
 export const useLotSizes = () =>

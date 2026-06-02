@@ -1935,10 +1935,10 @@ _mock = MockDataGenerator(seed=42)
 # Cache for last successful Fyers responses — prevents flicker to mock on temporary failures
 _fyers_chain_cache: dict[str, dict] = {}
 _fyers_chain_cache_time: dict[str, float] = {}  # symbol -> timestamp of last fetch
-_CHAIN_CACHE_TTL = 0.8  # seconds — keep low so 1s frontend poll gets fresh data
+_CHAIN_CACHE_TTL = 3.0  # seconds — balance freshness vs Fyers rate limit (~200 req/min)
 _fyers_indices_cache: dict | None = None
 _fyers_indices_cache_time: float = 0  # timestamp of last indices fetch
-_INDICES_CACHE_TTL = 1.0  # seconds — serve cached indices within this window
+_INDICES_CACHE_TTL = 2.0  # seconds — serve cached indices (was 1.0, increased for rate limit)
 
 # In-memory stores for strategy management
 _deployed_strategies: dict[str, dict] = {}

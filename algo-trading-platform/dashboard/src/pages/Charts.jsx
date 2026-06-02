@@ -1,13 +1,11 @@
-import { useState, useMemo, useCallback } from 'react';
-import {
-  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ReferenceLine, CartesianGrid, Area, Cell,
-} from 'recharts';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { createChart, ColorType, CrosshairMode, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
 import {
   BarChart3, Clock, TrendingUp, TrendingDown, Activity, Layers,
   ChevronDown, Eye, EyeOff,
 } from 'lucide-react';
 import { useCandles, useIndices } from '../hooks/useApi';
+import { useTheme } from '../context/ThemeContext';
 
 /* ════════════════════════════════════════════════════════════
    Constants
@@ -102,108 +100,12 @@ function calcMACD(data) {
   const ema12 = calcEMA(data, 12);
   const ema26 = calcEMA(data, 26);
   const macdLine = ema12.map((v, i) => (v !== null && ema26[i] !== null) ? v - ema26[i] : null);
-  // Signal line: EMA 9 of MACD
   const macdData = macdLine.map(v => ({ close: v || 0 }));
   const signal = calcEMA(macdData, 9);
   return macdLine.map((v, i) => ({
     macd: v, signal: signal[i],
     histogram: (v !== null && signal[i] !== null) ? v - signal[i] : null,
   }));
-}
-
-/* ════════════════════════════════════════════════════════════
-   Custom Candlestick Bar Shape
-   ════════════════════════════════════════════════════════════ */
-
-function CandlestickShape(props) {
-  const { x, width, payload, background } = props;
-  if (!payload || !background) return null;
-
-  const { open, close, high, low, _domainMin, _domainRange } = payload;
-  if (_domainRange == null || _domainRange === 0) return null;
-
-  const bullish = close >= open;
-  const color = bullish ? '#22c55e' : '#ef4444';
-
-  // Convert price to Y pixel using background plot area
-  const plotY = background.y;
-  const plotH = background.height;
-  const toY = (price) => plotY + plotH - ((price - _domainMin) / _domainRange) * plotH;
-
-  const oY = toY(open);
-  const cY = toY(close);
-  const hY = toY(high);
-  const lY = toY(low);
-
-  const bodyTop = Math.min(oY, cY);
-  const bodyH = Math.max(Math.abs(cY - oY), 1);
-  const barW = Math.min(Math.max(width * 0.65, 2), 14);
-  const cx = x + width / 2;
-
-  return (
-    <g>
-      <line x1={cx} y1={hY} x2={cx} y2={bodyTop} stroke={color} strokeWidth={1} />
-      <line x1={cx} y1={bodyTop + bodyH} x2={cx} y2={lY} stroke={color} strokeWidth={1} />
-      <rect
-        x={cx - barW / 2} y={bodyTop} width={barW} height={bodyH}
-        fill={color} fillOpacity={bullish ? 0.25 : 0.85}
-        stroke={color} strokeWidth={1} rx={1}
-      />
-    </g>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════
-   Custom Tooltip
-   ════════════════════════════════════════════════════════════ */
-
-function ChartTooltip({ active, payload }) {
-  if (!active || !payload?.[0]?.payload) return null;
-  const d = payload[0].payload;
-  const bullish = d.close >= d.open;
-  const change = d.close - d.open;
-  const changePct = d.open ? ((change / d.open) * 100).toFixed(2) : '0.00';
-
-  return (
-    <div className="bg-terminal-card/95 backdrop-blur border border-terminal-border rounded-lg px-3 py-2 shadow-xl text-xs">
-      <div className="text-slate-400 mb-1.5 font-medium">{d.time}</div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-        <span className="text-slate-500">Open</span>
-        <span className="font-mono text-white text-right">{d.open?.toFixed(2)}</span>
-        <span className="text-slate-500">High</span>
-        <span className="font-mono text-profit text-right">{d.high?.toFixed(2)}</span>
-        <span className="text-slate-500">Low</span>
-        <span className="font-mono text-loss text-right">{d.low?.toFixed(2)}</span>
-        <span className="text-slate-500">Close</span>
-        <span className={`font-mono text-right ${bullish ? 'text-profit' : 'text-loss'}`}>{d.close?.toFixed(2)}</span>
-        <span className="text-slate-500">Change</span>
-        <span className={`font-mono text-right ${bullish ? 'text-profit' : 'text-loss'}`}>
-          {change >= 0 ? '+' : ''}{change.toFixed(2)} ({changePct}%)
-        </span>
-        <span className="text-slate-500">Volume</span>
-        <span className="font-mono text-slate-300 text-right">{(d.volume / 1000).toFixed(0)}K</span>
-      </div>
-    </div>
-  );
-}
-
-function SubTooltip({ active, payload, type }) {
-  if (!active || !payload?.[0]?.payload) return null;
-  const d = payload[0].payload;
-  return (
-    <div className="bg-terminal-card/95 backdrop-blur border border-terminal-border rounded-lg px-2.5 py-1.5 shadow-xl text-[10px]">
-      {type === 'rsi' && d.rsi != null && (
-        <span className="font-mono text-yellow-400">RSI: {d.rsi.toFixed(1)}</span>
-      )}
-      {type === 'macd' && (
-        <div className="space-y-0.5">
-          {d.macd != null && <div><span className="text-slate-500">MACD:</span> <span className="font-mono text-blue-400">{d.macd.toFixed(2)}</span></div>}
-          {d.signal != null && <div><span className="text-slate-500">Signal:</span> <span className="font-mono text-orange-400">{d.signal.toFixed(2)}</span></div>}
-          {d.histogram != null && <div><span className="text-slate-500">Hist:</span> <span className={`font-mono ${d.histogram >= 0 ? 'text-profit' : 'text-loss'}`}>{d.histogram.toFixed(2)}</span></div>}
-        </div>
-      )}
-    </div>
-  );
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -227,16 +129,37 @@ function StatBadge({ label, value, positive, icon: Icon }) {
    ════════════════════════════════════════════════════════════ */
 
 export default function Charts() {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
   const [symbol, setSymbol] = useState('NIFTY');
   const [timeframe, setTimeframe] = useState('M5');
   const [activeIndicators, setActiveIndicators] = useState(['sma20', 'ema9']);
   const [showVolume, setShowVolume] = useState(true);
-  const [subChart, setSubChart] = useState('rsi'); // 'rsi' | 'macd' | 'none'
+  const [subChart, setSubChart] = useState('rsi');
   const [indicatorMenu, setIndicatorMenu] = useState(false);
 
   const tfConfig = TIMEFRAMES.find(t => t.value === timeframe) || TIMEFRAMES[1];
   const { data: candleData } = useCandles(symbol, timeframe, tfConfig.count);
   const { data: indicesData } = useIndices();
+
+  /* ── Refs for lightweight-charts ── */
+  const chartContainerRef = useRef(null);
+  const chartRef = useRef(null);
+  const candleSeriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
+  const indicatorSeriesRef = useRef({}); // keyed by indicator name
+
+  /* ── Sub-chart refs (RSI / MACD) ── */
+  const rsiContainerRef = useRef(null);
+  const rsiChartRef = useRef(null);
+  const rsiSeriesRef = useRef(null);
+
+  const macdContainerRef = useRef(null);
+  const macdChartRef = useRef(null);
+  const macdLineSeriesRef = useRef(null);
+  const macdSignalSeriesRef = useRef(null);
+  const macdHistSeriesRef = useRef(null);
 
   // Parse candle data
   const rawCandles = useMemo(() => {
@@ -244,18 +167,13 @@ export default function Charts() {
     if (!Array.isArray(candles)) return [];
     return candles.map(c => ({
       timestamp: c.timestamp,
-      time: new Date(c.timestamp).toLocaleTimeString('en-IN', {
-        hour: '2-digit', minute: '2-digit',
-        ...(timeframe === 'D1' ? { hour: undefined, minute: undefined } : {}),
-      }),
-      date: new Date(c.timestamp).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
       open: c.open,
       high: c.high,
       low: c.low,
       close: c.close,
       volume: c.volume,
     }));
-  }, [candleData, timeframe]);
+  }, [candleData]);
 
   // Calculate indicators
   const chartData = useMemo(() => {
@@ -289,25 +207,6 @@ export default function Charts() {
     });
   }, [rawCandles, activeIndicators]);
 
-  // Price domain for Y axis
-  const priceDomain = useMemo(() => {
-    if (!chartData.length) return [0, 100];
-    let min = Infinity, max = -Infinity;
-    chartData.forEach(d => {
-      if (d.low < min) min = d.low;
-      if (d.high > max) max = d.high;
-    });
-    const pad = (max - min) * 0.08;
-    return [Math.floor(min - pad), Math.ceil(max + pad)];
-  }, [chartData]);
-
-  // Embed domain info into each data point for the candlestick shape
-  const candleChartData = useMemo(() => {
-    const [dMin, dMax] = priceDomain;
-    const dRange = dMax - dMin;
-    return chartData.map(d => ({ ...d, _domainMin: dMin, _domainRange: dRange }));
-  }, [chartData, priceDomain]);
-
   // Current spot info from indices
   const spotInfo = useMemo(() => {
     const rawIndices = indicesData?.indices || indicesData;
@@ -327,9 +226,424 @@ export default function Charts() {
     );
   }, []);
 
-  const maxVol = useMemo(() => {
-    return Math.max(...chartData.map(d => d.volume || 0), 1);
-  }, [chartData]);
+  /* ════════════════════════════════════════════════════════════
+     Helper: convert timestamp to lightweight-charts time (UTC seconds)
+     ════════════════════════════════════════════════════════════ */
+  const toChartTime = useCallback((ts) => {
+    return Math.floor(new Date(ts).getTime() / 1000);
+  }, []);
+
+  /* ════════════════════════════════════════════════════════════
+     Create / destroy the main chart on mount / unmount
+     ════════════════════════════════════════════════════════════ */
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+
+    const chart = createChart(container, {
+      layout: {
+        background: { type: ColorType.Solid, color: isDark ? '#0b0e14' : '#ffffff' },
+        textColor: isDark ? '#94a3b8' : '#475569',
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+        horzLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+        scaleMargins: { top: 0.1, bottom: 0.2 },
+      },
+      timeScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      handleScroll: { vertTouchDrag: false },
+      width: container.clientWidth,
+      height: 500,
+    });
+
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#22c55e',
+      downColor: '#ef4444',
+      borderUpColor: '#22c55e',
+      borderDownColor: '#ef4444',
+      wickUpColor: '#22c55e',
+      wickDownColor: '#ef4444',
+    });
+
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      color: '#7c3aed',
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+    }, 1);
+
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: { top: 0.1, bottom: 0 },
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volumeSeriesRef.current = volumeSeries;
+
+    const handleResize = () => {
+      if (chartContainerRef.current) {
+        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      indicatorSeriesRef.current = {};
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ════════════════════════════════════════════════════════════
+     Update theme on dark/light change
+     ════════════════════════════════════════════════════════════ */
+  useEffect(() => {
+    if (!chartRef.current) return;
+    chartRef.current.applyOptions({
+      layout: {
+        background: { type: ColorType.Solid, color: isDark ? '#0b0e14' : '#ffffff' },
+        textColor: isDark ? '#94a3b8' : '#475569',
+      },
+      grid: {
+        vertLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+        horzLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+      },
+      rightPriceScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+      },
+      timeScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+      },
+    });
+    // Also update sub-charts
+    [rsiChartRef, macdChartRef].forEach(ref => {
+      if (!ref.current) return;
+      ref.current.applyOptions({
+        layout: {
+          background: { type: ColorType.Solid, color: isDark ? '#0b0e14' : '#ffffff' },
+          textColor: isDark ? '#94a3b8' : '#475569',
+        },
+        grid: {
+          vertLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+          horzLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+        },
+      });
+    });
+  }, [isDark]);
+
+  /* ════════════════════════════════════════════════════════════
+     Update candle + volume + indicator data when chartData changes
+     ════════════════════════════════════════════════════════════ */
+  useEffect(() => {
+    const chart = chartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
+    if (!chart || !candleSeries) return;
+    if (!chartData.length) return;
+
+    // Candle data
+    const candleFormatted = chartData.map(c => ({
+      time: toChartTime(c.timestamp),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }));
+    candleSeries.setData(candleFormatted);
+
+    // Volume data
+    if (volumeSeries) {
+      if (showVolume) {
+        const volumeFormatted = chartData.map(c => ({
+          time: toChartTime(c.timestamp),
+          value: c.volume,
+          color: c.close >= c.open
+            ? 'rgba(34,197,94,0.25)'
+            : 'rgba(239,68,68,0.25)',
+        }));
+        volumeSeries.setData(volumeFormatted);
+      } else {
+        volumeSeries.setData([]);
+      }
+    }
+
+    // Remove old indicator series
+    Object.values(indicatorSeriesRef.current).forEach(s => {
+      try { chart.removeSeries(s); } catch (e) { /* already removed */ }
+    });
+    indicatorSeriesRef.current = {};
+
+    // Add indicator overlays
+    activeIndicators.forEach(key => {
+      const cfg = INDICATOR_PRESETS[key];
+      if (!cfg) return;
+
+      if (cfg.type === 'bb') {
+        // Bollinger Bands: upper, middle, lower
+        const bbUpper = chart.addSeries(LineSeries, {
+          color: cfg.color,
+          lineWidth: 1,
+          lineStyle: 2, // Dashed
+          title: '',
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        const bbMiddle = chart.addSeries(LineSeries, {
+          color: cfg.color,
+          lineWidth: 1,
+          lineStyle: 1, // Dotted
+          title: 'BB',
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        const bbLower = chart.addSeries(LineSeries, {
+          color: cfg.color,
+          lineWidth: 1,
+          lineStyle: 2, // Dashed
+          title: '',
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+
+        const upperData = [];
+        const middleData = [];
+        const lowerData = [];
+        chartData.forEach(c => {
+          const t = toChartTime(c.timestamp);
+          if (c.bb_upper != null) upperData.push({ time: t, value: c.bb_upper });
+          if (c.bb_middle != null) middleData.push({ time: t, value: c.bb_middle });
+          if (c.bb_lower != null) lowerData.push({ time: t, value: c.bb_lower });
+        });
+        bbUpper.setData(upperData);
+        bbMiddle.setData(middleData);
+        bbLower.setData(lowerData);
+
+        indicatorSeriesRef.current[`${key}_upper`] = bbUpper;
+        indicatorSeriesRef.current[`${key}_middle`] = bbMiddle;
+        indicatorSeriesRef.current[`${key}_lower`] = bbLower;
+      } else {
+        // SMA / EMA
+        const series = chart.addSeries(LineSeries, {
+          color: cfg.color,
+          lineWidth: 1.5,
+          title: cfg.label,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        const lineData = [];
+        chartData.forEach(c => {
+          const t = toChartTime(c.timestamp);
+          if (c[key] != null) lineData.push({ time: t, value: c[key] });
+        });
+        series.setData(lineData);
+        indicatorSeriesRef.current[key] = series;
+      }
+    });
+
+    // Fit content
+    chart.timeScale().fitContent();
+  }, [chartData, activeIndicators, showVolume, toChartTime]);
+
+  /* ════════════════════════════════════════════════════════════
+     RSI Sub-Chart
+     ════════════════════════════════════════════════════════════ */
+  useEffect(() => {
+    // Clean up previous RSI chart
+    if (rsiChartRef.current) {
+      rsiChartRef.current.remove();
+      rsiChartRef.current = null;
+      rsiSeriesRef.current = null;
+    }
+
+    if (subChart !== 'rsi') return;
+    const container = rsiContainerRef.current;
+    if (!container) return;
+
+    const rsiChart = createChart(container, {
+      layout: {
+        background: { type: ColorType.Solid, color: isDark ? '#0b0e14' : '#ffffff' },
+        textColor: isDark ? '#94a3b8' : '#475569',
+        fontSize: 10,
+      },
+      grid: {
+        vertLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+        horzLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+        scaleMargins: { top: 0.05, bottom: 0.05 },
+      },
+      timeScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      handleScroll: { vertTouchDrag: false },
+      width: container.clientWidth,
+      height: 120,
+    });
+
+    const rsiSeries = rsiChart.addSeries(LineSeries, {
+      color: '#eab308',
+      lineWidth: 1.5,
+      title: 'RSI',
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+
+    rsiChartRef.current = rsiChart;
+    rsiSeriesRef.current = rsiSeries;
+
+    // Set data
+    if (chartData.length) {
+      const rsiData = [];
+      chartData.forEach(c => {
+        if (c.rsi != null) {
+          rsiData.push({ time: toChartTime(c.timestamp), value: c.rsi });
+        }
+      });
+      rsiSeries.setData(rsiData);
+      rsiChart.timeScale().fitContent();
+    }
+
+    const handleResize = () => {
+      if (rsiContainerRef.current) {
+        rsiChart.applyOptions({ width: rsiContainerRef.current.clientWidth });
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      rsiChart.remove();
+      rsiChartRef.current = null;
+      rsiSeriesRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subChart, chartData, isDark]);
+
+  /* ════════════════════════════════════════════════════════════
+     MACD Sub-Chart
+     ════════════════════════════════════════════════════════════ */
+  useEffect(() => {
+    // Clean up previous MACD chart
+    if (macdChartRef.current) {
+      macdChartRef.current.remove();
+      macdChartRef.current = null;
+      macdLineSeriesRef.current = null;
+      macdSignalSeriesRef.current = null;
+      macdHistSeriesRef.current = null;
+    }
+
+    if (subChart !== 'macd') return;
+    const container = macdContainerRef.current;
+    if (!container) return;
+
+    const macdChart = createChart(container, {
+      layout: {
+        background: { type: ColorType.Solid, color: isDark ? '#0b0e14' : '#ffffff' },
+        textColor: isDark ? '#94a3b8' : '#475569',
+        fontSize: 10,
+      },
+      grid: {
+        vertLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+        horzLines: { color: isDark ? 'rgba(100,116,139,0.08)' : 'rgba(0,0,0,0.04)' },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+        scaleMargins: { top: 0.05, bottom: 0.05 },
+      },
+      timeScale: {
+        borderColor: isDark ? 'rgba(100,116,139,0.15)' : 'rgba(0,0,0,0.08)',
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      handleScroll: { vertTouchDrag: false },
+      width: container.clientWidth,
+      height: 120,
+    });
+
+    const histSeries = macdChart.addSeries(HistogramSeries, {
+      title: 'Hist',
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+
+    const macdLineSeries = macdChart.addSeries(LineSeries, {
+      color: '#3b82f6',
+      lineWidth: 1.5,
+      title: 'MACD',
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+
+    const signalSeries = macdChart.addSeries(LineSeries, {
+      color: '#f97316',
+      lineWidth: 1.5,
+      title: 'Signal',
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+
+    macdChartRef.current = macdChart;
+    macdLineSeriesRef.current = macdLineSeries;
+    macdSignalSeriesRef.current = signalSeries;
+    macdHistSeriesRef.current = histSeries;
+
+    // Set data
+    if (chartData.length) {
+      const histData = [];
+      const macdData = [];
+      const signalData = [];
+      chartData.forEach(c => {
+        const t = toChartTime(c.timestamp);
+        if (c.histogram != null) {
+          histData.push({
+            time: t,
+            value: c.histogram,
+            color: c.histogram >= 0 ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)',
+          });
+        }
+        if (c.macd != null) macdData.push({ time: t, value: c.macd });
+        if (c.signal != null) signalData.push({ time: t, value: c.signal });
+      });
+      histSeries.setData(histData);
+      macdLineSeries.setData(macdData);
+      signalSeries.setData(signalData);
+      macdChart.timeScale().fitContent();
+    }
+
+    const handleResize = () => {
+      if (macdContainerRef.current) {
+        macdChart.applyOptions({ width: macdContainerRef.current.clientWidth });
+      }
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      macdChart.remove();
+      macdChartRef.current = null;
+      macdLineSeriesRef.current = null;
+      macdSignalSeriesRef.current = null;
+      macdHistSeriesRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subChart, chartData, isDark]);
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -459,7 +773,7 @@ export default function Charts() {
         </div>
       )}
 
-      {/* ── Main Candlestick Chart ── */}
+      {/* ── Main Candlestick Chart (lightweight-charts) ── */}
       <div className="glass-card !p-3">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
@@ -479,114 +793,22 @@ export default function Charts() {
           </div>
         </div>
 
-        <div style={{ height: subChart !== 'none' ? 380 : 460 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={candleChartData} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e2433" vertical={false} />
-              <XAxis
-                dataKey={timeframe === 'D1' ? 'date' : 'time'}
-                tick={{ fontSize: 10, fill: '#64748b' }}
-                axisLine={{ stroke: '#1e2433' }}
-                tickLine={false}
-                interval="preserveStartEnd"
-                minTickGap={40}
-              />
-              <YAxis
-                domain={priceDomain}
-                tick={{ fontSize: 10, fill: '#64748b' }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={v => v.toLocaleString('en-IN')}
-                width={65}
-              />
-              {showVolume && (
-                <YAxis
-                  yAxisId="volume"
-                  orientation="right"
-                  domain={[0, maxVol * 5]}
-                  hide
-                />
-              )}
-              <Tooltip content={<ChartTooltip />} />
-
-              {/* Volume Bars (background) */}
-              {showVolume && (
-                <Bar yAxisId="volume" dataKey="volume" opacity={0.15} radius={[1, 1, 0, 0]} barSize={8}>
-                  {chartData.map((d, i) => (
-                    <Cell key={i} fill={d.close >= d.open ? '#22c55e' : '#ef4444'} />
-                  ))}
-                </Bar>
-              )}
-
-              {/* Bollinger Bands */}
-              {activeIndicators.includes('bb') && (
-                <>
-                  <Area dataKey="bb_upper" stroke="#6366f1" strokeWidth={1} fill="none" dot={false} strokeDasharray="4 2" connectNulls />
-                  <Area dataKey="bb_lower" stroke="#6366f1" strokeWidth={1} fill="none" dot={false} strokeDasharray="4 2" connectNulls />
-                  <Line dataKey="bb_middle" stroke="#6366f1" strokeWidth={1} dot={false} strokeDasharray="2 2" connectNulls opacity={0.5} />
-                </>
-              )}
-
-              {/* Moving Averages */}
-              {activeIndicators.filter(k => k !== 'bb').map(key => {
-                const cfg = INDICATOR_PRESETS[key];
-                if (!cfg) return null;
-                return (
-                  <Line
-                    key={key}
-                    dataKey={key}
-                    stroke={cfg.color}
-                    strokeWidth={1.5}
-                    dot={false}
-                    connectNulls
-                  />
-                );
-              })}
-
-              {/* Candlestick bars with custom shape */}
-              <Bar
-                dataKey="close"
-                shape={<CandlestickShape />}
-                barSize={12}
-                isAnimationActive={false}
-                background={{ fill: 'transparent' }}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
+        <div
+          ref={chartContainerRef}
+          style={{ height: 500, width: '100%' }}
+          className="rounded-lg overflow-hidden"
+        />
       </div>
 
       {/* ── Sub Chart: RSI ── */}
       {subChart === 'rsi' && (
         <div className="glass-card !p-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">RSI (14)</h3>
-          <div style={{ height: 120 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e2433" vertical={false} />
-                <XAxis dataKey={timeframe === 'D1' ? 'date' : 'time'} tick={{ fontSize: 9, fill: '#475569' }} axisLine={false} tickLine={false} minTickGap={60} />
-                <YAxis domain={[0, 100]} ticks={[20, 30, 50, 70, 80]} tick={{ fontSize: 9, fill: '#475569' }} axisLine={false} tickLine={false} width={30} />
-                <Tooltip content={<SubTooltip type="rsi" />} />
-                <ReferenceLine y={70} stroke="#ef4444" strokeDasharray="3 3" strokeWidth={0.8} />
-                <ReferenceLine y={30} stroke="#22c55e" strokeDasharray="3 3" strokeWidth={0.8} />
-                <ReferenceLine y={50} stroke="#334155" strokeDasharray="2 2" strokeWidth={0.5} />
-                <Area
-                  dataKey="rsi"
-                  stroke="#eab308"
-                  strokeWidth={1.5}
-                  fill="url(#rsiGrad)"
-                  dot={false}
-                  connectNulls
-                />
-                <defs>
-                  <linearGradient id="rsiGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#eab308" stopOpacity={0.15} />
-                    <stop offset="100%" stopColor="#eab308" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
+          <div
+            ref={rsiContainerRef}
+            style={{ height: 120, width: '100%' }}
+            className="rounded-lg overflow-hidden"
+          />
         </div>
       )}
 
@@ -594,24 +816,11 @@ export default function Charts() {
       {subChart === 'macd' && (
         <div className="glass-card !p-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">MACD (12, 26, 9)</h3>
-          <div style={{ height: 120 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e2433" vertical={false} />
-                <XAxis dataKey={timeframe === 'D1' ? 'date' : 'time'} tick={{ fontSize: 9, fill: '#475569' }} axisLine={false} tickLine={false} minTickGap={60} />
-                <YAxis tick={{ fontSize: 9, fill: '#475569' }} axisLine={false} tickLine={false} width={40} />
-                <Tooltip content={<SubTooltip type="macd" />} />
-                <ReferenceLine y={0} stroke="#334155" strokeWidth={0.5} />
-                <Bar dataKey="histogram" barSize={4}>
-                  {chartData.map((d, i) => (
-                    <Cell key={i} fill={d.histogram >= 0 ? '#22c55e' : '#ef4444'} opacity={0.6} />
-                  ))}
-                </Bar>
-                <Line dataKey="macd" stroke="#3b82f6" strokeWidth={1.5} dot={false} connectNulls />
-                <Line dataKey="signal" stroke="#f97316" strokeWidth={1.5} dot={false} connectNulls />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
+          <div
+            ref={macdContainerRef}
+            style={{ height: 120, width: '100%' }}
+            className="rounded-lg overflow-hidden"
+          />
         </div>
       )}
     </div>
