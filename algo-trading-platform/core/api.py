@@ -5113,6 +5113,101 @@ def _resolve_strategy_class(name: str):
 
 
 @app.post(
+    "/api/backtest/fetch-history",
+    tags=["Backtest"],
+    summary="Download historical data for backtesting",
+    description=(
+        "Bulk-downloads historical candles from Fyers and caches to SQLite. "
+        "Respects rate limits with throttled sequential requests. "
+        "Once downloaded, backtests run instantly from cache."
+    ),
+)
+async def backtest_fetch_history(body: dict = Body(...)):
+    """Download and cache historical candle data for a symbol."""
+    symbol = (body.get("symbol") or "NIFTY").upper()
+    resolution = body.get("resolution", "D")
+    start_date = body.get("start_date", "")
+    end_date = body.get("end_date", "")
+
+    if not start_date or not end_date:
+        return {"ok": False, "error": "start_date and end_date required (YYYY-MM-DD)"}
+
+    # Check what we already have cached
+    from core.state_store import get_store
+    store = get_store()
+    existing = store.get_candle_date_range(symbol, resolution)
+
+    if not _live_feed or not _live_feed.is_connected or not _live_feed._fyers:
+        return {
+            "ok": False,
+            "error": "Fyers not connected. Cannot download historical data.",
+            "cached": existing,
+        }
+
+    try:
+        from core.backtest.fyers_data_loader import fetch_fyers_historical_csv
+        csv_path = await fetch_fyers_historical_csv(
+            fyers_client=_live_feed._fyers,
+            symbol=symbol,
+            start_date=start_date,
+            end_date=end_date,
+            resolution=resolution,
+        )
+
+        # Check what we have now
+        updated = store.get_candle_date_range(symbol, resolution)
+        return {
+            "ok": bool(csv_path),
+            "symbol": symbol,
+            "resolution": resolution,
+            "start_date": start_date,
+            "end_date": end_date,
+            "csv_path": csv_path,
+            "candles_cached": updated,
+            "message": f"Downloaded and cached {updated['count']} candles for {symbol} ({resolution})",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"History download failed: {exc}", exc_info=True)
+        return {
+            "ok": False,
+            "error": str(exc),
+            "cached": existing,
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+
+
+@app.get(
+    "/api/backtest/cache-status",
+    tags=["Backtest"],
+    summary="Check cached historical data",
+    description="Shows what candle data is already cached in SQLite for each symbol and resolution.",
+)
+async def backtest_cache_status():
+    """Return inventory of cached candle data."""
+    from core.state_store import get_store
+    store = get_store()
+    inventory = {}
+    for sym in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+        sym_data = {}
+        for res in ["D", "5", "15", "60"]:
+            info = store.get_candle_date_range(sym, res)
+            if info["count"] > 0:
+                from datetime import timezone as _tz
+                sym_data[res] = {
+                    "count": info["count"],
+                    "from": datetime.fromtimestamp(info["min_ts"], tz=_tz.utc).date().isoformat(),
+                    "to": datetime.fromtimestamp(info["max_ts"], tz=_tz.utc).date().isoformat(),
+                }
+        if sym_data:
+            inventory[sym] = sym_data
+    return {
+        "inventory": inventory,
+        "timestamp": datetime.now(IST).isoformat(),
+    }
+
+
+@app.post(
     "/api/backtest/run",
     tags=["Backtest"],
     summary="Run a backtest",

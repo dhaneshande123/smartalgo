@@ -71,33 +71,53 @@ async def fetch_fyers_historical_csv(
     current = start_dt
     while current < end_dt:
         chunk_end = min(current + timedelta(days=chunk_days), end_dt)
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda c=current, ce=chunk_end: fyers_client.history(
-                    data={
-                        "symbol": fyers_sym,
-                        "resolution": res,
-                        "date_format": "1",
-                        "range_from": c.strftime("%Y-%m-%d"),
-                        "range_to": ce.strftime("%Y-%m-%d"),
-                        "cont_flag": "1",
-                    }
-                ),
-            )
 
-            if response and response.get("s") == "ok" and response.get("candles"):
-                all_candles.extend(response["candles"])
-                logger.info(
-                    f"  Chunk {current.date()} to {chunk_end.date()}: "
-                    f"{len(response['candles'])} candles"
+        # Retry loop for rate limits
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda c=current, ce=chunk_end: fyers_client.history(
+                        data={
+                            "symbol": fyers_sym,
+                            "resolution": res,
+                            "date_format": "1",
+                            "range_from": c.strftime("%Y-%m-%d"),
+                            "range_to": ce.strftime("%Y-%m-%d"),
+                            "cont_flag": "1",
+                        }
+                    ),
                 )
-            else:
-                logger.warning(f"  Chunk failed: {response}")
 
-        except Exception as e:
-            logger.error(f"  Chunk error: {e}")
+                # Rate limited — wait and retry
+                if response and response.get("code") == 429:
+                    wait = (attempt + 1) * 3
+                    logger.warning(f"  Rate limited (429), retry in {wait}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                    continue
+
+                if response and response.get("s") == "ok" and response.get("candles"):
+                    all_candles.extend(response["candles"])
+                    logger.info(
+                        f"  Chunk {current.date()} to {chunk_end.date()}: "
+                        f"{len(response['candles'])} candles"
+                    )
+                    break  # success — exit retry loop
+                else:
+                    logger.warning(f"  Chunk failed: {response}")
+                    break  # non-retryable error
+
+            except Exception as e:
+                logger.error(f"  Chunk error: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                else:
+                    break
+
+        # Throttle between chunks to avoid rate limiting
+        await asyncio.sleep(1.5)
 
         current = chunk_end + timedelta(days=1)
 
@@ -145,4 +165,26 @@ async def fetch_fyers_historical_csv(
             ])
 
     logger.info(f"Saved {len(unique)} candles to {csv_path}")
+
+    # Also persist to SQLite candle cache for instant backtest reruns
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        cache_rows = [
+            {
+                "ts": int(c[0]) if isinstance(c[0], (int, float)) else 0,
+                "open": float(c[1]),
+                "high": float(c[2]),
+                "low": float(c[3]),
+                "close": float(c[4]),
+                "volume": int(c[5]),
+            }
+            for c in unique if isinstance(c[0], (int, float))
+        ]
+        if cache_rows:
+            saved = store.save_candles(symbol.upper(), res, cache_rows)
+            logger.info(f"Cached {saved} candles to SQLite for {symbol} {res}")
+    except Exception as e:
+        logger.warning(f"SQLite candle caching failed: {e}")
+
     return csv_path
