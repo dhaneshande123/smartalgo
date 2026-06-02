@@ -7,35 +7,10 @@ import DataTable from '../components/common/DataTable';
 import EquityCurve from '../components/charts/EquityCurve';
 import GreeksGauge from '../components/charts/GreeksGauge';
 import DeployedStrategiesPnL from '../components/common/DeployedStrategiesPnL';
-import { useStrategies, useGreeks, useRiskMetrics } from '../hooks/useApi';
+import { useGreeks, useRiskMetrics } from '../hooks/useApi';
 import { useMarketDataStream, usePortfolioStream, useOrderStream, useAlertStream } from '../hooks/useWebSocket';
 
 const fallbackRisk = { drawdown: -2.3, var95: 85000, marginUsed: 62, maxLoss: -150000 };
-
-const strategyColumns = [
-  { key: 'name', label: 'Strategy' },
-  { key: 'status', label: 'Status', render: (v) => <StatusBadge status={v} /> },
-  {
-    key: 'pnl', label: 'P&L', align: 'right',
-    render: (v) => (
-      <span className={`font-mono ${v >= 0 ? 'text-profit' : 'text-loss'}`}>
-        {v >= 0 ? '+' : ''}{v?.toLocaleString('en-IN')}
-      </span>
-    ),
-  },
-  {
-    key: 'positions',
-    label: 'Positions',
-    align: 'right',
-    render: (v) => {
-      // Accept either a plain count (mock strategies) or a list of position
-      // objects (live deployed strategies) — render the count in both cases.
-      if (Array.isArray(v)) return v.length;
-      if (typeof v === 'number') return v;
-      return v ?? '--';
-    },
-  },
-];
 
 const orderColumns = [
   { key: 'order_id', label: 'ID', render: (v) => <span className="font-mono text-blue-400 text-xs">{v}</span> },
@@ -46,12 +21,7 @@ const orderColumns = [
   { key: 'status', label: 'Status', render: (v) => <StatusBadge status={v?.toLowerCase()} /> },
 ];
 
-const fallbackStrategies = [
-  { id: 1, name: 'Iron Condor NIFTY', status: 'active', pnl: 45200, positions: 4 },
-  { id: 2, name: 'Straddle BNF', status: 'active', pnl: -12300, positions: 2 },
-  { id: 3, name: 'Bull Call Spread', status: 'paused', pnl: 8900, positions: 2 },
-  { id: 4, name: 'Calendar Spread', status: 'active', pnl: 22100, positions: 3 },
-];
+/* Mock fallbackStrategies removed — Dashboard uses real DeployedStrategiesPnL only */
 
 export default function Dashboard() {
   // ── WebSocket live streams ──
@@ -62,7 +32,6 @@ export default function Dashboard() {
 
   // ── REST API fallbacks ──
   const { data: greeksData } = useGreeks();
-  const { data: strategiesData } = useStrategies();
   const { data: riskData } = useRiskMetrics();
 
   // ── Build live indices from WS ticks ──
@@ -114,15 +83,6 @@ export default function Dashboard() {
   const equityCurveData = equityRef.current.length > 2 ? equityRef.current : undefined;
 
   // ── Strategies from REST ──
-  const rawStrategies = strategiesData?.strategies || strategiesData;
-  const strategies = Array.isArray(rawStrategies) ? rawStrategies.map(s => ({
-    id: s.strategy_id || s.id,
-    name: s.name || '',
-    status: (s.status || '').toLowerCase(),
-    pnl: s.pnl_today ?? s.pnl ?? 0,
-    positions: s.positions_count ?? s.positions ?? 0,
-  })) : fallbackStrategies;
-
   // ── Risk from REST ──
   const risk = riskData ? {
     drawdown: -((riskData.current_drawdown ?? riskData.drawdown ?? 0) * 100).toFixed(1),
@@ -278,13 +238,10 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {/* Strategies + Risk */}
+      {/* Risk Summary */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <Card title="Active Strategies">
-            <div style={{ fontSize: 9, color: '#64748b', marginTop: -8, marginBottom: 8, fontWeight: 400 }}>Strategies currently running and monitoring the market</div>
-            <DataTable columns={strategyColumns} data={strategies} />
-          </Card>
+          {/* Active Strategies already shown above via DeployedStrategiesPnL */}
         </div>
 
         <Card title="Risk Summary">
