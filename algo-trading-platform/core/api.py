@@ -6737,36 +6737,45 @@ async def get_trade_analytics():
     completed = [s for s in all_strategies if s.get("status") in ("EXITED", "STOPPED")]
     running = [s for s in all_strategies if s.get("status") == "RUNNING"]
 
-    # Net P&L values (after charges + slippage) — what you actually take home
-    net_pnl_values = [s.get("pnl", 0) or s.get("realized_pnl", 0) for s in completed]
-    # Gross P&L values (before charges) — raw strategy performance
-    gross_pnl_values = [s.get("gross_pnl", s.get("pnl", 0)) for s in completed]
+    # ── P&L computation ─────────────────────────────────────
+    # Net P&L = after charges (what you take home)
+    # Gross P&L = before charges (raw strategy performance)
+    # Win/loss classification uses GROSS P&L (a strategy that made Rs 100 but
+    # paid Rs 120 in charges is still a winning trade — charges are a cost of
+    # doing business, not a strategy failure)
+    net_pnl_values = []
+    gross_pnl_values = []
+    for s in completed:
+        net = float(s.get("pnl", 0) or 0)
+        gross = float(s.get("gross_pnl", net) or net)
+        charges = float(s.get("total_charges", 0) or 0)
+        # If gross_pnl not stored separately, derive: gross = net + charges
+        if gross == net and charges > 0:
+            gross = net + charges
+        net_pnl_values.append(net)
+        gross_pnl_values.append(gross)
 
-    # Use GROSS P&L for win/loss classification (strategy quality)
-    # Use NET P&L for total/expectancy (what you actually make)
-    pnl_values = net_pnl_values  # net is the reality
-
+    # Win/loss based on GROSS P&L (strategy quality)
     gross_winners = [p for p in gross_pnl_values if p > 0]
     gross_losers = [p for p in gross_pnl_values if p < 0]
+    # Net winners/losers (what you actually made after charges)
+    net_winners = [p for p in net_pnl_values if p > 0]
+    net_losers = [p for p in net_pnl_values if p < 0]
 
-    winners = [p for p in pnl_values if p > 0]
-    losers = [p for p in pnl_values if p < 0]
-    breakeven = [p for p in pnl_values if p == 0]
-
-    total_pnl = sum(pnl_values)
+    total_net_pnl = sum(net_pnl_values)
     total_gross_pnl_sum = sum(gross_pnl_values)
     total_trades = len(completed)
-    win_count = len(winners)
-    loss_count = len(losers)
-    gross_win_count = len(gross_winners)
-    gross_loss_count = len(gross_losers)
+    win_count = len(gross_winners)     # classify by gross (strategy quality)
+    loss_count = len(gross_losers)
+    net_win_count = len(net_winners)   # also track net wins
+    net_loss_count = len(net_losers)
     win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
-    gross_win_rate = (gross_win_count / total_trades * 100) if total_trades > 0 else 0
+    net_win_rate = (net_win_count / total_trades * 100) if total_trades > 0 else 0
 
-    avg_win = (sum(winners) / win_count) if win_count > 0 else 0
-    avg_loss = (sum(losers) / loss_count) if loss_count > 0 else 0
-    profit_factor = (sum(winners) / abs(sum(losers))) if losers else float("inf") if winners else 0
-    expectancy = (total_pnl / total_trades) if total_trades > 0 else 0
+    avg_win = (sum(gross_winners) / win_count) if win_count > 0 else 0
+    avg_loss = (sum(gross_losers) / loss_count) if loss_count > 0 else 0
+    profit_factor = (sum(gross_winners) / abs(sum(gross_losers))) if gross_losers else float("inf") if gross_winners else 0
+    expectancy = (total_net_pnl / total_trades) if total_trades > 0 else 0
 
     # Max drawdown from cumulative P&L
     cumulative = []
@@ -6784,16 +6793,17 @@ async def get_trade_analytics():
             max_dd = dd
 
     # Sharpe ratio (annualized, assuming ~252 trading days)
-    if len(pnl_values) > 1:
-        mean_pnl = total_pnl / len(pnl_values)
-        variance = sum((p - mean_pnl) ** 2 for p in pnl_values) / (len(pnl_values) - 1)
+    # Only meaningful with 10+ trades; below that it's unreliable
+    if len(net_pnl_values) > 1:
+        mean_pnl = total_net_pnl / len(net_pnl_values)
+        variance = sum((p - mean_pnl) ** 2 for p in net_pnl_values) / (len(net_pnl_values) - 1)
         std_dev = math.sqrt(variance) if variance > 0 else 0
         sharpe = (mean_pnl / std_dev * math.sqrt(252)) if std_dev > 0 else 0
     else:
         sharpe = 0
 
-    # Running P&L
-    running_pnl = sum(s.get("unrealized_pnl", 0) + s.get("realized_pnl", 0) for s in running)
+    # Running P&L (strategies still in market)
+    running_pnl = sum(float(s.get("pnl", 0) or 0) for s in running if s.get("entered"))
 
     # ── Per-strategy breakdown ───────────────────────────────
     strategy_breakdown = {}
@@ -6813,16 +6823,23 @@ async def get_trade_analytics():
                 "worst_trade": 0,
             }
         entry = strategy_breakdown[key]
-        p = s.get("pnl", 0) or s.get("realized_pnl", 0)
+        net_p = float(s.get("pnl", 0) or 0)
+        charges = float(s.get("total_charges", 0) or 0)
+        gross_p = float(s.get("gross_pnl", net_p) or net_p)
+        if gross_p == net_p and charges > 0:
+            gross_p = net_p + charges
         if s.get("status") in ("EXITED", "STOPPED"):
             entry["total_trades"] += 1
-            if p > 0:
+            # Win/loss by gross P&L (strategy quality, not charges)
+            if gross_p > 0:
                 entry["wins"] += 1
-            elif p < 0:
+            elif gross_p < 0:
                 entry["losses"] += 1
-            entry["total_pnl"] += p
-            entry["best_trade"] = max(entry["best_trade"], p)
-            entry["worst_trade"] = min(entry["worst_trade"], p)
+            entry["total_pnl"] += net_p
+            entry["gross_pnl"] = entry.get("gross_pnl", 0) + gross_p
+            entry["total_charges"] = entry.get("total_charges", 0) + charges
+            entry["best_trade"] = max(entry["best_trade"], net_p)
+            entry["worst_trade"] = min(entry["worst_trade"], net_p)
 
     # ── Equity curve points ──────────────────────────────────
     equity_curve = []
@@ -6857,23 +6874,32 @@ async def get_trade_analytics():
 
     return {
         "summary": {
-            "total_pnl": round(total_pnl, 2),
+            # Net P&L = after charges (reality)
+            "net_pnl": round(total_net_pnl, 2),
+            "total_pnl": round(total_net_pnl, 2),  # alias
+            # Gross P&L = before charges (strategy quality)
             "gross_pnl": round(total_gross_pnl_sum, 2),
             "total_charges": round(total_charges, 2),
-            "gross_win_rate": round(gross_win_rate, 1),
-            "gross_win_count": gross_win_count,
-            "gross_loss_count": gross_loss_count,
-            "running_pnl": round(running_pnl, 2),
-            "total_trades": total_trades,
-            "running_strategies": len(running),
+            # Win/loss based on GROSS (strategy quality)
+            "wins": win_count,
+            "losses": loss_count,
             "win_count": win_count,
             "loss_count": loss_count,
-            "breakeven_count": len(breakeven),
             "win_rate": round(win_rate, 1),
+            # Also provide net win/loss for full transparency
+            "net_wins": net_win_count,
+            "net_losses": net_loss_count,
+            "net_win_rate": round(net_win_rate, 1),
+            "breakeven_count": len([p for p in gross_pnl_values if p == 0]),
+            # Running strategies
+            "running_pnl": round(running_pnl, 2),
+            "running_strategies": len(running),
+            "total_trades": total_trades,
+            # Averages
             "avg_win": round(avg_win, 2),
             "avg_loss": round(avg_loss, 2),
-            "best_trade": round(max(pnl_values) if pnl_values else 0, 2),
-            "worst_trade": round(min(pnl_values) if pnl_values else 0, 2),
+            "best_trade": round(max(net_pnl_values) if net_pnl_values else 0, 2),
+            "worst_trade": round(min(net_pnl_values) if net_pnl_values else 0, 2),
             "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else "inf",
             "expectancy": round(expectancy, 2),
             "sharpe_ratio": round(sharpe, 2),
