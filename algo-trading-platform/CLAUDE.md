@@ -102,9 +102,16 @@ AI Signal Engine / Strategy Builder / Manual
 - `GET /api/strategies` — 16 strategy templates with simulated stats (disclaimer shown on UI). Deploy button routes to real PaperBroker.
 - `GET /api/strategy-signals` — AI signal generation from live data (real calculations, template strategies)
 
-### Still Mock (to be fixed)
-- `GET /api/monitoring/*` — System health, alerts (hardcoded fake metrics)
-- WebSocket `/ws/alerts` — Hardcoded alert templates
+### Monitoring (real, psutil-based)
+- `GET /api/monitoring/health` — Real CPU/memory (psutil), Fyers status, executor ticks, DB size, kill switch state
+- `GET /api/monitoring/alerts` — Real risk events from SQLite audit log (breaches, kill switch, limit changes)
+- `POST /api/monitoring/alerts/{id}/acknowledge` — Logs acknowledgement to SQLite
+- `GET /api/monitoring/metrics` — Real CPU, memory, WebSocket count, trade count, executor throughput
+- `GET /api/monitoring/metrics/history` — Equity curve from SQLite snapshots
+
+### No Mock Endpoints Remain
+All 16 pages use real data. The only "simulated" content is the Strategy catalog
+(16 pre-configured templates with disclaimer banner).
 
 ## Frontend Pages — Current State
 
@@ -124,7 +131,7 @@ AI Signal Engine / Strategy Builder / Manual
 | Paper Trading | `/paper` | PaperBroker + deployed strategies | **REAL** |
 | AI Signals | `/ai-signals` | Live Fyers data + AI engine | **REAL** |
 | Trade Analytics | `/trade-analytics` | SQLite trade_log + pnl_snapshots | **REAL** |
-| Monitoring | `/monitoring` | Mock data (not yet fixed) | **MOCK** |
+| Monitoring | `/monitoring` | psutil + WebSocket + executor + SQLite risk events | **REAL** |
 | Settings | `/settings` | Fyers credential management | **REAL** |
 
 ## Frontend Features
@@ -230,12 +237,17 @@ PaperBroker returns Decimal strings with different field names. API layer normal
 24. Fyers rate limit handling (70/min usage vs 200 limit, 429 retry)
 25. IV Surface with real Black-Scholes IV back-solve from option chain
 26. Mock data removed from: Dashboard, Portfolio, Orders, P&L Analytics
+27. Monitoring page: real psutil CPU/memory, Fyers status, executor health, SQLite risk events as alerts
+28. Trade Analytics: gross vs net win/loss classification, insight card, low-sample warning
+29. IV Surface: real Black-Scholes IV back-solve from Fyers option chain
+30. P&L Analytics: all 5 endpoints wired to deployed strategies + SQLite (no mock)
+31. Strategies page: disclaimer banner for simulated returns
+32. **MILESTONE: Zero mock data remains across all 16 pages**
 
 ## Remaining Work
 
 ### Priority Items
 - **Backtest engine wiring**: Connect `core/backtest/engine.py` to SQLite candle cache (data pipeline built, engine integration pending)
-- **Monitoring page**: Replace mock health/alerts with real psutil + WebSocket counts
 - **Multi-underlying**: BANKNIFTY/FINNIFTY support across all pages
 
 ### Future Enhancements
