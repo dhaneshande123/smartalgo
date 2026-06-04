@@ -4954,19 +4954,28 @@ async def pnl_by_strategy():
     if _deployed_strategies:
         strategy_pnl = []
         for sid, sdata in _deployed_strategies.items():
+            # charges can be a dict or a float — handle both
+            raw_charges = sdata.get("charges", 0)
+            if isinstance(raw_charges, dict):
+                total_charges = float(sdata.get("total_charges", 0) or sum(float(v or 0) for v in raw_charges.values()))
+            else:
+                total_charges = float(raw_charges or 0)
+            realized = float(sdata.get("realized_pnl", 0) or 0)
+            unrealized = float(sdata.get("pnl", 0) or 0) if sdata.get("entered") else 0.0
             strategy_pnl.append({
                 "strategy_id": sid,
                 "name": sdata.get("name", sid),
-                "realized_pnl": round(sdata.get("realized_pnl", 0), 2),
-                "unrealized_pnl": round(sdata.get("unrealized_pnl", 0), 2),
-                "charges": round(sdata.get("charges", 0), 2),
-                "net_pnl": round(sdata.get("realized_pnl", 0) + sdata.get("unrealized_pnl", 0), 2),
-                "trades_today": sdata.get("trade_count", 0),
-                "win_rate": sdata.get("win_rate", 0),
+                "status": sdata.get("status", ""),
+                "realized_pnl": round(realized, 2),
+                "unrealized_pnl": round(unrealized, 2),
+                "charges": round(total_charges, 2),
+                "net_pnl": round(realized + unrealized - total_charges, 2),
+                "trades_today": len(sdata.get("entry_orders", [])) + len(sdata.get("exit_orders", [])),
+                "win_rate": 0,
                 "source": "deployed",
             })
         if strategy_pnl:
-            return {"strategies": strategy_pnl, "timestamp": datetime.now(IST).isoformat()}
+            return {"strategies": strategy_pnl, "source": "deployed_strategies", "timestamp": datetime.now(IST).isoformat()}
 
     # Return empty if no strategies (no mock)
     return {

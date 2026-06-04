@@ -125,9 +125,21 @@ export default function IVSurface() {
 
   const { data: apiData } = useIVSurface(symbol);
 
-  /* Use API data or empty fallback (no mock data) */
+  /* Use API data or empty fallback — normalize field names */
   const data = useMemo(() => {
-    if (apiData?.surface?.length) return apiData;
+    if (apiData?.surface?.length) {
+      // Backend returns call_iv/put_iv/avg_iv; frontend expects iv_call/iv_put
+      const normalized = {
+        ...apiData,
+        surface: apiData.surface.map(p => ({
+          ...p,
+          iv_call: p.iv_call ?? p.call_iv ?? 0,
+          iv_put: p.iv_put ?? p.put_iv ?? 0,
+          iv_avg: p.iv_avg ?? p.avg_iv ?? 0,
+        })),
+      };
+      return normalized;
+    }
     return EMPTY_IV_DATA;
   }, [apiData]);
 
