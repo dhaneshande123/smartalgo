@@ -2163,18 +2163,19 @@ async def health_check():
 )
 async def system_info():
     cfg = _config or PlatformConfig()
+    fyers_connected = bool(_live_feed and _live_feed.is_connected)
     return SystemInfoResponse(
         platform_version=__version__,
         python_version=sys.version,
         os_platform=platform.platform(),
-        trading_mode=cfg.mode,
-        timezone=cfg.timezone,
+        trading_mode=_TRADING_MODE,
+        timezone="Asia/Kolkata",
         market_open=str(MARKET_OPEN),
         market_close=str(MARKET_CLOSE),
-        primary_broker=cfg.primary_broker,
-        backup_broker=cfg.backup_broker or "none",
-        brokers_configured=len(cfg.brokers),
-        strategies_configured=len(cfg.strategies),
+        primary_broker="fyers",
+        backup_broker="none",
+        brokers_configured=1 if fyers_connected else 0,
+        strategies_configured=len(_deployed_strategies),
         event_bus_backend="in_memory",
     )
 
@@ -2188,21 +2189,47 @@ async def system_info():
 )
 async def system_config():
     cfg = _config or PlatformConfig()
-    brokers_sanitized = {
-        name: _sanitize_broker(bc) for name, bc in cfg.brokers.items()
-    }
+    fyers_connected = bool(_live_feed and _live_feed.is_connected)
+
+    # Build real Fyers broker entry
+    import os
+    fyers_app_id = os.getenv("FYERS_APP_ID", "")
+    brokers_real = {}
+    if fyers_app_id:
+        brokers_real["fyers"] = {
+            "provider": "Fyers API v3",
+            "api_key": fyers_app_id[:6] + "****" if fyers_app_id else "Not set",
+            "connected": fyers_connected,
+            "status": "active" if fyers_connected else "disconnected",
+        }
+
+    # Get real risk limits from SQLite
+    try:
+        from core.state_store import get_store
+        from core import risk_engine as re
+        store = get_store()
+        real_risk = {**re.DEFAULT_RISK_LIMITS, **store.load_risk_limits()}
+    except Exception:
+        real_risk = cfg.risk.model_dump() if hasattr(cfg.risk, 'model_dump') else {}
+
     return ConfigResponse(
-        mode=cfg.mode,
-        timezone=cfg.timezone,
-        primary_broker=cfg.primary_broker,
-        brokers=brokers_sanitized,
-        market_data=cfg.market_data.model_dump(),
-        risk=cfg.risk.model_dump(),
+        mode=_TRADING_MODE,
+        timezone="Asia/Kolkata",
+        primary_broker="fyers",
+        brokers=brokers_real,
+        market_data={
+            "feed": "fyers_api_v3" if fyers_connected else "disconnected",
+            "option_chain_cache_ttl": "3.0s",
+            "indices_cache_ttl": "2.0s",
+            "candle_cache": "sqlite",
+            "subscriptions": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+        },
+        risk=real_risk,
         dashboard={
-            "host": cfg.dashboard.host,
-            "port": cfg.dashboard.port,
-            "auth_enabled": cfg.dashboard.auth_enabled,
-            "cors_origins": cfg.dashboard.cors_origins,
+            "host": "0.0.0.0",
+            "port": 8080,
+            "auth_enabled": True,
+            "cors_origins": ["http://localhost:5173"],
         },
         log_level=cfg.log_level,
     )
