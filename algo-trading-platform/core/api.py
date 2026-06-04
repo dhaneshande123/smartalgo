@@ -4920,7 +4920,27 @@ async def pnl_summary():
                     }
     except Exception as e:
         logger.warning(f"Fyers P&L summary derivation failed: {e}")
-    return _mock.pnl_snapshot()
+    # Compute from deployed strategies (no mock)
+    realized = 0.0
+    unrealized = 0.0
+    total_charges = 0.0
+    for strat in _deployed_strategies.values():
+        status = str(strat.get("status", "")).upper()
+        if status in ("EXITED", "STOPPED"):
+            realized += float(strat.get("realized_pnl", strat.get("pnl", 0)) or 0)
+            total_charges += float(strat.get("total_charges", 0) or 0)
+        elif status in ("RUNNING", "ENTERED") and strat.get("entered"):
+            unrealized += float(strat.get("pnl", 0) or 0)
+            total_charges += float(strat.get("total_charges", 0) or 0)
+    return {
+        "realized_pnl": round(realized, 2),
+        "unrealized_pnl": round(unrealized, 2),
+        "total_pnl": round(realized + unrealized, 2),
+        "net_pnl": round(realized + unrealized - total_charges, 2),
+        "charges": {"total": round(total_charges, 2)},
+        "source": "deployed_strategies",
+        "timestamp": datetime.now(IST).isoformat(),
+    }
 
 
 @app.get(
@@ -4948,40 +4968,10 @@ async def pnl_by_strategy():
         if strategy_pnl:
             return {"strategies": strategy_pnl, "timestamp": datetime.now(IST).isoformat()}
 
-    # Fallback to mock
+    # Return empty if no strategies (no mock)
     return {
-        "strategies": [
-            {
-                "strategy_id": "iron-condor-weekly",
-                "name": "NIFTY Weekly Iron Condor",
-                "realized_pnl": round(_mock._jitter(4520.0, 0.05), 2),
-                "unrealized_pnl": round(_mock._jitter(1200.0, 0.1), 2),
-                "charges": round(_mock._rng.uniform(80, 200), 2),
-                "net_pnl": round(_mock._jitter(5520.0, 0.05), 2),
-                "trades_today": 8,
-                "win_rate": 0.75,
-            },
-            {
-                "strategy_id": "straddle-banknifty",
-                "name": "BANKNIFTY ATM Straddle",
-                "realized_pnl": round(_mock._jitter(6800.0, 0.05), 2),
-                "unrealized_pnl": round(_mock._jitter(800.0, 0.1), 2),
-                "charges": round(_mock._rng.uniform(100, 250), 2),
-                "net_pnl": round(_mock._jitter(7300.0, 0.05), 2),
-                "trades_today": 4,
-                "win_rate": 0.80,
-            },
-            {
-                "strategy_id": "momentum-scalper",
-                "name": "NIFTY Momentum Scalper",
-                "realized_pnl": round(_mock._jitter(-1200.0, 0.1), 2),
-                "unrealized_pnl": 0.0,
-                "charges": round(_mock._rng.uniform(60, 150), 2),
-                "net_pnl": round(_mock._jitter(-1350.0, 0.1), 2),
-                "trades_today": 12,
-                "win_rate": 0.42,
-            },
-        ],
+        "strategies": [],
+        "source": "empty",
         "timestamp": datetime.now(IST).isoformat(),
     }
 
@@ -5035,23 +5025,17 @@ async def pnl_charges():
     except Exception as e:
         logger.warning(f"Fyers charges derivation failed: {e}")
 
-    # Fallback to mock
-    total = round(_mock._rng.uniform(200, 800), 2)
+    # Compute from deployed strategies
+    total_charges = {}
+    for strat in _deployed_strategies.values():
+        charges = strat.get("charges", {})
+        if isinstance(charges, dict):
+            for k, v in charges.items():
+                total_charges[k] = total_charges.get(k, 0) + float(v or 0)
     return {
-        "charges": {
-            "brokerage": round(total * 0.25, 2),
-            "stt": round(total * 0.35, 2),
-            "exchange_txn_fee": round(total * 0.10, 2),
-            "gst": round(total * 0.18, 2),
-            "sebi_fee": round(total * 0.02, 2),
-            "stamp_duty": round(total * 0.10, 2),
-            "total": total,
-        },
-        "by_segment": {
-            "equity": round(total * 0.15, 2),
-            "fno_futures": round(total * 0.25, 2),
-            "fno_options": round(total * 0.60, 2),
-        },
+        "charges": total_charges,
+        "total": sum(total_charges.values()),
+        "source": "deployed_strategies",
         "timestamp": datetime.now(IST).isoformat(),
     }
 
@@ -5098,23 +5082,13 @@ async def pnl_trade_book():
     except Exception as e:
         logger.warning(f"Fyers tradebook P&L fetch failed: {e}")
 
-    # Fallback to mock
-    trades = _mock.trades()
-    enriched = []
-    for t in trades:
-        pnl = round(_mock._rng.uniform(-2000, 5000), 2)
-        charges = round(_mock._rng.uniform(10, 50), 2)
-        enriched.append({
-            **t,
-            "pnl": pnl,
-            "charges": charges,
-            "net_pnl": round(pnl - charges, 2),
-        })
+    from core.state_store import get_store
+    store = get_store()
+    trades = store.get_trade_log(limit=200)
     return {
-        "trades": enriched,
-        "count": len(enriched),
-        "total_pnl": round(sum(t["pnl"] for t in enriched), 2),
-        "total_charges": round(sum(t["charges"] for t in enriched), 2),
+        "trades": trades,
+        "count": len(trades),
+        "source": "trade_log",
         "timestamp": datetime.now(IST).isoformat(),
     }
 
@@ -5171,21 +5145,15 @@ async def pnl_equity_curve():
     except Exception as e:
         logger.warning(f"Fyers equity curve derivation failed: {e}")
 
-    # Fallback to mock
-    base = 1_500_000.0
-    points = []
-    equity = base
-    for i in range(78):
-        ts = now.replace(hour=9, minute=15) + timedelta(minutes=i * 5)
-        if ts > now:
-            break
-        equity += _mock._rng.uniform(-2000, 2500)
-        points.append({"timestamp": ts.isoformat(), "equity": round(equity, 2)})
+    from core.state_store import get_store
+    store = get_store()
+    snapshots = store.get_equity_curve(limit=500)
+    curve = [{"time": s["timestamp"][:19], "value": s["equity"]} for s in snapshots]
     return {
-        "initial_capital": base,
-        "current_equity": round(equity, 2),
-        "data_points": points,
-        "timestamp": now.isoformat(),
+        "curve": curve,
+        "count": len(curve),
+        "source": "equity_snapshots",
+        "timestamp": datetime.now(IST).isoformat(),
     }
 
 
@@ -5654,31 +5622,121 @@ async def monitoring_metrics_history(
     description="Returns implied volatility surface data for a given symbol across strikes and expiries.",
 )
 async def greeks_iv_surface(symbol: str):
-    symbol = symbol.upper()
-    base_price = _mock.INDEX_BASE.get(symbol, 24250.0)
-    spot = _mock._jitter(base_price)
-    step = 50 if symbol == "NIFTY" else 100
+    """Build IV surface from real option chain data using Black-Scholes IV back-solve."""
+    try:
+        from core.risk_engine.calcs import implied_volatility, time_to_expiry_years, RISK_FREE_RATE_DEFAULT, DIVIDEND_YIELD_DEFAULT
 
-    surface = []
-    for dte in [1, 3, 7, 14, 30, 60]:
-        for offset in range(-5, 6):
-            strike = round(spot / step) * step + offset * step
-            moneyness = (spot - strike) / spot
-            iv = 0.14 + abs(moneyness) * 0.6 + _mock._rng.uniform(-0.01, 0.01) + 0.01 * math.sqrt(dte / 365)
-            surface.append({
+        # Get option chain from cache (refreshed every 3s by the frontend/executor)
+        chain = _fyers_chain_cache.get(symbol.upper()) or {}
+        if not chain or not chain.get("chain"):
+            # Try fetching fresh
+            if _live_feed and _live_feed.is_connected:
+                chain = await _live_feed.get_option_chain(symbol, strike_count=25)
+                if chain:
+                    _fyers_chain_cache[symbol.upper()] = chain
+
+        spot = float(chain.get("spot_price", 0) or 0)
+        chain_data = chain.get("chain", [])
+
+        if not spot or not chain_data:
+            return {
+                "symbol": symbol.upper(),
+                "spot": 0,
+                "surface": [],
+                "strikes": [],
+                "message": "No option chain data available. Ensure Fyers is connected.",
+                "source": "empty",
+                "timestamp": datetime.now(IST).isoformat(),
+            }
+
+        # Build IV surface: for each strike, compute IV from call_ltp and put_ltp
+        surface_data = []
+        strikes = set()
+
+        # Get expiry info for T calculation
+        expiry = chain.get("expiry") or chain.get("next_expiry") or ""
+        T = time_to_expiry_years(expiry) if expiry else (7.0 / 365.0)  # default 7 days
+
+        for row in chain_data:
+            strike = row.get("strike", 0)
+            if not strike:
+                continue
+            strikes.add(strike)
+
+            call_ltp = float(row.get("call_ltp", 0) or 0)
+            put_ltp = float(row.get("put_ltp", 0) or 0)
+
+            # Back-solve IV for call
+            call_iv = 0.0
+            if call_ltp > 0:
+                call_iv = implied_volatility(
+                    call_ltp, spot, float(strike), T,
+                    RISK_FREE_RATE_DEFAULT, "CE", DIVIDEND_YIELD_DEFAULT
+                )
+
+            # Back-solve IV for put
+            put_iv = 0.0
+            if put_ltp > 0:
+                put_iv = implied_volatility(
+                    put_ltp, spot, float(strike), T,
+                    RISK_FREE_RATE_DEFAULT, "PE", DIVIDEND_YIELD_DEFAULT
+                )
+
+            # Average IV (use whichever is available)
+            avg_iv = 0.0
+            if call_iv > 0 and put_iv > 0:
+                avg_iv = (call_iv + put_iv) / 2
+            elif call_iv > 0:
+                avg_iv = call_iv
+            elif put_iv > 0:
+                avg_iv = put_iv
+
+            moneyness = (strike - spot) / spot if spot > 0 else 0
+
+            surface_data.append({
                 "strike": strike,
-                "dte": dte,
-                "iv_call": round(iv * 100, 2),
-                "iv_put": round((iv + 0.005) * 100, 2),
-                "moneyness": round(moneyness, 4),
+                "call_iv": round(call_iv * 100, 2),  # as percentage
+                "put_iv": round(put_iv * 100, 2),
+                "avg_iv": round(avg_iv * 100, 2),
+                "call_ltp": call_ltp,
+                "put_ltp": put_ltp,
+                "moneyness": round(moneyness * 100, 2),
+                "dte": round(T * 365, 1),
             })
 
-    return {
-        "symbol": symbol,
-        "spot_price": spot,
-        "surface": surface,
-        "timestamp": datetime.now(IST).isoformat(),
-    }
+        # Sort by strike
+        surface_data.sort(key=lambda x: x["strike"])
+        sorted_strikes = sorted(strikes)
+
+        # Also build a heatmap-compatible format
+        # For single expiry, the "surface" is actually a "smile" (2D, not 3D)
+        india_vix = float(chain.get("india_vix", 0) or 0)
+        atm_strike = chain.get("atm_strike", 0)
+
+        return {
+            "symbol": symbol.upper(),
+            "spot": spot,
+            "atm_strike": atm_strike,
+            "india_vix": india_vix,
+            "dte": round(T * 365, 1),
+            "expiry": expiry,
+            "surface": surface_data,
+            "strikes": sorted_strikes,
+            "count": len(surface_data),
+            "source": "fyers_chain_iv_backsolve",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"IV surface computation failed: {exc}", exc_info=True)
+        return {
+            "symbol": symbol.upper(),
+            "spot": 0,
+            "surface": [],
+            "strikes": [],
+            "error": str(exc),
+            "source": "error",
+            "timestamp": datetime.now(IST).isoformat(),
+        }
 
 
 @app.get(

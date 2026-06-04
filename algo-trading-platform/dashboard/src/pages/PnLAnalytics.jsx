@@ -15,26 +15,18 @@ import {
   usePnLSummary, usePnLByStrategy, usePnLCharges, usePnLEquityCurve, usePnLTradeBook,
 } from '../hooks/useApi';
 
-// ── Fallback data ──────────────────────────────────────────────────
+// ── Fallback data (zeros — no mock) ────────────────────────────────
 const fallbackSummary = {
-  realized_pnl: 12450,
-  unrealized_pnl: 3200,
-  total_pnl: 15650,
-  net_pnl: 15120,
-  peak_pnl: 18200,
-  max_drawdown_today: 3100,
-  charges: { brokerage: 95, stt: 132, exchange_txn_fee: 38, gst: 68, sebi_fee: 8, stamp_duty: 38, total: 379 },
+  realized_pnl: 0, unrealized_pnl: 0, total_pnl: 0, net_pnl: 0,
+  peak_pnl: 0, max_drawdown_today: 0,
+  charges: { brokerage: 0, stt: 0, exchange_txn_fee: 0, gst: 0, sebi_fee: 0, stamp_duty: 0, total: 0 },
 };
 
-const fallbackStrategies = [
-  { strategy_id: 'iron-condor', name: 'NIFTY Weekly Iron Condor', realized_pnl: 4520, unrealized_pnl: 1200, charges: 142, net_pnl: 5578, trades_today: 8, win_rate: 0.75 },
-  { strategy_id: 'straddle-bnf', name: 'BANKNIFTY ATM Straddle', realized_pnl: 6800, unrealized_pnl: 800, charges: 165, net_pnl: 7435, trades_today: 4, win_rate: 0.80 },
-  { strategy_id: 'momentum', name: 'NIFTY Momentum Scalper', realized_pnl: -1200, unrealized_pnl: 0, charges: 98, net_pnl: -1298, trades_today: 12, win_rate: 0.42 },
-];
+const fallbackStrategies = [];
 
 const fallbackCharges = {
-  charges: { brokerage: 95, stt: 132, exchange_txn_fee: 38, gst: 68, sebi_fee: 8, stamp_duty: 38, total: 379 },
-  by_segment: { equity: 57, fno_futures: 95, fno_options: 227 },
+  charges: { brokerage: 0, stt: 0, exchange_txn_fee: 0, gst: 0, sebi_fee: 0, stamp_duty: 0, total: 0 },
+  by_segment: {},
 };
 
 const CHARGE_COLORS = ['#7c3aed', '#3b82f6', '#06b6d4', '#f59e0b', '#ef4444', '#10b981'];

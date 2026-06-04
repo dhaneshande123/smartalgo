@@ -21,6 +21,13 @@
       "runtimeArgs": ["-m", "pytest", "tests/unit/", "-v", "--tb=short"],
       "port": 0,
       "cwd": "algo-trading-platform"
+    },
+    {
+      "name": "Mockups",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "9090"],
+      "port": 9090,
+      "cwd": "mockups"
     }
   ]
 }

@@ -54,27 +54,8 @@ function ivToTextColor(iv, minIV, maxIV) {
   return t > 0.55 ? '#fff' : 'rgba(255,255,255,0.9)';
 }
 
-/* ─── Fallback data generator ──────────────────────────────── */
-function generateMockIVSurface() {
-  const spot = 24250 + (Math.random() - 0.5) * 100;
-  const dtes = [1, 3, 7, 14, 30, 60];
-  const surface = [];
-  for (const dte of dtes) {
-    for (let offset = -5; offset <= 5; offset++) {
-      const strike = Math.round(spot / 50) * 50 + offset * 50;
-      const moneyness = (spot - strike) / spot;
-      const baseIV = 0.14 + Math.abs(moneyness) * 0.6 + (Math.random() - 0.5) * 0.02 + 0.01 * Math.sqrt(dte / 365);
-      surface.push({
-        strike,
-        dte,
-        iv_call: +(baseIV * 100).toFixed(2),
-        iv_put: +((baseIV + 0.005) * 100).toFixed(2),
-        moneyness: +moneyness.toFixed(4),
-      });
-    }
-  }
-  return { symbol: 'NIFTY', spot_price: spot, surface, timestamp: new Date().toISOString() };
-}
+/* ─── Empty fallback (no mock data) ───────────────────────── */
+const EMPTY_IV_DATA = { symbol: 'NIFTY', spot: 0, surface: [], strikes: [], timestamp: new Date().toISOString() };
 
 /* ─── Stat card ────────────────────────────────────────────── */
 function StatCard({ icon: Icon, label, value, sub, color = 'text-accent' }) {
@@ -144,13 +125,14 @@ export default function IVSurface() {
 
   const { data: apiData } = useIVSurface(symbol);
 
-  /* Merge API data with fallback mock */
+  /* Use API data or empty fallback (no mock data) */
   const data = useMemo(() => {
     if (apiData?.surface?.length) return apiData;
-    return generateMockIVSurface();
+    return EMPTY_IV_DATA;
   }, [apiData]);
 
-  const { surface, spot_price: spot } = data;
+  const { surface } = data;
+  const spot = data.spot ?? data.spot_price ?? 0;
 
   /* Build grid structures */
   const { dtes, strikes, gridMap, allIVs, minIV, maxIV } = useMemo(() => {

@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartAlgo — AI Signals</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-primary: #0a0a1a;
+    --bg-card: rgba(15, 20, 45, 0.65);
+    --border-glow: rgba(0, 240, 255, 0.15);
+    --cyan: #00f0ff;
+    --magenta: #ff006e;
+    --green: #00ff88;
+    --red: #ff4444;
+    --gold: #ffd700;
+    --orange: #ff8c00;
+    --text-primary: #e8eaff;
+    --text-secondary: #7a7fa8;
+    --text-muted: #4a4f78;
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background:
+      linear-gradient(rgba(0,240,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,240,255,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    animation: gridPulse 4s ease-in-out infinite;
+    z-index: 0;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    top: -50%; left: -50%; width: 200%; height: 200%;
+    background: radial-gradient(ellipse at 50% 20%, rgba(0,240,255,0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 60%, rgba(255,0,110,0.05) 0%, transparent 40%),
+                radial-gradient(ellipse at 20% 80%, rgba(255,215,0,0.04) 0%, transparent 40%);
+    z-index: 0;
+    animation: nebulaShift 12s ease-in-out infinite alternate;
+  }
+
+  @keyframes gridPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+  @keyframes nebulaShift { 0% { transform: translate(0, 0); } 100% { transform: translate(1%, -1%); } }
+
+  .page { position: relative; z-index: 1; padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+
+  /* Header */
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+
+  .page-title {
+    font-size: 24px;
+    font-weight: 700;
+    background: linear-gradient(90deg, var(--text-primary), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* Market Regime Hero */
+  .regime-hero {
+    background: var(--bg-card);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border-glow);
+    border-radius: 20px;
+    padding: 24px 28px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .regime-hero::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--cyan), var(--gold), var(--magenta));
+  }
+
+  .regime-orb {
+    width: 72px; height: 72px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, rgba(0,240,255,0.15), rgba(0,240,255,0.03));
+    border: 1.5px solid rgba(0,240,255,0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    animation: orbGlow 3s ease-in-out infinite;
+    position: relative;
+  }
+
+  .regime-orb::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border-radius: 20px;
+    border: 1px solid rgba(0,240,255,0.1);
+    animation: orbRing 3s ease-in-out infinite;
+  }
+
+  @keyframes orbGlow {
+    0%, 100% { box-shadow: 0 0 20px rgba(0,240,255,0.2); }
+    50% { box-shadow: 0 0 40px rgba(0,240,255,0.4); }
+  }
+
+  @keyframes orbRing {
+    0%, 100% { transform: scale(1); opacity: 0.6; }
+    50% { transform: scale(1.08); opacity: 0.2; }
+  }
+
+  .regime-details { flex: 1; }
+
+  .regime-label {
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .regime-name {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--cyan);
+    text-shadow: 0 0 20px rgba(0,240,255,0.3);
+    margin-bottom: 6px;
+  }
+
+  .regime-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .regime-indicators {
+    display: flex;
+    gap: 16px;
+  }
+
+  .regime-ind {
+    text-align: center;
+    padding: 10px 18px;
+    background: rgba(0,0,0,0.25);
+    border-radius: 10px;
+    border: 1px solid rgba(0,240,255,0.06);
+  }
+
+  .regime-ind-label {
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+
+  .regime-ind-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .regime-ind-value.bullish { color: var(--green); }
+  .regime-ind-value.neutral { color: var(--gold); }
+  .regime-ind-value.bearish { color: var(--red); }
+
+  /* Section title */
+  .section-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+  }
+
+  .section-count {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: rgba(0,240,255,0.1);
+    color: var(--cyan);
+  }
+
+  /* AI Signal Cards Grid */
+  .signals-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+
+  .signal-card {
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border-glow);
+    border-radius: 16px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.35s ease;
+  }
+
+  .signal-card:hover {
+    border-color: rgba(0,240,255,0.3);
+    transform: perspective(800px) translateZ(8px) translateY(-2px);
+    box-shadow: 0 12px 40px rgba(0,240,255,0.12);
+  }
+
+  .signal-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+
+  .signal-card.high::before { background: linear-gradient(90deg, var(--green), var(--cyan)); }
+  .signal-card.medium::before { background: linear-gradient(90deg, var(--gold), var(--orange)); }
+
+  /* Confidence ring */
+  .confidence-ring-wrapper {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+  }
+
+  .confidence-ring {
+    width: 52px; height: 52px;
+    position: relative;
+  }
+
+  .confidence-ring svg {
+    transform: rotate(-90deg);
+    width: 52px;
+    height: 52px;
+  }
+
+  .confidence-ring .bg {
+    fill: none;
+    stroke: rgba(255,255,255,0.06);
+    stroke-width: 4;
+  }
+
+  .confidence-ring .fill {
+    fill: none;
+    stroke-width: 4;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 1s ease;
+  }
+
+  .confidence-ring .fill.high { stroke: var(--green); filter: drop-shadow(0 0 4px rgba(0,255,136,0.4)); }
+  .confidence-ring .fill.medium { stroke: var(--gold); filter: drop-shadow(0 0 4px rgba(255,215,0,0.4)); }
+
+  .confidence-value {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .confidence-value.high { color: var(--green); }
+  .confidence-value.medium { color: var(--gold); }
+
+  .signal-type {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  .signal-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+    padding-right: 60px;
+  }
+
+  .signal-underlying {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .signal-underlying .dot {
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+
+  /* Signal legs */
+  .signal-legs {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+    padding: 10px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 10px;
+    border: 1px solid rgba(0,240,255,0.04);
+  }
+
+  .signal-leg {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+  }
+
+  .leg-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .leg-action {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+
+  .leg-action.buy { background: rgba(0,240,255,0.08); color: var(--cyan); }
+  .leg-action.sell { background: rgba(255,0,110,0.08); color: var(--magenta); }
+
+  .leg-strike {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .leg-premium {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  /* Reasoning tags */
+  .signal-reasons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 16px;
+  }
+
+  .reason-tag {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: rgba(0,240,255,0.06);
+    border: 1px solid rgba(0,240,255,0.1);
+    color: var(--text-secondary);
+  }
+
+  /* Deploy button */
+  .btn-deploy {
+    width: 100%;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(0,240,255,0.3);
+    background: linear-gradient(135deg, rgba(0,240,255,0.12), rgba(0,240,255,0.04));
+    color: var(--cyan);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    letter-spacing: 0.5px;
+  }
+
+  .btn-deploy:hover {
+    background: linear-gradient(135deg, rgba(0,240,255,0.22), rgba(0,240,255,0.08));
+    box-shadow: 0 0 30px rgba(0,240,255,0.2);
+    transform: translateY(-1px);
+    border-color: rgba(0,240,255,0.5);
+  }
+
+  .btn-deploy .icon { font-size: 15px; }
+
+  .btn-deployed {
+    width: 100%;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(0,255,136,0.2);
+    background: rgba(0,255,136,0.06);
+    color: var(--green);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: default;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    letter-spacing: 0.5px;
+  }
+
+  /* Max profit/loss tags */
+  .signal-stats {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 8px;
+  }
+
+  .signal-stat {
+    text-align: center;
+  }
+
+  .signal-stat-label {
+    font-size: 9px;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+  }
+
+  .signal-stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .signal-stat-value.profit { color: var(--green); }
+  .signal-stat-value.loss { color: var(--red); }
+  .signal-stat-value.neutral { color: var(--gold); }
+
+  /* Auto deploy bar */
+  .auto-deploy-bar {
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(0,255,136,0.15);
+    border-radius: 14px;
+    padding: 16px 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+
+  .auto-deploy-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .auto-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, rgba(0,255,136,0.15), rgba(0,255,136,0.03));
+    border: 1px solid rgba(0,255,136,0.25);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    animation: autoGlow 2s ease-in-out infinite;
+  }
+
+  @keyframes autoGlow {
+    0%, 100% { box-shadow: 0 0 10px rgba(0,255,136,0.15); }
+    50% { box-shadow: 0 0 25px rgba(0,255,136,0.3); }
+  }
+
+  .auto-deploy-text {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .auto-deploy-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+
+  .btn-auto-deploy {
+    padding: 10px 24px;
+    border-radius: 10px;
+    border: 1px solid rgba(0,255,136,0.3);
+    background: linear-gradient(135deg, rgba(0,255,136,0.12), rgba(0,255,136,0.04));
+    color: var(--green);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-auto-deploy:hover {
+    background: linear-gradient(135deg, rgba(0,255,136,0.22), rgba(0,255,136,0.08));
+    box-shadow: 0 0 30px rgba(0,255,136,0.2);
+    transform: translateY(-1px);
+  }
+
+  /* Fit score bar */
+  .fit-score {
+    margin-bottom: 12px;
+  }
+
+  .fit-score-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+
+  .fit-score-label { color: var(--text-muted); letter-spacing: 0.5px; }
+  .fit-score-value { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+  .fit-score-value.high { color: var(--green); }
+  .fit-score-value.medium { color: var(--gold); }
+
+  .fit-bar {
+    height: 4px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .fit-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+  }
+
+  .fit-bar-fill.high {
+    background: linear-gradient(90deg, var(--green), rgba(0,255,136,0.4));
+    box-shadow: 0 0 8px rgba(0,255,136,0.3);
+  }
+
+  .fit-bar-fill.medium {
+    background: linear-gradient(90deg, var(--gold), rgba(255,215,0,0.4));
+    box-shadow: 0 0 8px rgba(255,215,0,0.3);
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,240,255,0.15); border-radius: 3px; }
+
+  /* Particles */
+  .particle {
+    position: fixed;
+    width: 2px; height: 2px;
+    background: var(--cyan);
+    border-radius: 50%;
+    opacity: 0;
+    animation: float linear infinite;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  @keyframes float {
+    0% { opacity: 0; transform: translateY(100vh); }
+    10% { opacity: 0.5; }
+    90% { opacity: 0.5; }
+    100% { opacity: 0; transform: translateY(-20px); }
+  }
+</style>
+</head>
+<body>
+  <div class="particle" style="left: 8%; animation-duration: 9s; animation-delay: 0s;"></div>
+  <div class="particle" style="left: 22%; animation-duration: 11s; animation-delay: 1.5s;"></div>
+  <div class="particle" style="left: 55%; animation-duration: 8s; animation-delay: 3s;"></div>
+  <div class="particle" style="left: 78%; animation-duration: 13s; animation-delay: 0.5s;"></div>
+  <div class="particle" style="left: 90%; animation-duration: 10s; animation-delay: 4s;"></div>
+
+  <div class="page">
+    <!-- Header -->
+    <div class="page-header">
+      <div class="page-title">🤖 AI Strategy Signals</div>
+    </div>
+
+    <!-- Market Regime Hero -->
+    <div class="regime-hero">
+      <div class="regime-orb">📈</div>
+      <div class="regime-details">
+        <div class="regime-label">Current Market Regime</div>
+        <div class="regime-name">TRENDING UP</div>
+        <div class="regime-desc">Strong bullish momentum detected. NIFTY above all key moving averages. ADX confirms trend strength. Directional strategies favored.</div>
+      </div>
+      <div class="regime-indicators">
+        <div class="regime-ind">
+          <div class="regime-ind-label">RSI</div>
+          <div class="regime-ind-value bullish">62.4</div>
+        </div>
+        <div class="regime-ind">
+          <div class="regime-ind-label">ADX</div>
+          <div class="regime-ind-value bullish">28.7</div>
+        </div>
+        <div class="regime-ind">
+          <div class="regime-ind-label">VIX</div>
+          <div class="regime-ind-value neutral">13.4</div>
+        </div>
+        <div class="regime-ind">
+          <div class="regime-ind-label">MACD</div>
+          <div class="regime-ind-value bullish">+12.5</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto Deploy Bar -->
+    <div class="auto-deploy-bar">
+      <div class="auto-deploy-info">
+        <div class="auto-icon">⚡</div>
+        <div>
+          <div class="auto-deploy-text">Auto-Deploy AI Recommendations</div>
+          <div class="auto-deploy-sub">Deploy all high-confidence signals in one click (with duplicate prevention)</div>
+        </div>
+      </div>
+      <button class="btn-auto-deploy">
+        🚀 Deploy All (3)
+      </button>
+    </div>
+
+    <!-- Section Title -->
+    <div class="section-title">
+      ⚡ Recommended Strategies
+      <span class="section-count">5 signals</span>
+    </div>
+
+    <!-- Signal Cards -->
+    <div class="signals-grid">
+      <!-- Card 1: Bull Call Spread - HIGH -->
+      <div class="signal-card high">
+        <div class="confidence-ring-wrapper">
+          <div class="confidence-ring">
+            <svg viewBox="0 0 52 52">
+              <circle class="bg" cx="26" cy="26" r="22"/>
+              <circle class="fill high" cx="26" cy="26" r="22"
+                stroke-dasharray="138.2"
+                stroke-dashoffset="12.4"/>
+            </svg>
+            <div class="confidence-value high">91%</div>
+          </div>
+        </div>
+        <div class="signal-type">Bullish · Directional</div>
+        <div class="signal-name">Bull Call Spread</div>
+        <div class="signal-underlying">
+          NIFTY <span class="dot"></span> Weekly Expiry <span class="dot"></span> 3 Jun
+        </div>
+
+        <div class="fit-score">
+          <div class="fit-score-header">
+            <span class="fit-score-label">Regime Fit</span>
+            <span class="fit-score-value high">94%</span>
+          </div>
+          <div class="fit-bar"><div class="fit-bar-fill high" style="width: 94%"></div></div>
+        </div>
+
+        <div class="signal-legs">
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action buy">BUY</span>
+              <span class="leg-strike">24800 CE</span>
+            </div>
+            <span class="leg-premium">₹186.40</span>
+          </div>
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action sell">SELL</span>
+              <span class="leg-strike">24900 CE</span>
+            </div>
+            <span class="leg-premium">₹142.20</span>
+          </div>
+        </div>
+
+        <div class="signal-stats">
+          <div class="signal-stat">
+            <div class="signal-stat-label">Max Profit</div>
+            <div class="signal-stat-value profit">₹3,575</div>
+          </div>
+          <div class="signal-stat">
+            <div class="signal-stat-label">Max Loss</div>
+            <div class="signal-stat-value loss">₹2,873</div>
+          </div>
+          <div class="signal-stat">
+            <div class="signal-stat-label">Risk:Reward</div>
+            <div class="signal-stat-value neutral">1:1.24</div>
+          </div>
+        </div>
+
+        <div class="signal-reasons">
+          <span class="reason-tag">RSI 62 — Bullish</span>
+          <span class="reason-tag">Above 20 EMA</span>
+          <span class="reason-tag">MACD Positive</span>
+          <span class="reason-tag">Low VIX</span>
+        </div>
+
+        <button class="btn-deploy">
+          <span class="icon">🚀</span> Deploy Strategy
+        </button>
+      </div>
+
+      <!-- Card 2: Iron Condor - HIGH -->
+      <div class="signal-card high">
+        <div class="confidence-ring-wrapper">
+          <div class="confidence-ring">
+            <svg viewBox="0 0 52 52">
+              <circle class="bg" cx="26" cy="26" r="22"/>
+              <circle class="fill high" cx="26" cy="26" r="22"
+                stroke-dasharray="138.2"
+                stroke-dashoffset="19.3"/>
+            </svg>
+            <div class="confidence-value high">86%</div>
+          </div>
+        </div>
+        <div class="signal-type">Neutral · Range-bound</div>
+        <div class="signal-name">Iron Condor</div>
+        <div class="signal-underlying">
+          NIFTY <span class="dot"></span> Weekly Expiry <span class="dot"></span> 3 Jun
+        </div>
+
+        <div class="fit-score">
+          <div class="fit-score-header">
+            <span class="fit-score-label">Regime Fit</span>
+            <span class="fit-score-value high">88%</span>
+          </div>
+          <div class="fit-bar"><div class="fit-bar-fill high" style="width: 88%"></div></div>
+        </div>
+
+        <div class="signal-legs">
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action buy">BUY</span>
+              <span class="leg-strike">24600 PE</span>
+            </div>
+            <span class="leg-premium">₹48.60</span>
+          </div>
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action sell">SELL</span>
+              <span class="leg-strike">24700 PE</span>
+            </div>
+            <span class="leg-premium">₹72.80</span>
+          </div>
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action sell">SELL</span>
+              <span class="leg-strike">25000 CE</span>
+            </div>
+            <span class="leg-premium">₹95.40</span>
+          </div>
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action buy">BUY</span>
+              <span class="leg-strike">25100 CE</span>
+            </div>
+            <span class="leg-premium">₹62.80</span>
+          </div>
+        </div>
+
+        <div class="signal-stats">
+          <div class="signal-stat">
+            <div class="signal-stat-label">Max Profit</div>
+            <div class="signal-stat-value profit">₹3,692</div>
+          </div>
+          <div class="signal-stat">
+            <div class="signal-stat-label">Max Loss</div>
+            <div class="signal-stat-value loss">₹2,808</div>
+          </div>
+          <div class="signal-stat">
+            <div class="signal-stat-label">Risk:Reward</div>
+            <div class="signal-stat-value neutral">1:1.31</div>
+          </div>
+        </div>
+
+        <div class="signal-reasons">
+          <span class="reason-tag">VIX 13.4 — Low</span>
+          <span class="reason-tag">ADX &lt; 30</span>
+          <span class="reason-tag">BB Squeeze</span>
+        </div>
+
+        <button class="btn-deployed">
+          ✓ Already Deployed
+        </button>
+      </div>
+
+      <!-- Card 3: Short Strangle - MEDIUM -->
+      <div class="signal-card medium">
+        <div class="confidence-ring-wrapper">
+          <div class="confidence-ring">
+            <svg viewBox="0 0 52 52">
+              <circle class="bg" cx="26" cy="26" r="22"/>
+              <circle class="fill medium" cx="26" cy="26" r="22"
+                stroke-dasharray="138.2"
+                stroke-dashoffset="34.6"/>
+            </svg>
+            <div class="confidence-value medium">75%</div>
+          </div>
+        </div>
+        <div class="signal-type">Neutral · Premium Selling</div>
+        <div class="signal-name">Short Strangle</div>
+        <div class="signal-underlying">
+          NIFTY <span class="dot"></span> Weekly Expiry <span class="dot"></span> 3 Jun
+        </div>
+
+        <div class="fit-score">
+          <div class="fit-score-header">
+            <span class="fit-score-label">Regime Fit</span>
+            <span class="fit-score-value medium">72%</span>
+          </div>
+          <div class="fit-bar"><div class="fit-bar-fill medium" style="width: 72%"></div></div>
+        </div>
+
+        <div class="signal-legs">
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action sell">SELL</span>
+              <span class="leg-strike">24600 PE</span>
+            </div>
+            <span class="leg-premium">₹48.60</span>
+          </div>
+          <div class="signal-leg">
+            <div class="leg-info">
+              <span class="leg-action sell">SELL</span>
+              <span class="leg-strike">25100 CE</span>
+            </div>
+            <span class="leg-premium">₹62.80</span>
+          </div>
+        </div>
+
+        <div class="signal-stats">
+          <div class="signal-stat">
+            <div class="signal-stat-label">Max Profit</div>
+            <div class="signal-stat-value profit">₹7,241</div>
+          </div>
+          <div class="signal-stat">
+            <div class="signal-stat-label">Max Loss</div>
+            <div class="signal-stat-value loss">Unlimited</div>
+          </div>
+          <div class="signal-stat">
+            <div class="signal-stat-label">Breakeven</div>
+            <div class="signal-stat-value neutral">±260pts</div>
+          </div>
+        </div>
+
+        <div class="signal-reasons">
+          <span class="reason-tag">Low IV Percentile</span>
+          <span class="reason-tag">Theta Positive</span>
+          <span class="reason-tag">Range Market</span>
+        </div>
+
+        <button class="btn-deploy">
+          <span class="icon">🚀</span> Deploy Strategy
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
