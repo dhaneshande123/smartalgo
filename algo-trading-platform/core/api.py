@@ -5495,21 +5495,89 @@ async def backtest_list():
     description="Returns health status of all platform components.",
 )
 async def monitoring_health():
+    """Real component health from actual system state."""
+    import psutil
+    import os
     now = datetime.now(IST)
+
+    # Real system metrics
+    cpu_pct = psutil.cpu_percent(interval=0.1)
+    mem = psutil.virtual_memory()
+    process = psutil.Process(os.getpid())
+    proc_mem = process.memory_info().rss / (1024 * 1024)  # MB
+
+    # Fyers feed status
+    fyers_connected = bool(_live_feed and _live_feed.is_connected)
+    fyers_status = "healthy" if fyers_connected else "disconnected"
+    fyers_msg = "Fyers API connected, live data flowing" if fyers_connected else "Fyers not connected — check token"
+
+    # Executor status
+    executor = globals().get("_dashboard_executor")
+    exec_status = "healthy"
+    exec_msg = "Not started"
+    if executor:
+        es = executor.status()
+        exec_msg = f"{es.get('ticks_processed', 0)} ticks, last: {(es.get('last_tick_at') or 'never')[:19]}"
+        if not es.get("running"):
+            exec_status = "stopped"
+            exec_msg = "Executor stopped"
+
+    # Kill switch
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        kill_active = store.is_kill_switch_active()
+    except Exception:
+        kill_active = False
+
+    # Chain cache freshness
+    chain_ages = []
+    for sym, ts in _fyers_chain_cache_time.items():
+        age = time.time() - ts
+        chain_ages.append(age)
+    avg_chain_age = sum(chain_ages) / len(chain_ages) if chain_ages else -1
+
+    # Deployed strategies count
+    running_count = sum(1 for s in _deployed_strategies.values() if s.get("status") == "RUNNING")
+    entered_count = sum(1 for s in _deployed_strategies.values() if s.get("entered"))
+
+    # DB size
+    db_size_mb = 0
+    try:
+        db_path = "data/platform_state.db"
+        if os.path.exists(db_path):
+            db_size_mb = os.path.getsize(db_path) / (1024 * 1024)
+    except Exception:
+        pass
+
     components = [
-        {"component": "api_server", "status": "healthy", "message": "Responding normally", "latency_ms": round(_mock._rng.uniform(1, 10), 1)},
-        {"component": "event_bus", "status": "healthy", "message": "Queue depth normal", "latency_ms": round(_mock._rng.uniform(0.5, 5), 1)},
-        {"component": "broker_gateway", "status": "degraded", "message": "Zerodha: connected, Angel: reconnecting", "latency_ms": round(_mock._rng.uniform(10, 100), 1)},
-        {"component": "market_data", "status": "healthy", "message": "Feed active", "latency_ms": round(_mock._rng.uniform(2, 20), 1)},
-        {"component": "risk_engine", "status": "healthy", "message": "All checks passing", "latency_ms": round(_mock._rng.uniform(1, 8), 1)},
-        {"component": "strategy_engine", "status": "healthy", "message": "3 strategies active", "latency_ms": round(_mock._rng.uniform(1, 5), 1)},
-        {"component": "order_manager", "status": "healthy", "message": "Processing normally", "latency_ms": round(_mock._rng.uniform(1, 15), 1)},
-        {"component": "pnl_engine", "status": "healthy", "message": "MTM updated", "latency_ms": round(_mock._rng.uniform(1, 5), 1)},
+        {"component": "api_server", "status": "healthy", "message": f"Uptime: {round(time.time() - _startup_time)}s, CPU: {cpu_pct}%", "latency_ms": 1},
+        {"component": "market_data_feed", "status": fyers_status, "message": fyers_msg, "latency_ms": round(avg_chain_age * 1000, 1) if avg_chain_age >= 0 else 0},
+        {"component": "strategy_engine", "status": exec_status, "message": exec_msg, "latency_ms": 0},
+        {"component": "risk_engine", "status": "warning" if kill_active else "healthy", "message": "Kill switch ACTIVE" if kill_active else "Monitoring active", "latency_ms": 0},
+        {"component": "database", "status": "healthy", "message": f"SQLite {db_size_mb:.1f}MB, WAL mode", "latency_ms": 0},
+        {"component": "paper_broker", "status": "healthy" if _paper_trading_manager else "inactive", "message": f"Session {'active' if _paper_trading_manager and _paper_trading_manager.is_active else 'inactive'}", "latency_ms": 0},
     ]
     overall = "healthy" if all(c["status"] == "healthy" for c in components) else "degraded"
     return {
         "overall_status": overall,
         "components": components,
+        "system": {
+            "cpu_pct": cpu_pct,
+            "memory_pct": mem.percent,
+            "memory_used_mb": round(mem.used / (1024 * 1024)),
+            "memory_total_mb": round(mem.total / (1024 * 1024)),
+            "process_memory_mb": round(proc_mem, 1),
+            "db_size_mb": round(db_size_mb, 2),
+        },
+        "strategies": {
+            "total": len(_deployed_strategies),
+            "running": running_count,
+            "entered": entered_count,
+        },
+        "chain_cache_age_sec": round(avg_chain_age, 1) if avg_chain_age >= 0 else None,
+        "kill_switch_active": kill_active,
+        "source": "real_psutil",
         "timestamp": now.isoformat(),
     }
 
@@ -5521,41 +5589,37 @@ async def monitoring_health():
     description="Returns all active and recent alerts with severity and source.",
 )
 async def monitoring_alerts():
+    """Real alerts from risk events audit log."""
     now = datetime.now(IST)
-    return {
-        "alerts": [
-            {
-                "alert_id": "ALT-001",
-                "severity": "WARNING",
-                "source": "broker_gateway",
-                "title": "Angel One connection unstable",
-                "message": "Reconnection attempt 3/5. Latency spike detected.",
-                "created_at": (now - timedelta(minutes=12)).isoformat(),
-                "acknowledged": False,
-            },
-            {
-                "alert_id": "ALT-002",
-                "severity": "INFO",
-                "source": "strategy_engine",
-                "title": "Iron Condor adjustment triggered",
-                "message": "Short CE delta exceeded 0.30, adjustment order placed.",
-                "created_at": (now - timedelta(minutes=5)).isoformat(),
-                "acknowledged": True,
-            },
-            {
-                "alert_id": "ALT-003",
-                "severity": "WARNING",
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        # Get recent risk events as alerts
+        events = store.get_risk_events(limit=50)
+        today_iso = now.date().isoformat()
+        alerts = []
+        for e in events:
+            alerts.append({
+                "alert_id": f"RE-{e.get('id', 0)}",
+                "severity": e.get("severity", "INFO"),
                 "source": "risk_engine",
-                "title": "Daily loss approaching 60% of limit",
-                "message": "Daily loss: ₹580,000 / ₹1,000,000 limit.",
-                "created_at": (now - timedelta(minutes=2)).isoformat(),
+                "title": f"{e.get('event_type', 'EVENT')}: {e.get('limit_name', '')}".strip(": "),
+                "message": e.get("message", ""),
+                "created_at": e.get("timestamp", ""),
                 "acknowledged": False,
-            },
-        ],
-        "active_count": 2,
-        "total_today": 15,
-        "timestamp": now.isoformat(),
-    }
+            })
+        active = sum(1 for a in alerts if a["severity"] in ("WARN", "BREACH", "CRITICAL"))
+        today_count = sum(1 for a in alerts if a.get("created_at", "").startswith(today_iso))
+        return {
+            "alerts": alerts,
+            "active_count": active,
+            "total_today": today_count,
+            "source": "risk_events",
+            "timestamp": now.isoformat(),
+        }
+    except Exception as e:
+        logger.warning(f"Monitoring alerts failed: {e}")
+        return {"alerts": [], "active_count": 0, "total_today": 0, "source": "empty", "timestamp": now.isoformat()}
 
 
 @app.post(
@@ -5565,6 +5629,13 @@ async def monitoring_alerts():
     description="Marks an alert as acknowledged.",
 )
 async def acknowledge_alert(alert_id: str):
+    """Log acknowledgement as a risk event."""
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        store.log_risk_event("ALERT_ACK", "INFO", message=f"Alert {alert_id} acknowledged by user")
+    except Exception:
+        pass
     return {
         "alert_id": alert_id,
         "acknowledged": True,
@@ -5580,17 +5651,52 @@ async def acknowledge_alert(alert_id: str):
     description="Returns key platform performance metrics: orders/sec, latency, memory, CPU.",
 )
 async def monitoring_metrics():
+    """Real platform metrics from psutil + internal state."""
+    import psutil
+    import os
     now = datetime.now(IST)
+
+    process = psutil.Process(os.getpid())
+    cpu = psutil.cpu_percent(interval=0.1)
+    mem = psutil.virtual_memory()
+    proc_mem = process.memory_info().rss / (1024 * 1024)
+
+    # WebSocket connections
+    ws_count = 0
+    ws_mgr = globals().get("_ws_manager")
+    if ws_mgr and hasattr(ws_mgr, "_connections"):
+        ws_count = len(ws_mgr._connections)
+    elif ws_mgr and hasattr(ws_mgr, "active_connections"):
+        ws_count = len(ws_mgr.active_connections)
+
+    # Trade counts from SQLite
+    trade_count = 0
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        trade_count = len(store.get_trade_log(limit=9999))
+    except Exception:
+        pass
+
+    # Executor tick rate
+    executor = globals().get("_dashboard_executor")
+    ticks = executor.status().get("ticks_processed", 0) if executor else 0
+
     return {
-        "orders_per_second": round(_mock._rng.uniform(2, 15), 1),
-        "avg_order_latency_ms": round(_mock._rng.uniform(5, 50), 1),
-        "p99_order_latency_ms": round(_mock._rng.uniform(50, 200), 1),
-        "event_bus_throughput_per_sec": round(_mock._rng.uniform(50, 500), 1),
-        "event_bus_queue_depth": _mock._rng.randint(0, 100),
-        "active_websocket_connections": _mock._rng.randint(1, 10),
-        "memory_usage_mb": round(_mock._rng.uniform(200, 600), 1),
-        "cpu_usage_pct": round(_mock._rng.uniform(5, 40), 1),
+        "orders_per_second": 0,  # paper mode — no real order flow
+        "avg_order_latency_ms": 0,
+        "p99_order_latency_ms": 0,
+        "event_bus_throughput_per_sec": round(ticks / max(1, (time.time() - _startup_time)) * 5, 1),
+        "event_bus_queue_depth": 0,
+        "active_websocket_connections": ws_count,
+        "memory_usage_mb": round(proc_mem, 1),
+        "cpu_usage_pct": round(cpu, 1),
+        "system_memory_pct": round(mem.percent, 1),
         "uptime_seconds": round(time.time() - _startup_time, 0),
+        "total_trades": trade_count,
+        "deployed_strategies": len(_deployed_strategies),
+        "fyers_connected": bool(_live_feed and _live_feed.is_connected),
+        "source": "real_psutil",
         "timestamp": now.isoformat(),
     }
 
@@ -5602,21 +5708,39 @@ async def monitoring_metrics():
     description="Returns historical metrics data points for the past N minutes.",
 )
 async def monitoring_metrics_history(
-    metric: str = Query(default="orders_per_second", description="Metric name"),
+    metric: str = Query(default="equity", description="Metric: equity, cpu, memory"),
     minutes: int = Query(default=30, ge=1, le=1440, description="Lookback minutes"),
 ):
-    now = datetime.now(IST)
-    points = []
-    for i in range(minutes):
-        ts = now - timedelta(minutes=minutes - i)
-        val = _mock._rng.uniform(1, 50) if "latency" not in metric else _mock._rng.uniform(5, 200)
-        points.append({"timestamp": ts.isoformat(), "value": round(val, 2)})
-    return {
-        "metric": metric,
-        "interval_minutes": 1,
-        "data_points": points,
-        "count": len(points),
-    }
+    """Real metrics history from equity snapshots or system sampling."""
+    try:
+        from core.state_store import get_store
+        store = get_store()
+
+        if metric == "equity":
+            snapshots = store.get_equity_curve(limit=minutes)
+            points = [{"timestamp": s["timestamp"], "value": s["equity"]} for s in snapshots]
+        else:
+            # For CPU/memory, we don't have historical data stored yet
+            # Return the current value as a single point
+            import psutil
+            if metric == "cpu":
+                val = psutil.cpu_percent(interval=0.1)
+            elif metric == "memory":
+                val = psutil.virtual_memory().percent
+            else:
+                val = 0
+            points = [{"timestamp": datetime.now(IST).isoformat(), "value": round(val, 2)}]
+
+        return {
+            "metric": metric,
+            "interval_minutes": 1,
+            "data_points": points,
+            "count": len(points),
+            "source": "real",
+        }
+    except Exception as e:
+        logger.warning(f"Metrics history failed: {e}")
+        return {"metric": metric, "data_points": [], "count": 0, "source": "empty"}
 
 
 # ===================================================================
