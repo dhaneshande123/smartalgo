@@ -34,48 +34,60 @@ function KPIRow({ summary }) {
   if (!summary) return null;
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-      <MetricCard
-        label="Net P&L"
-        value={summary.total_pnl}
-        prefix="₹"
-        icon={summary.total_pnl >= 0 ? TrendingUp : TrendingDown}
-      />
-      <MetricCard
-        label="Gross P&L"
-        value={summary.gross_pnl ?? summary.total_pnl}
-        prefix="₹"
-        icon={summary.gross_pnl >= 0 ? ArrowUpRight : ArrowDownRight}
-      />
-      <MetricCard
-        label={summary.gross_win_rate != null ? 'Net Win Rate' : 'Win Rate'}
-        value={summary.win_rate}
-        suffix="%"
-        icon={Target}
-        colorClass={summary.win_rate >= 50 ? 'text-profit' : 'text-loss'}
-      />
-      <MetricCard
-        label="Profit Factor"
-        value={summary.profit_factor === 'inf' ? '∞' : summary.profit_factor}
-        icon={Zap}
-        colorClass={
-          summary.profit_factor === 'inf' || summary.profit_factor > 1
-            ? 'text-profit'
-            : 'text-loss'
-        }
-      />
-      <MetricCard
-        label="Sharpe Ratio"
-        value={summary.sharpe_ratio}
-        icon={Trophy}
-        colorClass={summary.sharpe_ratio >= 1 ? 'text-profit' : summary.sharpe_ratio >= 0 ? 'text-yellow-400' : 'text-loss'}
-      />
-      <MetricCard
-        label="Max Drawdown"
-        value={summary.max_drawdown}
-        prefix="₹"
-        icon={Shield}
-        colorClass="text-loss"
-      />
+      <div title="Total profit/loss after all charges and slippage — what you actually take home">
+        <MetricCard
+          label="Net P&L"
+          value={summary.net_pnl ?? summary.total_pnl}
+          prefix="₹"
+          icon={summary.total_pnl >= 0 ? TrendingUp : TrendingDown}
+        />
+      </div>
+      <div title="Profit/loss before charges — shows raw strategy performance quality">
+        <MetricCard
+          label="Gross P&L"
+          value={summary.gross_pnl ?? summary.total_pnl}
+          prefix="₹"
+          icon={summary.gross_pnl >= 0 ? ArrowUpRight : ArrowDownRight}
+        />
+      </div>
+      <div title="Percentage of trades that made money (based on gross P&L, before charges)">
+        <MetricCard
+          label="Net Win Rate"
+          value={summary.win_rate}
+          suffix="%"
+          icon={Target}
+          colorClass={summary.win_rate >= 50 ? 'text-profit' : 'text-loss'}
+        />
+      </div>
+      <div title="Gross wins / Gross losses — above 1.5 is good, above 2.0 is excellent">
+        <MetricCard
+          label="Profit Factor"
+          value={summary.profit_factor === 'inf' ? '∞' : summary.profit_factor}
+          icon={Zap}
+          colorClass={
+            summary.profit_factor === 'inf' || summary.profit_factor > 1
+              ? 'text-profit'
+              : 'text-loss'
+          }
+        />
+      </div>
+      <div title="Risk-adjusted return — needs 10+ trades to be meaningful. Above 1.5 is good.">
+        <MetricCard
+          label="Sharpe Ratio"
+          value={summary.sharpe_ratio}
+          icon={Trophy}
+          colorClass={summary.sharpe_ratio >= 1 ? 'text-profit' : summary.sharpe_ratio >= 0 ? 'text-yellow-400' : 'text-loss'}
+        />
+      </div>
+      <div title="Largest peak-to-trough decline in your equity curve">
+        <MetricCard
+          label="Max Drawdown"
+          value={summary.max_drawdown}
+          prefix="₹"
+          icon={Shield}
+          colorClass="text-loss"
+        />
+      </div>
     </div>
   );
 }
@@ -84,21 +96,20 @@ function KPIRow({ summary }) {
 function StatsBar({ summary }) {
   if (!summary) return null;
   const items = [
-    { label: 'Trades', value: summary.total_trades, icon: ListOrdered },
-    { label: 'Running', value: summary.running_strategies, icon: Activity },
-    { label: 'Wins', value: summary.win_count, color: 'text-profit' },
-    { label: 'Losses', value: summary.loss_count, color: 'text-loss' },
-    ...(summary.gross_win_rate != null ? [{ label: 'Gross WR', value: `${summary.gross_win_rate}%`, color: summary.gross_win_rate >= 50 ? 'text-profit' : 'text-loss' }] : []),
-    { label: 'Avg Win', value: fmtINR(summary.avg_win), color: 'text-profit' },
-    { label: 'Avg Loss', value: fmtINR(summary.avg_loss), color: 'text-loss' },
-    { label: 'Best', value: fmtINR(summary.best_trade), color: 'text-profit' },
-    { label: 'Worst', value: fmtINR(summary.worst_trade), color: 'text-loss' },
-    { label: 'Expectancy', value: fmtINR(summary.expectancy), color: pnlColor(summary.expectancy) },
+    { label: 'Trades', value: summary.total_trades, icon: ListOrdered, tip: 'Total completed (exited/stopped) strategies' },
+    { label: 'Running', value: summary.running_strategies, icon: Activity, tip: 'Strategies currently active in the market' },
+    { label: 'Wins', value: summary.win_count, color: 'text-profit', tip: 'Strategies with positive gross P&L (before charges)' },
+    { label: 'Losses', value: summary.loss_count, color: 'text-loss', tip: 'Strategies with negative gross P&L' },
+    { label: 'Avg Win', value: fmtINR(summary.avg_win), color: 'text-profit', tip: 'Average gross profit on winning trades' },
+    { label: 'Avg Loss', value: fmtINR(summary.avg_loss), color: 'text-loss', tip: 'Average gross loss on losing trades' },
+    { label: 'Best', value: fmtINR(summary.best_trade), color: 'text-profit', tip: 'Highest single-trade net P&L' },
+    { label: 'Worst', value: fmtINR(summary.worst_trade), color: 'text-loss', tip: 'Lowest single-trade net P&L' },
+    { label: 'Expectancy', value: fmtINR(summary.expectancy), color: pnlColor(summary.expectancy), tip: 'Average net P&L per trade — positive means system is profitable over time' },
   ];
   return (
     <div className="flex flex-wrap gap-x-5 gap-y-2 px-1">
       {items.map((it) => (
-        <div key={it.label} className="flex items-center gap-1.5 text-xs">
+        <div key={it.label} className="flex items-center gap-1.5 text-xs cursor-help" title={it.tip || ''}>
           {it.icon && <it.icon className="w-3.5 h-3.5 text-slate-500" />}
           <span className="text-slate-500">{it.label}:</span>
           <span className={`font-mono font-semibold ${it.color || 'text-white'}`}>
@@ -369,6 +380,38 @@ export default function TradeAnalytics() {
       {/* KPI Cards */}
       <KPIRow summary={summary} />
 
+      {/* Insight Card — Gross vs Net P&L explanation */}
+      {summary.total_trades > 0 && summary.gross_pnl > 0 && (summary.net_pnl ?? summary.total_pnl) < 0 && (
+        <div className="glass-card !p-4 !rounded-xl border-l-4 border-l-yellow-500">
+          <div className="flex items-start gap-3">
+            <Zap className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <div className="text-sm font-bold text-yellow-400 mb-1">Your strategies are profitable — charges are the issue</div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Gross P&L is <span className="text-profit font-semibold">+₹{fmt(summary.gross_pnl)}</span> ({summary.win_rate}% win rate)
+                but charges of <span className="text-loss font-semibold">₹{fmt(summary.total_charges)}</span> make
+                Net P&L <span className="text-loss font-semibold">-₹{fmt(Math.abs(summary.net_pnl ?? summary.total_pnl))}</span>.
+                Average charge per trade: <span className="font-semibold text-white">₹{fmt(summary.total_charges / Math.max(summary.total_trades, 1))}</span>.
+                To be net-profitable, each trade needs &gt;₹{fmt(summary.total_charges / Math.max(summary.total_trades, 1))} gross profit.
+              </p>
+              <p className="text-[10px] text-slate-500 mt-1.5">
+                Tip: Use higher-premium options (ATM/ITM) or increase lot size to improve the charge-to-profit ratio.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Low sample warning */}
+      {summary.total_trades > 0 && summary.total_trades < 10 && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/40 border border-slate-700/30">
+          <Shield className="w-3.5 h-3.5 text-yellow-400" />
+          <span className="text-[11px] text-slate-400">
+            <span className="font-semibold text-yellow-400">{summary.total_trades} trades</span> — Sharpe Ratio, Win Rate, and Profit Factor become reliable with 20+ trades. Current values may be misleading.
+          </span>
+        </div>
+      )}
+
       {/* Secondary stats */}
       <StatsBar summary={summary} />
 
@@ -377,11 +420,13 @@ export default function TradeAnalytics() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Equity Curve */}
           <Card title="Equity Curve">
+            <div style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 6 }}>Cumulative P&L over time — shows if you're consistently profitable</div>
             <EquityCurve data={equityCurve} />
           </Card>
 
           {/* Daily P&L */}
           <Card title="Daily P&L">
+            <div style={{ fontSize: 10, color: '#64748b', marginTop: -6, marginBottom: 6 }}>Profit or loss per day — green = profitable, red = losing day</div>
             <DailyPnLChart data={dailyPnl} />
           </Card>
 
@@ -452,7 +497,7 @@ export default function TradeAnalytics() {
             </div>
           </Card>
 
-          {/* Charges Breakdown */}
+          {/* Charges Breakdown — regulatory fees that reduce your gross profit */}
           {summary.total_charges > 0 && (
             <Card title="Charges & Slippage" className="lg:col-span-2">
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
