@@ -3959,18 +3959,44 @@ async def order_book():
     except Exception as e:
         logger.warning(f"Fyers orderbook fetch failed: {e}")
 
-    # Fallback to mock
-    orders = _mock.orders()
-    return {
-        "orders": orders,
-        "count": len(orders),
-        "filled": sum(1 for o in orders if o["status"] == "FILLED"),
-        "open": sum(1 for o in orders if o["status"] == "OPEN"),
-        "cancelled": sum(1 for o in orders if o["status"] == "CANCELLED"),
-        "rejected": sum(1 for o in orders if o["status"] == "REJECTED"),
-        "partial": sum(1 for o in orders if o["status"] == "PARTIAL"),
-        "source": "mock",
-    }
+    # Build orders from deployed strategies' trade log (no mock)
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        trade_log = store.get_trade_log(limit=100)
+        orders = []
+        for t in trade_log:
+            orders.append({
+                "id": str(t.get("id", "")),
+                "order_id": str(t.get("id", "")),
+                "symbol": t.get("symbol", ""),
+                "side": t.get("side", ""),
+                "qty": t.get("qty", 0),
+                "price": t.get("price", 0),
+                "status": "FILLED",
+                "type": "MARKET",
+                "time": t.get("timestamp", ""),
+                "strategy": t.get("strategy_id", ""),
+                "action": t.get("action", ""),
+                "reason": t.get("reason", ""),
+            })
+        return {
+            "orders": orders,
+            "count": len(orders),
+            "filled": len(orders),
+            "open": 0,
+            "cancelled": 0,
+            "rejected": 0,
+            "partial": 0,
+            "source": "trade_log",
+        }
+    except Exception:
+        return {
+            "orders": [],
+            "count": 0,
+            "filled": 0, "open": 0, "cancelled": 0, "rejected": 0, "partial": 0,
+            "source": "empty",
+        }
 
 
 @app.get(
@@ -4010,14 +4036,38 @@ async def trade_book():
     except Exception as e:
         logger.warning(f"Fyers tradebook fetch failed: {e}")
 
-    # Fallback to mock
-    trades = _mock.trades()
-    return {
-        "trades": trades,
-        "count": len(trades),
-        "total_turnover": round(sum(t["price"] * t["quantity"] for t in trades), 2),
-        "source": "mock",
-    }
+    # Build trades from deployed strategies' trade log (no mock)
+    try:
+        from core.state_store import get_store
+        store = get_store()
+        trade_log = store.get_trade_log(limit=100)
+        trades = []
+        for t in trade_log:
+            trades.append({
+                "id": str(t.get("id", "")),
+                "orderId": str(t.get("id", "")),
+                "symbol": t.get("symbol", ""),
+                "side": t.get("side", ""),
+                "qty": t.get("qty", 0),
+                "price": t.get("price", 0),
+                "quantity": t.get("qty", 0),
+                "time": t.get("timestamp", ""),
+                "exchange": "NSE",
+            })
+        turnover = sum(t["price"] * t["quantity"] for t in trades)
+        return {
+            "trades": trades,
+            "count": len(trades),
+            "total_turnover": round(turnover, 2),
+            "source": "trade_log",
+        }
+    except Exception:
+        return {
+            "trades": [],
+            "count": 0,
+            "total_turnover": 0,
+            "source": "empty",
+        }
 
 
 @app.post(

@@ -396,12 +396,27 @@ export default function Strategies() {
 
         {/* Header */}
         <div>
-          <h1 style={{ color: '#ffffff', fontSize: 26, fontWeight: 800, letterSpacing: '-0.02em' }}>
+          <h1 style={{ color: !isLight ? '#ffffff' : '#1e293b', fontSize: 26, fontWeight: 800, letterSpacing: '-0.02em' }}>
             Trading Strategies
           </h1>
-          <p style={{ color: '#475569', fontSize: 13, marginTop: 4 }}>
-            {strategies.length} institutional-grade algo strategies — select a category to explore
+          <p style={{ color: '#64748b', fontSize: 14, marginTop: 4 }}>
+            {strategies.length} algo strategy templates — select a category to explore and deploy
           </p>
+        </div>
+
+        {/* Disclaimer Banner */}
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10,
+          padding: '10px 16px',
+          background: !isLight ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.08)',
+          border: '1px solid rgba(245,158,11,0.2)',
+          borderRadius: 10, fontSize: 12, color: '#d97706', lineHeight: 1.5,
+        }}>
+          <AlertTriangle style={{ width: 16, height: 16, flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <strong>Simulated returns for illustration only.</strong> Win rates and historical returns shown are based on
+            theoretical models, not live market data. Always paper-test a strategy before deploying with real capital.
+          </div>
         </div>
 
         {/* Market Regime Banner (if available) */}

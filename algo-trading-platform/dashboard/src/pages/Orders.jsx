@@ -13,29 +13,11 @@ import { useToast } from '../components/common/ToastProvider';
    Fallback Data
    ════════════════════════════════════════════════════════════ */
 
-const fallbackOrders = [
-  { id: 'ORD001', symbol: 'NIFTY 24100 CE', side: 'SELL', qty: 50, price: 185.50, status: 'filled', type: 'LIMIT', time: '09:15:32', strategy: 'Iron Condor NIFTY' },
-  { id: 'ORD002', symbol: 'NIFTY 24300 CE', side: 'BUY', qty: 50, price: 95.20, status: 'filled', type: 'LIMIT', time: '09:15:33', strategy: 'Iron Condor NIFTY' },
-  { id: 'ORD003', symbol: 'BANKNIFTY 51200 CE', side: 'SELL', qty: 25, price: 320.40, status: 'filled', type: 'MARKET', time: '09:30:15', strategy: 'Straddle BNF' },
-  { id: 'ORD004', symbol: 'NIFTY 24000 PE', side: 'BUY', qty: 50, price: 0, status: 'pending', type: 'LIMIT', time: '14:22:10', strategy: 'Bull Call Spread' },
-  { id: 'ORD005', symbol: 'BANKNIFTY 51500 CE', side: 'SELL', qty: 25, price: 180.00, status: 'cancelled', type: 'LIMIT', time: '11:45:00', strategy: 'Straddle BNF' },
-  { id: 'ORD006', symbol: 'NIFTY 23800 PE', side: 'BUY', qty: 100, price: 45.50, status: 'rejected', type: 'LIMIT', time: '10:12:33', strategy: 'Short Strangle' },
-];
+const fallbackOrders = [];
 
-const fallbackTrades = [
-  { id: 'TRD001', orderId: 'ORD001', symbol: 'NIFTY 24100 CE', side: 'SELL', qty: 50, price: 185.50, time: '09:15:32', exchange: 'NSE' },
-  { id: 'TRD002', orderId: 'ORD002', symbol: 'NIFTY 24300 CE', side: 'BUY', qty: 50, price: 95.20, time: '09:15:33', exchange: 'NSE' },
-  { id: 'TRD003', orderId: 'ORD003', symbol: 'BANKNIFTY 51200 CE', side: 'SELL', qty: 25, price: 320.40, time: '09:30:15', exchange: 'NSE' },
-];
+const fallbackTrades = [];
 
-const fallbackAudit = [
-  { id: 1, time: '09:15:30', event: 'Strategy Started', detail: 'Iron Condor NIFTY activated', level: 'info' },
-  { id: 2, time: '09:15:32', event: 'Order Placed', detail: 'SELL 50 NIFTY 24100 CE @ 185.50', level: 'info' },
-  { id: 3, time: '09:15:32', event: 'Order Filled', detail: 'ORD001 fully filled at 185.50', level: 'info' },
-  { id: 4, time: '10:12:33', event: 'Order Rejected', detail: 'ORD006 - Insufficient margin', level: 'warning' },
-  { id: 5, time: '11:45:00', event: 'Order Cancelled', detail: 'ORD005 - Manual cancellation', level: 'info' },
-  { id: 6, time: '14:22:10', event: 'Order Placed', detail: 'BUY 50 NIFTY 24000 PE - Pending', level: 'info' },
-];
+const fallbackAudit = [];
 
 const statusFilters = ['all', 'filled', 'pending', 'cancelled', 'rejected'];
 
@@ -424,41 +406,59 @@ export default function Orders() {
             </div>
           }
         >
-          <DataTable columns={orderColumns} data={filteredOrders} />
+          {filteredOrders.length === 0 ? (
+            <div className="text-center py-8 text-slate-500">
+              No orders yet — deploy a strategy to start trading
+            </div>
+          ) : (
+            <DataTable columns={orderColumns} data={filteredOrders} />
+          )}
         </Card>
       )}
 
       {/* Trades Tab */}
       {tab === 'trades' && (
         <Card title={`Trade Book (${trades.length})`}>
-          <DataTable columns={tradeColumns} data={trades} />
+          {trades.length === 0 ? (
+            <div className="text-center py-8 text-slate-500">
+              No trades yet — deploy a strategy to start trading
+            </div>
+          ) : (
+            <DataTable columns={tradeColumns} data={trades} />
+          )}
         </Card>
       )}
 
       {/* Audit Trail Tab */}
       {tab === 'audit' && (
         <Card title={`Audit Trail (${audit.length})`}>
-          <div className="space-y-0">
-            {audit.map((entry, i) => (
-              <div key={entry.id || i} className="flex items-start gap-3 py-2.5 border-b border-terminal-border last:border-0">
-                <span className="font-mono text-[10px] text-slate-500 mt-0.5 flex-shrink-0 w-16">{entry.time}</span>
-                <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${
-                  entry.level === 'warning' || entry.level === 'WARNING'
-                    ? 'bg-yellow-400'
-                    : entry.level === 'error' || entry.level === 'ERROR'
-                    ? 'bg-loss'
-                    : 'bg-blue-400'
-                }`} />
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold text-white">{entry.event}</div>
-                  <div className="text-[10px] text-slate-400 truncate">{entry.detail}</div>
+          {audit.length === 0 ? (
+            <div className="text-center py-8 text-slate-500">
+              No audit entries yet — activity will appear here once you start trading
+            </div>
+          ) : (
+            <div className="space-y-0">
+              {audit.map((entry, i) => (
+                <div key={entry.id || i} className="flex items-start gap-3 py-2.5 border-b border-terminal-border last:border-0">
+                  <span className="font-mono text-[10px] text-slate-500 mt-0.5 flex-shrink-0 w-16">{entry.time}</span>
+                  <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${
+                    entry.level === 'warning' || entry.level === 'WARNING'
+                      ? 'bg-yellow-400'
+                      : entry.level === 'error' || entry.level === 'ERROR'
+                      ? 'bg-loss'
+                      : 'bg-blue-400'
+                  }`} />
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-white">{entry.event}</div>
+                    <div className="text-[10px] text-slate-400 truncate">{entry.detail}</div>
+                  </div>
+                  {(entry.level === 'warning' || entry.level === 'WARNING') && (
+                    <AlertTriangle className="w-3 h-3 text-yellow-400 flex-shrink-0 mt-0.5 ml-auto" />
+                  )}
                 </div>
-                {(entry.level === 'warning' || entry.level === 'WARNING') && (
-                  <AlertTriangle className="w-3 h-3 text-yellow-400 flex-shrink-0 mt-0.5 ml-auto" />
-                )}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
 
