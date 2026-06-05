@@ -334,12 +334,15 @@ class DashboardStrategyExecutor:
 
         try:
             from core.condition_evaluator import evaluate_conditions
-            result = await evaluate_conditions(
-                symbol=underlying,
-                conditions=conditions,
-                trigger=trigger,
-                live_feed=self._live_feed,
-                timeframe=strat.get("condition_timeframe", "M5"),
+            result = await asyncio.wait_for(
+                evaluate_conditions(
+                    symbol=underlying,
+                    conditions=conditions,
+                    trigger=trigger,
+                    live_feed=self._live_feed,
+                    timeframe=strat.get("condition_timeframe", "M5"),
+                ),
+                timeout=8.0,  # prevent hanging if Fyers API is slow
             )
             # Store the latest evaluation for the UI
             strat["last_condition_check"] = {
@@ -353,6 +356,15 @@ class DashboardStrategyExecutor:
                 return False
             logger.info(f"Strategy {sid} entry conditions PASSED: {result['summary']}")
             return True
+        except asyncio.TimeoutError:
+            logger.warning(f"Condition evaluation TIMEOUT for {sid} (8s) — blocking entry this tick")
+            strat["last_condition_check"] = {
+                "at": datetime.now(IST).isoformat(),
+                "passed": False,
+                "summary": "Evaluation timed out (8s) — market data may be slow",
+                "results": [],
+            }
+            return False
         except Exception as e:
             logger.warning(f"Condition evaluation failed for {sid}: {e}")
             return False

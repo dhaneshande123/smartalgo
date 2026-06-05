@@ -177,17 +177,30 @@ def _generate_portfolio_snapshot() -> dict[str, Any]:
             status = str(strat.get("status", "")).upper()
             if status in ("EXITED", "STOPPED"):
                 total_realized += float(strat.get("realized_pnl", strat.get("pnl", 0)) or 0)
-            elif status in ("RUNNING", "ENTERED") and strat.get("entered"):
-                total_unrealized += float(strat.get("pnl", 0) or 0)
-                for pos in strat.get("positions", []):
-                    positions.append({
-                        "symbol": pos.get("symbol", ""),
-                        "quantity": pos.get("qty", 0),
-                        "avg_price": round(float(pos.get("entry_price", 0) or 0), 2),
-                        "ltp": round(float(pos.get("ltp", pos.get("entry_price", 0)) or 0), 2),
-                        "pnl_unrealized": round(float(pos.get("pnl", 0) or 0), 2),
-                        "pnl_realized": 0.0,
-                    })
+            elif status in ("RUNNING", "ENTERED"):
+                if strat.get("entered"):
+                    total_unrealized += float(strat.get("pnl", 0) or 0)
+                    for pos in strat.get("positions", []):
+                        positions.append({
+                            "symbol": pos.get("symbol", ""),
+                            "quantity": pos.get("qty", 0),
+                            "avg_price": round(float(pos.get("entry_price", 0) or 0), 2),
+                            "ltp": round(float(pos.get("ltp", pos.get("entry_price", 0)) or 0), 2),
+                            "pnl_unrealized": round(float(pos.get("pnl", 0) or 0), 2),
+                            "pnl_realized": 0.0,
+                        })
+                else:
+                    # Show pending positions (deployed but not yet entered)
+                    for pos in strat.get("positions", []):
+                        positions.append({
+                            "symbol": pos.get("symbol", ""),
+                            "quantity": pos.get("qty", 0),
+                            "avg_price": 0.0,
+                            "ltp": 0.0,
+                            "pnl_unrealized": 0.0,
+                            "pnl_realized": 0.0,
+                            "status": "PENDING_ENTRY",
+                        })
 
         # Margin from Risk Engine
         margin_used = 0.0

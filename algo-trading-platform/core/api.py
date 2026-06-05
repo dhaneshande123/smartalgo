@@ -2059,7 +2059,20 @@ def _refresh_strategy_pnl(strat: dict) -> None:
         if isinstance(row, dict) and "strike" in row:
             chain_lookup[int(row["strike"])] = row
 
+    # Flag if chain data is empty (market closed or Fyers disconnected)
+    chain_available = len(chain_lookup) > 0
+    if not chain_available:
+        strat["_pnl_stale"] = True
+        strat["_pnl_stale_reason"] = "option_chain_empty"
+    else:
+        strat["_pnl_stale"] = False
+
+    # Update spot from fresh chain if available
     spot = float(strat.get("spot_price", 0)) or 0.0
+    if chain_cache and isinstance(chain_cache, dict):
+        fresh_spot = float(chain_cache.get("spot_price", 0) or 0)
+        if fresh_spot > 0:
+            spot = fresh_spot
     unrealized_total = 0.0
     for pos in positions:
         entry = float(pos.get("entry_price", 0))
@@ -2082,6 +2095,8 @@ def _refresh_strategy_pnl(strat: dict) -> None:
             except (ValueError, IndexError):
                 pass
 
+        # Flag if this leg's LTP is stale (using entry price as fallback)
+        pos["_ltp_live"] = (ltp != entry) or not chain_available
         pos["ltp"] = round(ltp, 2)
         # Options P&L: SELL profits when premium falls, BUY profits when premium rises
         if side == "SELL":
@@ -3178,6 +3193,20 @@ async def deploy_strategy(body: dict = Body(...)):
             return int(round(price / step) * step)
 
         spot = float(strategy_entry["spot_price"]) or 0.0
+        # Validate spot freshness — re-fetch if option chain available
+        try:
+            fresh_chain = _fyers_chain_cache.get(underlying.upper()) or {}
+            fresh_spot = float(fresh_chain.get("spot_price", 0) or 0)
+            if fresh_spot > 0:
+                drift = abs(fresh_spot - spot)
+                if drift > 25:  # spot moved >25 pts since signal generated
+                    logger.info(f"Deploy: spot drifted {drift:.0f}pts ({spot:.0f} -> {fresh_spot:.0f}), using fresh spot")
+                    spot = fresh_spot
+                    strategy_entry["spot_price"] = fresh_spot
+                    strategy_entry["spot_drift_corrected"] = True
+        except Exception:
+            pass
+
         lot = int(strategy_entry["lot_size"]) or 1
         for leg in legs:
             premium = float(leg.get("premium", 0))
@@ -6056,6 +6085,25 @@ async def paper_trading_stop():
         raise HTTPException(status_code=409, detail="No active paper trading session")
 
     try:
+        # Snapshot open positions to SQLite before stopping
+        try:
+            from core.state_store import get_store
+            store = get_store()
+            positions = await _paper_trading_manager.get_positions()
+            for p in (positions or []):
+                store.log_trade(
+                    strategy_id="paper_session",
+                    action="SESSION_STOP_SNAPSHOT",
+                    side=str(p.get("side", "")),
+                    symbol=str(p.get("symbol", "")),
+                    qty=int(p.get("quantity", 0)),
+                    price=float(p.get("ltp", p.get("average_price", 0)) or 0),
+                    reason="session_stop",
+                )
+            logger.info(f"Snapshotted {len(positions or [])} paper positions before stop")
+        except Exception as snap_err:
+            logger.warning(f"Position snapshot before stop failed: {snap_err}")
+
         report = await _paper_trading_manager.stop_session()
         return report
     except RuntimeError as exc:
