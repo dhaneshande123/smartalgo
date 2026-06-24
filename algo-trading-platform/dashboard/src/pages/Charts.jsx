@@ -2,10 +2,11 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { createChart, ColorType, CrosshairMode, CandlestickSeries, HistogramSeries, LineSeries } from 'lightweight-charts';
 import {
   BarChart3, Clock, TrendingUp, TrendingDown, Activity, Layers,
-  ChevronDown, Eye, EyeOff,
+  ChevronDown, Eye, EyeOff, RefreshCw, Database, Wifi, AlertTriangle,
 } from 'lucide-react';
 import { useCandles, useIndices } from '../hooks/useApi';
 import { useTheme } from '../context/ThemeContext';
+import { useQueryClient } from '@tanstack/react-query';
 
 /* ════════════════════════════════════════════════════════════
    Constants
@@ -19,12 +20,12 @@ const SYMBOLS = [
 ];
 
 const TIMEFRAMES = [
-  { value: 'M1', label: '1m', count: 120 },
-  { value: 'M5', label: '5m', count: 100 },
-  { value: 'M15', label: '15m', count: 80 },
-  { value: 'M30', label: '30m', count: 60 },
-  { value: 'H1', label: '1H', count: 50 },
-  { value: 'D1', label: '1D', count: 60 },
+  { value: 'M1', label: '1m', count: 390 },
+  { value: 'M5', label: '5m', count: 390 },
+  { value: 'M15', label: '15m', count: 200 },
+  { value: 'M30', label: '30m', count: 150 },
+  { value: 'H1', label: '1H', count: 120 },
+  { value: 'D1', label: '1D', count: 250 },
 ];
 
 const INDICATOR_PRESETS = {
@@ -131,6 +132,7 @@ function StatBadge({ label, value, positive, icon: Icon }) {
 export default function Charts() {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
+  const queryClient = useQueryClient();
 
   const [symbol, setSymbol] = useState('NIFTY');
   const [timeframe, setTimeframe] = useState('M5');
@@ -138,10 +140,19 @@ export default function Charts() {
   const [showVolume, setShowVolume] = useState(true);
   const [subChart, setSubChart] = useState('rsi');
   const [indicatorMenu, setIndicatorMenu] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const tfConfig = TIMEFRAMES.find(t => t.value === timeframe) || TIMEFRAMES[1];
   const { data: candleData } = useCandles(symbol, timeframe, tfConfig.count);
   const { data: indicesData } = useIndices();
+
+  const dataSource = candleData?.source || 'unknown';
+
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    queryClient.invalidateQueries({ queryKey: ['candles', symbol, timeframe] });
+    setTimeout(() => setRefreshing(false), 1500);
+  }, [queryClient, symbol, timeframe]);
 
   /* ── Refs for lightweight-charts ── */
   const chartContainerRef = useRef(null);
@@ -161,11 +172,11 @@ export default function Charts() {
   const macdSignalSeriesRef = useRef(null);
   const macdHistSeriesRef = useRef(null);
 
-  // Parse candle data
+  // Parse candle data + append live-forming candle from spot price
   const rawCandles = useMemo(() => {
     const candles = candleData?.candles || candleData;
     if (!Array.isArray(candles)) return [];
-    return candles.map(c => ({
+    const parsed = candles.map(c => ({
       timestamp: c.timestamp,
       open: c.open,
       high: c.high,
@@ -173,7 +184,41 @@ export default function Charts() {
       close: c.close,
       volume: c.volume,
     }));
-  }, [candleData]);
+
+    // Append or update a live candle from the spot price
+    const rawIndices = indicesData?.indices || indicesData;
+    const spot = Array.isArray(rawIndices)
+      ? rawIndices.find(i => (i.symbol || '').toUpperCase().includes(symbol))
+      : null;
+    if (spot?.price && parsed.length > 0) {
+      const lastCandle = parsed[parsed.length - 1];
+      const lastTs = new Date(lastCandle.timestamp).getTime();
+      const TF_MS = { M1: 60000, M5: 300000, M15: 900000, M30: 1800000, H1: 3600000, D1: 86400000 };
+      const interval = TF_MS[timeframe] || 300000;
+      const now = Date.now();
+      const currentBucket = Math.floor(now / interval) * interval;
+      const lastBucket = Math.floor(lastTs / interval) * interval;
+
+      if (currentBucket > lastBucket) {
+        // New candle forming — append it
+        parsed.push({
+          timestamp: new Date(currentBucket).toISOString(),
+          open: spot.price,
+          high: spot.price,
+          low: spot.price,
+          close: spot.price,
+          volume: 0,
+        });
+      } else {
+        // Update the last candle's close/high/low with live price
+        lastCandle.close = spot.price;
+        lastCandle.high = Math.max(lastCandle.high, spot.price);
+        lastCandle.low = Math.min(lastCandle.low, spot.price);
+      }
+    }
+
+    return parsed;
+  }, [candleData, indicesData, symbol, timeframe]);
 
   // Calculate indicators
   const chartData = useMemo(() => {
@@ -262,7 +307,7 @@ export default function Charts() {
       },
       handleScroll: { vertTouchDrag: false },
       width: container.clientWidth,
-      height: 500,
+      height: Math.max(400, window.innerHeight - 380),
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -290,10 +335,20 @@ export default function Charts() {
 
     const handleResize = () => {
       if (chartContainerRef.current) {
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+        const newH = Math.max(400, window.innerHeight - 380);
+        chart.applyOptions({ width: chartContainerRef.current.clientWidth, height: newH });
       }
     };
     window.addEventListener('resize', handleResize);
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range) return;
+      [rsiChartRef, macdChartRef].forEach(ref => {
+        if (ref.current) {
+          ref.current.timeScale().setVisibleLogicalRange(range);
+        }
+      });
+    });
 
     return () => {
       window.removeEventListener('resize', handleResize);
@@ -738,6 +793,27 @@ export default function Charts() {
             Vol
           </button>
 
+          {/* Refresh */}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-400 bg-terminal-bg border border-terminal-border rounded-lg hover:text-white hover:border-accent/50 transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+          </button>
+
+          {/* Data Source Badge */}
+          <span className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold ${
+            dataSource === 'fyers_live' ? 'bg-profit/10 text-profit' :
+            dataSource === 'sqlite_cache' ? 'bg-yellow-500/10 text-yellow-400' :
+            dataSource === 'mock' ? 'bg-red-500/10 text-red-400' : 'bg-slate-700/30 text-slate-500'
+          }`}>
+            {dataSource === 'fyers_live' ? <Wifi className="w-3 h-3" /> :
+             dataSource === 'sqlite_cache' ? <Database className="w-3 h-3" /> :
+             <AlertTriangle className="w-3 h-3" />}
+            {dataSource === 'fyers_live' ? 'LIVE' : dataSource === 'sqlite_cache' ? 'CACHED' : dataSource === 'mock' ? 'MOCK' : '...'}
+          </span>
+
           {/* Spot Price */}
           <div className="ml-auto flex items-center gap-3">
             {lastCandle && (
@@ -795,7 +871,7 @@ export default function Charts() {
 
         <div
           ref={chartContainerRef}
-          style={{ height: 500, width: '100%' }}
+          style={{ height: Math.max(400, window.innerHeight - 380), width: '100%' }}
           className="rounded-lg overflow-hidden"
         />
       </div>

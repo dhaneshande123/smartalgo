@@ -8,10 +8,12 @@ import {
   ResponsiveContainer, Cell,
 } from 'recharts';
 import Card from '../components/common/Card';
-import { useIndices, useOptionChain, useExpiries, useLotSizes, usePaperTradingStatus, usePlacePaperOrder, useStartPaperTrading } from '../hooks/useApi';
+import { useIndices, useOptionChain, useExpiries, useLotSizes, usePaperTradingStatus, usePlacePaperOrder, useStartPaperTrading, useOISignals, useDeployStrategy } from '../hooks/useApi';
 import { useTheme } from '../context/ThemeContext';
+import { useUnderlying } from '../context/UnderlyingContext';
 import { useToast } from '../components/common/ToastProvider';
 import OIAnalysis from './MarketData/OIAnalysis';
+import OISignals from './MarketData/OISignals';
 
 // ─── Fallback data ────────────────────────────────────────────────────────────
 const fallbackIndices = [
@@ -468,15 +470,16 @@ function IndexCard({ idx, theme }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function MarketData() {
   const { theme } = useTheme();
+  const { underlying: symbol, setUnderlying: setSymbol } = useUnderlying();
   const toast = useToast();
-  const [symbol, setSymbol] = useState('NIFTY');
   const [expiry, setExpiry] = useState('');
   const [tradeModal, setTradeModal] = useState(null); // { row, optionType }
-  const [activeTab, setActiveTab] = useState('chain'); // 'chain' | 'oi-analysis'
+  const [activeTab, setActiveTab] = useState('chain'); // 'chain' | 'oi-analysis' | 'oi-signals'
 
   const { data: paperStatus } = usePaperTradingStatus();
   const placePaperOrder = usePlacePaperOrder();
   const startPaperTrading = useStartPaperTrading();
+  const deployStrategy = useDeployStrategy();
   const { data: lotSizesData } = useLotSizes();
   const lotSizes = lotSizesData?.lot_sizes || LOT_SIZES_FALLBACK;
 
@@ -490,6 +493,47 @@ export default function MarketData() {
   const { data: indicesData } = useIndices();
   const { data: chainData }   = useOptionChain(symbol, expiry);
   const { data: expiryData }  = useExpiries(symbol);
+  const { data: oiSignalData } = useOISignals(symbol, expiry);
+
+  // Deploy handler for OI signals
+  const [deployLoading, setDeployLoading] = useState(false);
+  const handleSignalDeploy = async (payload) => {
+    setDeployLoading(true);
+    try {
+      // Auto-start paper session if not active
+      if (!paperStatus?.active) {
+        try {
+          await startPaperTrading.mutateAsync({
+            initial_capital: 1000000,
+            slippage_bps: 2,
+            commission: 20,
+            symbols: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
+          });
+          await new Promise((r) => setTimeout(r, 400));
+        } catch (startErr) {
+          const status = startErr?.response?.status;
+          if (status !== 409 && status !== 200) {
+            throw new Error(startErr?.response?.data?.detail || 'Failed to start paper session');
+          }
+        }
+      }
+      const result = await deployStrategy.mutateAsync(payload);
+      if (result?.ok === false) {
+        toast?.addToast({ level: 'CRITICAL', message: result.message || 'Deploy rejected', source: 'oi_signals' });
+      } else {
+        toast?.addToast({
+          level: 'success',
+          message: `OI Signal deployed: ${payload.name} (Paper Mode)`,
+          source: 'oi_signals',
+        });
+      }
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Deploy failed';
+      toast?.addToast({ level: 'CRITICAL', message: `Deploy failed: ${detail}`, source: 'oi_signals' });
+    } finally {
+      setDeployLoading(false);
+    }
+  };
 
   // ── Normalise indices ──
   const rawIndices = indicesData?.indices || indicesData;
@@ -662,6 +706,7 @@ export default function MarketData() {
               {[
                 { id: 'chain', label: 'Option Chain' },
                 { id: 'oi-analysis', label: 'OI Analysis' },
+                { id: 'oi-signals', label: 'OI Signals' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -725,7 +770,16 @@ export default function MarketData() {
         </div>
 
         {/* Tab content */}
-        {activeTab === 'oi-analysis' ? (
+        {activeTab === 'oi-signals' ? (
+          <div className="p-4">
+            <OISignals
+              signalData={oiSignalData}
+              theme={theme}
+              onDeploy={handleSignalDeploy}
+              deployLoading={deployLoading}
+            />
+          </div>
+        ) : activeTab === 'oi-analysis' ? (
           <OIAnalysis
             chain={chain}
             spot={chainData?.spot_price || 0}

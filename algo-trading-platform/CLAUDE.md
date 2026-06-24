@@ -9,6 +9,29 @@ Live market data via **Fyers API v3** (WebSocket + REST). Paper trading fully fu
 **GitHub**: https://github.com/dhaneshande123/smartalgo.git
 **Branch**: `main`
 
+## Latest Session (June 2026) — "simple but powerful" refactor
+
+Direction: simplify to a focused cockpit, add an expiry-day scalper, validate paper-first.
+Honest framing agreed with user: you can't beat HFT desks (Jane Street/Citadel) on speed —
+the retail edge is niches too small for institutions (expiry scalping, thin OTM strikes) plus
+discipline + risk management. Nothing here is *proven* yet; next step is live paper validation
+on an expiry day, then read the scalp performance panel before any tuning or going live.
+
+Shipped this session:
+- **Dashboard → cockpit**: hero P&L summary + deployed strategies front-and-center.
+- **Sidebar decluttered**: MAIN group + collapsible MORE (all routes kept).
+- **Expiry Scalper** (`core/scalper_engine.py`, `/scalper`): S/R-driven OTM option buying,
+  strict regime gate, partial-book + trail exits, ₹2k risk sizing. Paper-validate first.
+- **Strategy verification**: fixed 3 decorative entry conditions (BB_POSITION, BB_WIDTH, IS_EXPIRY_DAY).
+- **AI auto-deploy**: opt-in toggle + 60s background loop (kill-switch aware, dedup, capped).
+- **SENSEX support** end-to-end; per-symbol expiry weekdays — **NIFTY=Tuesday, SENSEX=Thursday**.
+- **Fyers rate-limit fix** (429 → empty chains): chain TTL 3s, executor chain refresh throttled 3s.
+- **Fyers Reconnect** button (Settings → API Keys) — retries stored token, no re-login.
+- **Scalp performance panel**: win rate, avg R, profit factor, exit-reason attribution.
+
+Key gotchas this session (see sections below for detail): Fyers tokens expire daily (Reconnect);
+do NOT lower the chain cache TTLs (429s); option-chain symbols must be in `OPTION_CHAIN_SYMBOLS`.
+
 ## Environment
 
 - Platform: Windows 11 with Git Bash (use Unix shell syntax in all commands)
@@ -54,10 +77,18 @@ AI Signal Engine / Strategy Builder / Manual
 `_fyers_chain_cache` — per-underlying option chain. Cache TTL: 3.0s. Used by P&L refresh, LTP updates, Risk Engine Greeks. Executor refreshes chains for all RUNNING strategies every tick.
 
 ### Fyers Rate Limiting (IMPORTANT)
-- Total API budget: ~200 req/min from Fyers
-- Current usage: ~70 req/min (option chain 3s cache=20, indices 2s=30, indicators 5s=12, regime 10s=6, candles cached=2)
-- **Do NOT reduce cache TTLs below current values** — will cause 429 rate limit errors
-- Historical candle API is separate bucket but shares the same limit
+- Total API budget: ~200 req/min from Fyers; option chain is the rate-limited call.
+- Current safe usage: option chain `_CHAIN_CACHE_TTL=3.0s`, indices `_INDICES_CACHE_TTL=2.0s`,
+  executor chain refresh throttled to `CHAIN_REFRESH_INTERVAL=3.0s` (dashboard_executor) —
+  this last one matters: the executor tick is 1s, so without the throttle it fetches a chain
+  per running-underlying every second and trips 429s.
+- **Do NOT reduce these TTLs/intervals** — June 2026 a 1.5s chain TTL + per-tick executor refresh
+  caused persistent `429 request limit reached` → empty chains (0 strikes) for ALL symbols.
+- Bursty testing (many curls + restarts) can trip Fyers' limit into a cooldown; wait ~30s.
+- Historical candle API is a separate bucket but shares the same limit.
+- Access tokens expire daily — use Settings → **Reconnect** (stored token) or **Connect Fyers** (re-auth).
+- Live chain requires the symbol in `OPTION_CHAIN_SYMBOLS` (fyers_live_feed): NIFTY/BANKNIFTY/
+  FINNIFTY/MIDCPNIFTY/SENSEX/BANKEX. Missing symbol → empty chain (spot only).
 
 ## Key Modules
 
@@ -66,15 +97,20 @@ AI Signal Engine / Strategy Builder / Manual
 | **Fyers Live Feed** | `core/fyers_live_feed.py` | WebSocket + REST for live quotes, option chains, candles. Cache-first candle fetching with 429 retry. |
 | **Risk Engine** | `core/risk_engine/calcs.py` | Black-Scholes Greeks, VaR, stress test, margin, limits, drawdown (941 lines) |
 | **Risk Engine (classes)** | `core/risk_engine/*.py` | Circuit breaker, drawdown monitor, Greeks aggregator, margin calculator, position tracker, risk manager |
+| **OI Signal Engine** | `core/oi_signal_engine.py` | 4-factor OI signal generation: buildup, PCR, max pain, S/R breach. Confidence scoring + stability filter. |
+| **Scalper Engine** | `core/scalper_engine.py` | Expiry-day OTM option-buying. S/R levels (CPR, PDH/PDL, VWAP, ORB, round numbers, OI walls), STRICT regime gate (ADX + confirmed breakout close + volume), time-based strike selection, liquidity filter, ₹-risk sizing. Stateless; chain-format agnostic (`normalize_chain_rows`). |
 | **AI Signal Engine** | `core/ai_signal_engine.py` | Strategy recommendations from live market data |
 | **Strategy Fit Matrix** | `core/strategy_fit.py` | Maps regimes/IV/ADX to optimal strategy types |
 | **Market Regime** | `core/market_regime.py` | Classifies market: TRENDING_UP/DOWN, RANGING, HIGH_VOL |
-| **Indicators Engine** | `core/indicators.py` | RSI, MACD, Bollinger, Supertrend, ADX, VWAP, ATR |
+| **Indicators Engine** | `core/indicators.py` | 25+ indicators via TA-Lib (150+ C-lib) with numpy fallback. RSI, MACD, BB, Supertrend, ADX, VWAP, ATR, Stochastic, CCI, Williams %R, MFI, Aroon, Ichimoku, Keltner, Donchian, CMF, candlestick patterns |
 | **Condition Evaluator** | `core/condition_evaluator.py` | Evaluates entry conditions against live indicator values |
 | **Dashboard Executor** | `core/strategy_engine/dashboard_executor.py` | Background lifecycle: entry/exit/risk checks every 5s |
 | **Charges Calculator** | `core/charges.py` | Indian F&O charges: brokerage, STT, exchange, GST, SEBI, stamp, slippage |
 | **State Store** | `core/state_store.py` | SQLite: strategies, trades, P&L, settings, equity snapshots, risk events, candle cache |
-| **Backtest Engine** | `core/backtest/engine.py` | Backtesting with simulated broker |
+| **Backtest Engine** | `core/backtest/engine.py` | Event-driven backtesting with simulated broker |
+| **VectorBT Engine** | `core/backtest/vectorbt_engine.py` | Vectorized backtesting (100x faster): RSI, MACD, BB, Supertrend, EMA strategies. Indian charges model. |
+| **Optuna Optimizer** | `core/backtest/optimizer.py` | TPE-based parameter optimization: auto-tunes indicator params to maximize Sharpe/Sortino/return |
+| **QuantStats Reports** | `core/backtest/reports.py` | Professional tearsheets, metrics, snapshot, strategy comparison |
 | **Backtest Data Loader** | `core/backtest/fyers_data_loader.py` | Chunked Fyers historical download with 429 retry + SQLite cache |
 | **Symbol Master** | `core/symbol_master.py` | Dynamic lot sizes from Fyers symbol master |
 | **Paper Broker** | `core/paper_trading/paper_broker.py` | Simulated broker with slippage, commission, order matching |
@@ -83,6 +119,14 @@ AI Signal Engine / Strategy Builder / Manual
 
 ### Fully Real (no mocks)
 - `GET /api/market/option-chain/{symbol}` — Live Fyers chain (3s cache), OI change included
+- `GET /api/market/oi-signals/{symbol}` — 4-factor OI signal engine (buildup+PCR+maxpain+S/R) with confidence scoring, stability filter, deploy payload
+- `GET /api/scalper/signals/{symbol}` — expiry-day scalper: live S/R levels, regime gate, strike pick, deploy-ready payload (warm-cache + bounded fetch, <0.5s)
+- `GET|POST /api/scalper/config` — scalper config (risk/trade, regime, exits, filters)
+- `POST /api/scalper/deploy` — deploy a scalp to paper (regenerates signal; `force` bypasses gate)
+- `GET|POST /api/auto-deploy/config` — AI auto-deploy loop toggle (enabled, symbols, min_confidence, max_per_cycle)
+- `POST /api/auto-deploy/execute` — manual one-shot auto-deploy of ready signals (paper)
+- `GET /api/scalper/performance` — closed-scalp analytics: win rate, avg R, profit factor, expectancy, avg hold, and exit-reason attribution (target/trail/structural/stop/eod/manual). `_bucket_exit_reason` maps raw reasons to buckets.
+- `POST /api/fyers/reconnect` — retry live feed with the stored token (no re-login)
 - `GET /api/market/candles/{symbol}` — Cache-first: SQLite -> Fyers -> mock last resort
 - `GET /api/risk/*` (11 endpoints) — Real Risk Engine: VaR, Greeks, stress test, margin, limits, kill switch, breaches, audit
 - `GET /api/portfolio/greeks` — Real Black-Scholes via Risk Engine
@@ -97,6 +141,13 @@ AI Signal Engine / Strategy Builder / Manual
 - `GET /api/greeks/iv-surface/{symbol}` — Real IV back-solved from Fyers chain via Black-Scholes
 - `POST /api/backtest/fetch-history` — Bulk download to SQLite candle cache
 - `GET /api/backtest/cache-status` — SQLite candle inventory
+- `GET /api/vbt/strategies` — List available vectorbt strategy types
+- `POST /api/vbt/backtest` — Run vectorized backtest (vectorbt + TA-Lib + Indian charges)
+- `POST /api/vbt/optimize` — Optuna TPE parameter optimization (max 200 trials)
+- `GET /api/vbt/objectives` — List optimization objectives (Sharpe, Sortino, etc.)
+- `POST /api/vbt/report` — QuantStats metrics/tearsheet/snapshot from equity curve
+- `POST /api/vbt/compare` — Side-by-side comparison of multiple backtest results
+- `GET /api/indicators/available` — List all 25+ indicators (TA-Lib status)
 
 ### Template/Catalog (not mock, but pre-configured)
 - `GET /api/strategies` — 16 strategy templates with simulated stats (disclaimer shown on UI). Deploy button routes to real PaperBroker.
@@ -117,15 +168,16 @@ All 16 pages use real data. The only "simulated" content is the Strategy catalog
 
 | Page | Route | Data Source | Status |
 |------|-------|-------------|--------|
-| Dashboard | `/` | WebSocket + deployed strategies + Risk Engine | **REAL** (all mock removed) |
-| Market Data | `/market` | Fyers option chain + OI Analysis tab | **REAL** (3s refresh, OI change arrows) |
+| Dashboard | `/` | usePnLSummary + useDeployedStrategies + WS ticker + Risk | **REAL** — COCKPIT: hero P&L summary + deployed strategies front-and-center, quick actions, equity curve, risk snapshot |
+| Scalper | `/scalper` | Scalper Engine (S/R + regime + strike) | **REAL** — expiry-day OTM buying, live S/R rail, partial-book+trail deploy, force-override |
+| Market Data | `/market` | Fyers option chain + OI Analysis + OI Signals (4-factor engine + deploy) | **REAL** (3s refresh, OI change arrows, signals 5s) |
 | Charts | `/charts` | Fyers candles via lightweight-charts (TradingView) | **REAL** (interactive zoom/pan/crosshair) |
 | Portfolio | `/portfolio` | deployed_strategies + Risk Engine margin | **REAL** (zeros when empty) |
 | Strategies | `/strategies` | Template catalog + real deploy | **TEMPLATE** (disclaimer banner) |
 | Builder | `/builder` | Visual leg config + conditions | **REAL** |
 | Risk | `/risk` | Risk Engine (11 endpoints) + limits editor | **REAL** (auto-kill, audit log) |
 | Orders | `/orders` | SQLite trade_log | **REAL** (empty when no trades) |
-| Backtest | `/backtest` | SQLite candle cache + engine | **PARTIAL** (data pipeline built, engine wiring pending) |
+| Backtest | `/backtest` | VectorBT + Optuna + Event-Driven | **REAL** (3-tab UI: VectorBT, Optimizer, Event-Driven) |
 | P&L Analytics | `/pnl` | deployed_strategies + SQLite | **REAL** |
 | IV Surface | `/iv-surface` | Fyers chain + Black-Scholes IV back-solve | **REAL** |
 | Paper Trading | `/paper` | PaperBroker + deployed strategies | **REAL** |
@@ -136,16 +188,36 @@ All 16 pages use real data. The only "simulated" content is the Strategy catalog
 
 ## Frontend Features
 
-### Sci-Fi UI Theme Toggle
-- Toggle: "New UI" / "Classic" button in header
-- CSS: `dashboard/src/styles/scifi-theme.css` (1,174 lines) scoped under `html.scifi`
-- Context: `dashboard/src/context/ThemeContext.jsx` — `uiStyle` state ('classic'|'scifi')
-- Forces dark mode when active. Persisted to localStorage.
+### UI Theme System (3 themes)
+- **Classic** — Default dark/light theme. Purple accent (#7c3aed). Glass-morphic cards with backdrop-blur.
+- **Pro (Latest UI)** — Professional fintech theme. Sky-blue/teal accent (#38BDF8). Solid cards, Inter font, deep navy backgrounds. Scoped under `html.pro`.
+  - CSS: `dashboard/src/styles/pro-theme.css` (~450 lines)
+  - Toggle: "Latest UI" / "Classic" button (Zap icon) in header
+  - Design: Institutional Bloomberg-like. Colors: bg #020617, cards #0F172A, sidebar #060C1A, accent #38BDF8, profit #34D399, loss #F87171
+  - Fonts: Inter (sans), JetBrains Mono (numbers). Loaded via Google Fonts in `index.html`.
+- **Sci-Fi** — Neon cyberpunk theme. Cyan accent (#00f0ff). Animated grid background, glow effects. Scoped under `html.scifi`.
+  - CSS: `dashboard/src/styles/scifi-theme.css` (1,174 lines)
+  - Toggle: "Sci-Fi" / "Classic" button (Sparkles icon) in header
+- Context: `dashboard/src/context/ThemeContext.jsx` — `uiStyle` state ('classic'|'scifi'|'pro')
+- Both Pro and Sci-Fi force dark mode. Light/dark toggle disabled when either is active.
+- Persisted to `localStorage.smartalgo-ui-style`.
+- UI/UX Pro Max skill installed at `~/.claude/skills/ui-ux-pro-max/` — design intelligence with 67 styles, 96 palettes, 57 font pairings.
 
 ### OI Analysis Tab (Market Data page)
-- Tab: "Option Chain" / "OI Analysis" switcher in card header
+- Tab: "Option Chain" / "OI Analysis" / "OI Signals" switcher in card header
 - Component: `dashboard/src/pages/MarketData/OIAnalysis.jsx`
 - Shows: PCR, Net Call/Put OI Change, Max Pain, Support/Resistance, per-strike activity classification, top strikes, OI change bar chart
+
+### OI Signal Engine (Market Data page)
+- Module: `core/oi_signal_engine.py` — 4-factor analysis with weighted scoring
+- Component: `dashboard/src/pages/MarketData/OISignals.jsx`
+- Factors: Buildup Analysis (35%), PCR Extreme (25%), Max Pain Gravity (20%), S/R Breach (20%)
+- Confidence scoring (0-100%), stability filter (signal must persist 2+ ticks = "CONFIRMED")
+- Strike recommendation: ATM at >80% confidence, 1 OTM at 60-80%, 2 OTM below 60%
+- One-click deploy to paper trading with auto SL/Target/MaxHold
+- Deploy requires: confidence >= 60% AND status == CONFIRMED
+- VIX adjustment: high VIX reduces confidence (volatile markets = less predictable)
+- API: `GET /api/market/oi-signals/{symbol}` — refreshes every 5s on frontend
 
 ### Beginner Descriptions
 - 100+ tooltips/subtitles across all pages (title attributes + inline text)
@@ -195,6 +267,18 @@ Brokerage Rs 20/order, STT 0.0625% SELL, Exchange 0.053%, GST 18%, SEBI 0.0001%,
 ### Duplicate Prevention
 `execute_auto_deploy` checks for RUNNING strategies with same `strategy_class` before deploying.
 
+### Condition Evaluator Coverage (verified June 2026)
+`core/condition_evaluator.py` must support every indicator referenced in
+`strategy_fit.py` entry_conditions, else those conditions return "indicator
+unavailable" -> fail -> with ALL trigger the strategy never enters via manual
+deploy (AI-deployed strategies bypass conditions via `ai_deployed=True`).
+Audit fixed 3 gaps: **BB_POSITION** (%B), **BB_WIDTH** (alias for BB_BANDWIDTH),
+**IS_EXPIRY_DAY** (reads nearest expiry from `_fyers_chain_cache` via
+`scalper_engine.is_expiry_day`). IV_RANK returns None until IV history
+accumulates from chain polling — by design; AI scorer treats None as neutral 50.
+KNOWN BUG (fix in auto-deploy work): `ai_signal_engine.build_deploy_payload`
+hardcodes `"underlying": "NIFTY"` — ignores the global underlying selector.
+
 ### Field Name Normalization
 PaperBroker returns Decimal strings with different field names. API layer normalizes to frontend-expected names.
 
@@ -205,9 +289,14 @@ PaperBroker returns Decimal strings with different field names. API layer normal
 
 - Market hours: 09:15-15:30 IST, pre-open 09:00-09:08
 - Auto square-off at 15:15 (broker buffer)
-- Weekly expiries: NIFTY (Thu), BANKNIFTY (Wed), FINNIFTY (Tue)
-- Lot sizes: NIFTY=75, BANKNIFTY=30 (dynamic from Fyers symbol master)
-- Strike steps: NIFTY=50, BANKNIFTY=100
+- **Weekly expiries (post-rationalisation 2024-25): NIFTY = Tuesday, BSE SENSEX = Thursday.**
+  Encoded in `scalper_engine.WEEKLY_EXPIRY_WEEKDAY` (NIFTY=1/Tue, SENSEX=3/Thu).
+  `is_expiry_day(chain, symbol)` uses the chain's actual expiry date as primary
+  (handles holiday shifts), weekday rule as fallback. NOTE: older mock-chain
+  helpers in api.py still use a hardcoded Thursday formula — not used by the scalper.
+- Lot sizes: NIFTY=75, BANKNIFTY=30, SENSEX=20 (dynamic from Fyers symbol master)
+- Strike steps: NIFTY=50, BANKNIFTY=100, SENSEX=100
+- SENSEX (`BSE:SENSEX-INDEX`) supported across selector, scalper, AI signals, mock data.
 
 ## What's Been Built
 
@@ -230,7 +319,7 @@ PaperBroker returns Decimal strings with different field names. API layer normal
 17. Risk audit log (compliance trail)
 18. Option chain OI change columns (up/down arrows) + sticky headers
 19. OI Analysis tab (Market Maker activity: PCR, support/resistance, activity classification)
-20. Sci-Fi UI theme toggle (Classic/New UI)
+20. 3-theme UI system: Classic (glass, purple), Pro (solid, teal/fintech), Sci-Fi (neon, cyan) — header toggles
 21. Beginner-friendly descriptions (100+ tooltips across all pages)
 22. TradingView interactive charts (lightweight-charts: zoom, pan, crosshair)
 23. SQLite candle cache + bulk historical data downloader
@@ -243,16 +332,51 @@ PaperBroker returns Decimal strings with different field names. API layer normal
 30. P&L Analytics: all 5 endpoints wired to deployed strategies + SQLite (no mock)
 31. Strategies page: disclaimer banner for simulated returns
 32. **MILESTONE: Zero mock data remains across all 16 pages**
+33. OI Signal Engine: 4-factor (buildup + PCR + max pain + S/R) signal generation with confidence scoring, stability filter, strike recommendation, and one-click paper deploy
+34. TA-Lib integration: 25+ indicators with C-library speed (Stochastic, CCI, Williams %R, MFI, Aroon, Ichimoku, Keltner, Donchian, CMF, candlestick patterns) + batch compute_all_series() for vectorized backtesting
+35. VectorBT engine: 5 built-in strategies (RSI, MACD, BB, Supertrend, EMA crossover) with Indian F&O charges model, SL/TP support, equity curves
+36. Optuna optimizer: TPE-based parameter optimization with 6 objectives (Sharpe, Sortino, return, Calmar, win rate, profit factor)
+37. QuantStats reports: professional metrics (CAGR, drawdown, skew, kurtosis), HTML tearsheets, strategy comparison
+38. Backtest page UI: 3-tab layout (VectorBT / Optimizer / Event-Driven). VectorBT tab: 5-strategy selector cards, parameter tuning, SL/TP, equity curve + metrics + QuantStats analytics + monthly returns heatmap. Optimizer tab: Optuna TPE with 6 objectives, trial history table, best params display. Event-Driven tab: original bar-by-bar replay preserved.
+39. CSV Export: Client-side CSV download utility (`utils/exportCsv.js`) with formatters for trades, P&L, backtest results, equity curves. Download buttons on Orders (order book, trade book), Trade Analytics (trade log, strategy breakdown), P&L Analytics (trade book, strategy P&L snapshot), and Backtest (VBT results + equity curve).
+40. Notification Center: Bell icon in header (`components/common/NotificationCenter.jsx`) with unread badge, dropdown panel showing risk alerts and trade events. Severity-coded (CRITICAL/BREACH/WARN/INFO) with icons. Desktop browser notifications for critical alerts via Notification API. Read/unread state persisted to localStorage. Backend logs STRATEGY_DEPLOY and STRATEGY_STOP events to risk_events table. Acknowledge button per alert. Links to /monitoring for full history.
+41. Multi-Underlying Support: Global `UnderlyingContext` (`context/UnderlyingContext.jsx`) with NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY. Compact pill selector in Header (NIFTY|BANK|FIN|MIDCP). Selection persisted to localStorage. Wired into: MarketData (option chain + OI), IVSurface (IV heatmap), Strategies (deploy with underlying), AISignals (regime/signals/recs), Backtest (symbol dropdowns). API client and hooks updated to pass symbol parameter. Charts and StrategyBuilder already had their own selectors.
+42. Dashboard cockpit redesign (June 2026): hero P&L summary (Net/Realized/Unrealized/Charges/Win-Rate from `/api/pnl/summary`) + deployed strategies front-and-center, compact index ticker, quick-action tiles, equity curve, risk snapshot. Margin display clamped to "100%+" (paper sizing isn't margin-aware).
+43. Sidebar restructure: decluttered into MAIN group (Dashboard, AI Signals, Scalper, Market Data, Charts, Strategies, Paper Trading, Backtest) + collapsible MORE group (P&L, Orders, Portfolio, Risk, Builder, IV Surface, Trade Analytics, Monitoring, Settings). All routes preserved.
+45. AI Auto-Deploy loop (June 2026): opt-in toggle on AI Signals page. `_auto_deploy_config` (enabled/symbols/min_confidence/max_per_cycle) drives `DashboardExecutor._maybe_auto_deploy` — every ~60s during market hours, deploys ready signals (>=70% conf) to paper via shared `_execute_auto_deploy_core` (dedup + kill-switch aware + per-cycle cap). Fixed `build_deploy_payload` NIFTY hardcode (now respects underlying). Endpoints `GET|POST /api/auto-deploy/config`.
+46. SENSEX support: added to frontend selector (`UNDERLYINGS`), header pill, mock data (`INDEX_BASE`). Backend mapping (`BSE:SENSEX-INDEX`), strike step 100, lot size 20 already existed. Scalper + AI signals work for SENSEX. Per-symbol expiry weekdays: NIFTY=Tuesday, SENSEX=Thursday (`scalper_engine.WEEKLY_EXPIRY_WEEKDAY`).
+47. Scalp performance + exit-attribution panel (`/api/scalper/performance` + Scalper page card): win rate, avg R (P&L/risk), profit factor, expectancy, avg hold, best/worst, and a breakdown bar of WHICH exit fired (target/trail/breakeven/structural/premium-floor/time/eod/manual) with per-bucket count + P&L + win-rate. Tells you if the exit plan is the edge or the leak. Also: `force` deploy now synthesizes a direction (spot vs VWAP) + protective stop so the manual-override button works in flat conditions (liquidity filter still applies).
+44. Expiry-Day Scalper (`core/scalper_engine.py` + `/scalper` page): S/R-driven OTM option buying for the 1->50 Rs gamma moves. Levels: CPR/PDH-PDL/VWAP/ORB/round-numbers/OI-walls. STRICT regime gate (ADX>=20 + confirmed breakout close + volume) filters chop. Time-based strike (OTM early -> ATM late), liquidity filter (min OI/vol, max spread%), Rs-risk sizing (default Rs2000/trade). Exit plan in `DashboardExecutor._manage_scalp`: book 50% at +50% -> stop to breakeven -> trail (give-back 30%), structural stop (spot reclaims level), premium-floor -35% backstop, late-session tightening, EOD square-off. Paper-validate first. Endpoint is warm-cache + bounded-fetch (<0.5s) to stay under the 10s frontend axios timeout.
+
+## Trading Intelligence Stack (Installed June 2026)
+
+### Python Libraries
+- **vectorbt 1.0.0** — Vectorized backtesting, portfolio simulation, indicator analysis
+- **optuna 4.9.0** — Hyperparameter optimization for strategy tuning
+- **quantstats 0.0.81** — Portfolio analytics, tearsheets, benchmark comparison
+- **TA-Lib 0.6.8** — 150+ technical indicators (C library with Python wrapper)
+- **finstack-mcp 0.10.0** — MCP server for Indian (NSE/BSE) + global financial data
+
+### MCP Servers (configured in `.mcp.json`)
+- **sqlite** — Direct SQL access to `data/platform_state.db` for analytics
+- **filesystem** — File-level access to the project directory
+- **memory** — Persistent knowledge graph for cross-session context
+- **finstack** — Indian market data (NSE/BSE quotes, fundamentals, analytics)
+
+### Claude Code Skills (in `~/.claude/skills/`)
+- **ui-ux-pro-max/** — Design intelligence (67 styles, 96 palettes, fintech patterns)
+- **vectorbt-backtesting-skills/** — 5 skills: backtest, optimize, quick-stats, setup, strategy-compare
+- **claude-trading-skills/** — 62 trading/quant skills (options-pricing, risk-management, regime-detection, walk-forward-validation, etc.)
 
 ## Remaining Work
 
 ### Priority Items
-- **Backtest engine wiring**: Connect `core/backtest/engine.py` to SQLite candle cache (data pipeline built, engine integration pending)
-- **Multi-underlying**: BANKNIFTY/FINNIFTY support across all pages
+- **Backtest engine wiring**: Event-driven engine still uses CSV files. VectorBT engine reads from SQLite cache. Frontend Backtest page UI complete (3 tabs).
+- ~~**Multi-underlying**: BANKNIFTY/FINNIFTY support across all pages~~ (done — global UnderlyingContext + header selector)
 
 ### Future Enhancements
-- Telegram/Discord notifications
-- Trade log CSV/Excel export
+- Telegram/Discord notifications (in-app notification center done — external channels pending)
+- ~~Trade log CSV/Excel export~~ (done — client-side CSV export on 4 pages)
 - Historical OI tracking (store OI snapshots every 5 min)
 - Strategy P&L attribution (delta P&L vs theta P&L vs vega P&L)
 - Intraday equity chart from SQLite snapshots

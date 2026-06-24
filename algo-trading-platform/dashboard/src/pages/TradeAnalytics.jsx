@@ -14,6 +14,7 @@ import DataTable from '../components/common/DataTable';
 import LoadingState from '../components/common/LoadingState';
 import EmptyState from '../components/common/EmptyState';
 import { useTradeAnalytics, useTradeLog } from '../hooks/useApi';
+import { downloadCsv, formatTradesForExport } from '../utils/exportCsv';
 
 // ── Formatting helpers ──────────────────────────────────────────
 const fmt = (v) =>
@@ -543,9 +544,14 @@ export default function TradeAnalytics() {
         <Card
           title={`Trade Log (${trades.length} entries)`}
           actions={
-            <span className="text-[10px] text-slate-500">
-              Persisted in SQLite — survives restarts
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-500">Persisted in SQLite</span>
+              {trades.length > 0 && (
+                <button onClick={() => downloadCsv(formatTradesForExport(trades), `trade_log_${new Date().toISOString().slice(0,10)}.csv`)} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white" title="Export trade log to CSV">
+                  <Download className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           }
         >
           <DataTable
@@ -560,9 +566,14 @@ export default function TradeAnalytics() {
         <Card
           title={`Strategy Breakdown (${strategyBreakdown.length})`}
           actions={
-            <span className="text-[10px] text-slate-500">
-              Aggregated from all deployed strategies
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-500">Aggregated from deployed strategies</span>
+              {strategyBreakdown.length > 0 && (
+                <button onClick={() => downloadCsv(strategyBreakdown, `strategy_breakdown_${new Date().toISOString().slice(0,10)}.csv`)} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white" title="Export strategy breakdown to CSV">
+                  <Download className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           }
         >
           <DataTable

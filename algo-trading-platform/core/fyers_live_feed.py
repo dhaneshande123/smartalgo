@@ -38,6 +38,8 @@ OPTION_CHAIN_SYMBOLS = {
     "BANKNIFTY": "NSE:NIFTYBANK-INDEX",
     "FINNIFTY": "NSE:FINNIFTY-INDEX",
     "MIDCPNIFTY": "NSE:MIDCPNIFTY-INDEX",
+    "SENSEX": "BSE:SENSEX-INDEX",
+    "BANKEX": "BSE:BANKEX-INDEX",
 }
 
 # Strike steps (per-index price granularity for option strikes).
@@ -318,26 +320,31 @@ class FyersLiveFeed:
         """
         resolution = RESOLUTION_MAP.get(timeframe, "D")
 
-        # ── 1. Try SQLite cache first ────────────────────────────────
+        # ── 1. Try SQLite cache first (with staleness check) ─────────
         if use_cache:
             try:
                 from core.state_store import get_store
                 store = get_store()
                 cached = store.get_candles(symbol.upper(), resolution, limit=count + 50)
                 if cached and len(cached) >= min(count, 3):
-                    # Return the last `count` cached candles
-                    result = cached[-count:] if len(cached) > count else cached
-                    return [
-                        {
-                            "timestamp": datetime.fromtimestamp(c["ts"], tz=timezone.utc).isoformat(),
-                            "open": c["open"],
-                            "high": c["high"],
-                            "low": c["low"],
-                            "close": c["close"],
-                            "volume": c["volume"],
-                        }
-                        for c in result
-                    ]
+                    newest_ts = max(c["ts"] for c in cached)
+                    age_seconds = datetime.now(timezone.utc).timestamp() - newest_ts
+                    max_age = 7200 if resolution != "D" else 172800  # 2h intraday, 2d daily
+                    if age_seconds <= max_age:
+                        result = cached[-count:] if len(cached) > count else cached
+                        return [
+                            {
+                                "timestamp": datetime.fromtimestamp(c["ts"], tz=timezone.utc).isoformat(),
+                                "open": c["open"],
+                                "high": c["high"],
+                                "low": c["low"],
+                                "close": c["close"],
+                                "volume": c["volume"],
+                            }
+                            for c in result
+                        ]
+                    else:
+                        logger.debug(f"Candle cache stale for {symbol}/{resolution} (age={age_seconds:.0f}s), fetching fresh")
             except Exception as e:
                 logger.debug(f"Candle cache read failed: {e}")
 
@@ -354,7 +361,8 @@ class FyersLiveFeed:
             days_back = count * 2
         else:
             minutes = int(resolution) if resolution.isdigit() else 60
-            days_back = max(5, (count * minutes) // (6 * 60) + 2)
+            trading_mins_per_day = 375  # 09:15-15:30 IST
+            days_back = max(10, (count * minutes) // trading_mins_per_day + 5)
 
         range_from = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
         range_to = now.strftime("%Y-%m-%d")

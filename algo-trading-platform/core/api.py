@@ -168,6 +168,7 @@ class MockDataGenerator:
         "BANKNIFTY": 51500.0,
         "FINNIFTY": 23200.0,
         "MIDCPNIFTY": 12850.0,
+        "SENSEX": 81000.0,
     }
 
     VIX_BASE: float = 14.5
@@ -1935,10 +1936,10 @@ _mock = MockDataGenerator(seed=42)
 # Cache for last successful Fyers responses — prevents flicker to mock on temporary failures
 _fyers_chain_cache: dict[str, dict] = {}
 _fyers_chain_cache_time: dict[str, float] = {}  # symbol -> timestamp of last fetch
-_CHAIN_CACHE_TTL = 3.0  # seconds — balance freshness vs Fyers rate limit (~200 req/min)
+_CHAIN_CACHE_TTL = 3.0  # seconds — option chain is the rate-limited Fyers call; 3s keeps us under ~200/min (do NOT lower)
 _fyers_indices_cache: dict | None = None
 _fyers_indices_cache_time: float = 0  # timestamp of last indices fetch
-_INDICES_CACHE_TTL = 2.0  # seconds — serve cached indices (was 1.0, increased for rate limit)
+_INDICES_CACHE_TTL = 2.0  # seconds — index tickers (shares Fyers budget with chain)
 
 # In-memory stores for strategy management
 _deployed_strategies: dict[str, dict] = {}
@@ -2387,6 +2388,428 @@ async def market_option_chain(
         )
 
 
+# ── OI Signal Engine endpoint ────────────────────────────────────────────────
+
+@app.get(
+    "/api/market/oi-signals/{symbol}",
+    tags=["Market Data"],
+    summary="OI-based trading signals",
+    description=(
+        "Generates BUY CE / BUY PE signals from option chain OI data using a "
+        "4-factor engine: Buildup Analysis (35%), PCR Extreme (25%), Max Pain "
+        "Gravity (20%), Support/Resistance Breach (20%). Includes confidence "
+        "scoring (0-100%), stability filter, and one-click deploy payload."
+    ),
+)
+async def market_oi_signals(
+    symbol: str,
+    expiry: str = Query(default="", description="Expiry epoch timestamp or empty for nearest"),
+):
+    from core.oi_signal_engine import generate_oi_signals
+    from core import symbol_master
+
+    # Get chain from cache (same data the frontend polls every 3s)
+    cache_key = f"{symbol}:{expiry}"
+    chain_data = _fyers_chain_cache.get(cache_key) or _fyers_chain_cache.get(symbol)
+
+    if not chain_data or not chain_data.get("chain"):
+        return {
+            "signal": {
+                "direction": "NEUTRAL",
+                "action": None,
+                "confidence": 0,
+                "status": "WEAK",
+                "stability_count": 0,
+                "recommended_strike": None,
+                "recommended_ltp": None,
+                "recommended_type": None,
+                "reasoning": ["No option chain data available — waiting for market data"],
+                "deploy_payload": None,
+                "can_deploy": False,
+            },
+            "factors": {},
+            "meta": {"symbol": symbol, "spot": 0, "chain_strikes": 0},
+        }
+
+    chain = chain_data["chain"]
+    spot = chain_data.get("spot_price", 0)
+    lot_size = symbol_master.get_lot_size(symbol)
+
+    # Get VIX from indices cache
+    vix = 0.0
+    try:
+        idx_cache = _fyers_chain_cache.get("__indices__")
+        if idx_cache:
+            for idx in idx_cache:
+                if "VIX" in (idx.get("symbol", "") or "").upper():
+                    vix = float(idx.get("ltp", 0) or 0)
+                    break
+    except Exception:
+        pass
+
+    # Also try from the indices endpoint's last cached response
+    if vix == 0 and _fyers_indices_cache:
+        try:
+            raw_indices = _fyers_indices_cache.get("indices", _fyers_indices_cache)
+            if isinstance(raw_indices, list):
+                vix_idx = next(
+                    (i for i in raw_indices if "VIX" in str(i.get("symbol", "")).upper()),
+                    None,
+                )
+                if vix_idx:
+                    vix = float(vix_idx.get("ltp", 0) or 0)
+        except Exception:
+            pass
+    # Also try from chain data itself
+    if vix == 0:
+        vix = float(chain_data.get("india_vix", 0) or 0)
+
+    result = generate_oi_signals(
+        chain=chain,
+        spot=spot,
+        symbol=symbol,
+        lot_size=lot_size,
+        vix=vix,
+    )
+
+    return result
+
+
+# ===================================================================
+# Expiry-Day Scalper Engine
+# ===================================================================
+
+# In-memory scalper config (overridable via POST /api/scalper/config)
+_scalper_config: dict = {}
+
+
+def _get_scalper_config() -> dict:
+    """Lazy-init scalper config from engine defaults."""
+    global _scalper_config
+    if not _scalper_config:
+        from core.scalper_engine import DEFAULT_CONFIG
+        _scalper_config = dict(DEFAULT_CONFIG)
+    return _scalper_config
+
+
+async def _scalper_fetch_market(symbol: str) -> tuple[dict, list, list]:
+    """Fetch chain + candles for the scalper FAST, staying well under the
+    frontend's 10s timeout.
+
+    - Chain: prefer the warm cache (Market Data/dashboard poll it every 1-3s);
+      only fall back to a fresh fetch if the cache is cold.
+    - Candles: cache-first via get_candles, each bounded by a short timeout so
+      a slow Fyers call can never hang the endpoint (levels still compute from
+      the chain; the regime gate just blocks until candles arrive).
+    """
+    chain_data = _fyers_chain_cache.get(symbol) or _fyers_chain_cache.get(f"{symbol}:")
+    if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+        try:
+            chain_data = await asyncio.wait_for(market_option_chain(symbol, ""), timeout=5.0)
+        except Exception:
+            chain_data = chain_data or {}
+
+    daily_candles, intraday_candles = [], []
+    if _live_feed:
+        try:
+            daily_candles = await asyncio.wait_for(
+                _live_feed.get_candles(symbol, "D1", count=5), timeout=3.0) or []
+        except Exception:
+            pass
+        try:
+            intraday_candles = await asyncio.wait_for(
+                _live_feed.get_candles(symbol, "M5", count=75), timeout=3.0) or []
+        except Exception:
+            pass
+    return chain_data, daily_candles, intraday_candles
+
+
+@app.get(
+    "/api/scalper/config",
+    tags=["Scalper"],
+    summary="Get scalper configuration",
+    description="Return the current expiry-day scalper config (risk, regime, exits, filters).",
+)
+async def scalper_get_config():
+    return _get_scalper_config()
+
+
+@app.post(
+    "/api/scalper/config",
+    tags=["Scalper"],
+    summary="Update scalper configuration",
+    description="Patch the scalper config. Only provided keys are updated.",
+)
+async def scalper_set_config(body: dict = Body(...)):
+    cfg = _get_scalper_config()
+    allowed = set(cfg.keys())
+    for k, v in (body or {}).items():
+        if k in allowed:
+            cfg[k] = v
+    return {"ok": True, "config": cfg}
+
+
+@app.get(
+    "/api/scalper/signals/{symbol}",
+    tags=["Scalper"],
+    summary="Expiry-day scalper signal",
+    description=(
+        "Computes live S/R levels (CPR, PDH/PDL, VWAP, ORB, round numbers, OI walls), "
+        "applies the strict regime gate (ADX + confirmed breakout + volume), selects a "
+        "liquid OTM strike by time-of-day, and returns a deploy-ready scalp signal."
+    ),
+)
+async def scalper_signals(symbol: str):
+    from core import scalper_engine as se
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+
+    symbol = symbol.upper()
+    cfg = _get_scalper_config()
+    strike_step = STRIKE_STEPS.get(symbol, 50)
+    lot_size = symbol_master.get_lot_size(symbol) or 1
+
+    # Fast market fetch (warm cache + bounded candle fetches)
+    chain_data, daily_candles, intraday_candles = await _scalper_fetch_market(symbol)
+    if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+        return {
+            "has_signal": False,
+            "reason": "No option chain data yet - waiting for market feed",
+            "blockers": ["no option chain"],
+            "spot": 0,
+            "levels": [],
+            "is_expiry": False,
+            "config": cfg,
+        }
+
+    spot = float(chain_data.get("spot_price", 0) or 0)
+
+    sig = se.generate_signal(
+        symbol=symbol,
+        spot=spot,
+        daily_candles=daily_candles,
+        intraday_candles=intraday_candles,
+        chain=chain_data,
+        strike_step=strike_step,
+        lot_size=lot_size,
+        cfg=cfg,
+    )
+
+    out = sig.to_dict()
+    # Pull levels up to top level for the UI; keep deploy_payload for deploy
+    out["levels"] = sig.deploy_payload.get("levels", [])
+    out["is_expiry"] = se.is_expiry_day(chain_data, symbol)
+    out["config"] = cfg
+    return out
+
+
+@app.post(
+    "/api/scalper/deploy",
+    tags=["Scalper"],
+    summary="Deploy a scalp to paper trading",
+    description=(
+        "Regenerates a fresh signal for the symbol and, if valid, deploys it to paper "
+        "trading with the partial-book + trail exit plan. Rejects if no signal is live."
+    ),
+)
+async def scalper_deploy(body: dict = Body(...)):
+    from core import scalper_engine as se
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+
+    symbol = (body.get("symbol") or "NIFTY").upper()
+    cfg = _get_scalper_config()
+    strike_step = STRIKE_STEPS.get(symbol, 50)
+    lot_size = symbol_master.get_lot_size(symbol) or 1
+
+    chain_data, daily_candles, intraday_candles = await _scalper_fetch_market(symbol)
+    if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+        raise HTTPException(status_code=409, detail="No option chain data available")
+
+    spot = float(chain_data.get("spot_price", 0) or 0)
+
+    # Allow forced deploy (manual override) to bypass the regime/breakout gate
+    force = bool(body.get("force", False))
+    sig = se.generate_signal(
+        symbol=symbol, spot=spot, daily_candles=daily_candles,
+        intraday_candles=intraday_candles, chain=chain_data,
+        strike_step=strike_step, lot_size=lot_size, cfg=cfg, force=force,
+    )
+
+    if not sig.has_signal and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No live scalp signal: {sig.reason}",
+        )
+    if not sig.deploy_payload.get("legs"):
+        raise HTTPException(
+            status_code=409,
+            detail="No tradeable strike — no liquid OTM option passed the OI/volume/spread filter",
+        )
+
+    # Reuse the standard deploy path (paper-routed, executor enters immediately)
+    result = await deploy_strategy(sig.deploy_payload)
+    return {"ok": True, "signal": sig.to_dict(), "deploy": result}
+
+
+def _bucket_exit_reason(reason: str) -> str:
+    """Map a raw exit_reason string to a clean attribution bucket."""
+    r = (reason or "").lower()
+    if not r:
+        return "open"
+    if "target" in r:
+        return "target"
+    if "trail" in r:
+        return "trail"
+    if "structural" in r:
+        return "structural_stop"
+    if "breakeven" in r:
+        return "breakeven"
+    if "premium_floor" in r or "stop_loss" in r or "tighten" in r:
+        return "stop_loss"
+    if "max_hold" in r:
+        return "time_exit"
+    if "eod" in r or "square_off" in r:
+        return "eod"
+    return "other"
+
+
+# Display metadata for each bucket (label + whether it's a "good" exit)
+EXIT_BUCKET_META = {
+    "target":          {"label": "Target / Book", "tone": "profit"},
+    "trail":           {"label": "Trailing Stop", "tone": "profit"},
+    "breakeven":       {"label": "Breakeven Stop", "tone": "neutral"},
+    "structural_stop": {"label": "Structural Stop", "tone": "loss"},
+    "stop_loss":       {"label": "Premium-Floor Stop", "tone": "loss"},
+    "time_exit":       {"label": "Max-Hold Time", "tone": "neutral"},
+    "eod":             {"label": "EOD Square-off", "tone": "neutral"},
+    "manual":          {"label": "Manual Stop", "tone": "neutral"},
+    "other":           {"label": "Other", "tone": "neutral"},
+}
+
+
+@app.get(
+    "/api/scalper/performance",
+    tags=["Scalper"],
+    summary="Scalp performance + exit attribution",
+    description=(
+        "Aggregates closed scalp trades: win rate, average R-multiple, total P&L, "
+        "and a breakdown of which exit fired (target/trail/structural/stop/eod/time). "
+        "R = realized P&L / risk-per-trade. Helps judge whether the exit plan is the edge."
+    ),
+)
+async def scalper_performance():
+    cfg = _get_scalper_config()
+    risk_per_trade = float(cfg.get("risk_per_trade", 2000) or 2000) or 2000.0
+
+    scalps = [s for s in _deployed_strategies.values() if (s.get("risk_params") or {}).get("scalp")]
+    closed = [s for s in scalps if (s.get("status") or "").upper() in ("EXITED", "STOPPED")]
+    running = [s for s in scalps if (s.get("status") or "").upper() == "RUNNING"]
+
+    wins = losses = breakeven = 0
+    total_pnl = 0.0
+    gross_win = 0.0
+    gross_loss = 0.0
+    r_multiples: list[float] = []
+    durations: list[float] = []
+    buckets: dict[str, dict] = {}
+    best = None
+    worst = None
+    recent: list[dict] = []
+
+    for s in closed:
+        pnl = float(s.get("realized_pnl", s.get("pnl", 0)) or 0)
+        total_pnl += pnl
+        if pnl > 0:
+            wins += 1
+            gross_win += pnl
+        elif pnl < 0:
+            losses += 1
+            gross_loss += abs(pnl)
+        else:
+            breakeven += 1
+        r_multiples.append(pnl / risk_per_trade)
+
+        bucket = _bucket_exit_reason(s.get("exit_reason"))
+        if bucket == "open":  # closed strat with no recorded reason = manual stop
+            bucket = "manual"
+        slot = buckets.setdefault(bucket, {"count": 0, "pnl": 0.0, "wins": 0})
+        slot["count"] += 1
+        slot["pnl"] += pnl
+        if pnl > 0:
+            slot["wins"] += 1
+
+        # Hold duration (minutes)
+        try:
+            ent = datetime.fromisoformat(s["entered_at"])
+            ex = datetime.fromisoformat(s["exited_at"])
+            durations.append((ex - ent).total_seconds() / 60.0)
+        except (KeyError, ValueError, TypeError):
+            pass
+
+        rec = {
+            "name": s.get("name", ""),
+            "underlying": s.get("underlying", ""),
+            "pnl": round(pnl, 2),
+            "r": round(pnl / risk_per_trade, 2),
+            "exit_reason": s.get("exit_reason", ""),
+            "bucket": bucket,
+            "exited_at": s.get("exited_at", ""),
+        }
+        recent.append(rec)
+        if best is None or pnl > best["pnl"]:
+            best = rec
+        if worst is None or pnl < worst["pnl"]:
+            worst = rec
+
+    n = len(closed)
+    win_rate = (wins / n) if n else 0.0
+    avg_r = (sum(r_multiples) / len(r_multiples)) if r_multiples else 0.0
+    avg_win = (gross_win / wins) if wins else 0.0
+    avg_loss = (gross_loss / losses) if losses else 0.0
+    profit_factor = (gross_win / gross_loss) if gross_loss > 0 else (gross_win and 999.0 or 0.0)
+    expectancy = (total_pnl / n) if n else 0.0
+    avg_hold = (sum(durations) / len(durations)) if durations else 0.0
+
+    # Shape the exit breakdown for the UI (ordered, with labels)
+    exit_breakdown = []
+    for key, slot in sorted(buckets.items(), key=lambda kv: -kv[1]["count"]):
+        meta = EXIT_BUCKET_META.get(key, {"label": key, "tone": "neutral"})
+        exit_breakdown.append({
+            "bucket": key,
+            "label": meta["label"],
+            "tone": meta["tone"],
+            "count": slot["count"],
+            "pnl": round(slot["pnl"], 2),
+            "win_rate": round(slot["wins"] / slot["count"], 3) if slot["count"] else 0.0,
+            "share": round(slot["count"] / n, 3) if n else 0.0,
+        })
+
+    recent.sort(key=lambda r: r.get("exited_at", ""), reverse=True)
+
+    return {
+        "risk_per_trade": risk_per_trade,
+        "closed_count": n,
+        "running_count": len(running),
+        "wins": wins,
+        "losses": losses,
+        "breakeven": breakeven,
+        "win_rate": round(win_rate, 4),
+        "total_pnl": round(total_pnl, 2),
+        "avg_r": round(avg_r, 3),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "profit_factor": round(profit_factor, 2),
+        "expectancy": round(expectancy, 2),
+        "avg_hold_minutes": round(avg_hold, 1),
+        "best": best,
+        "worst": worst,
+        "exit_breakdown": exit_breakdown,
+        "recent": recent[:15],
+        "timestamp": datetime.now(IST).isoformat(),
+    }
+
+
 @app.get(
     "/api/market/lot-sizes",
     tags=["Market Data"],
@@ -2512,7 +2935,7 @@ async def market_candles(
         except Exception as e:
             logger.warning(f"Fyers candles failed: {e}")
 
-    # 2. Try SQLite cache directly (even if Fyers is disconnected)
+    # 2. Try SQLite cache directly (even if Fyers is disconnected) — with staleness check
     try:
         from core.state_store import get_store
         RESOLUTION_MAP_LOCAL = {"M1": "1", "M5": "5", "M15": "15", "M30": "30", "H1": "60", "D1": "D"}
@@ -2520,24 +2943,28 @@ async def market_candles(
         store = get_store()
         cached = store.get_candles(symbol.upper(), res, limit=count + 50)
         if cached and len(cached) >= min(count, 3):
-            from datetime import datetime as _dt, timezone as _tz
-            result = cached[-count:] if len(cached) > count else cached
-            candles = [
-                {
-                    "timestamp": _dt.fromtimestamp(c["ts"], tz=_tz.utc).isoformat(),
-                    "open": c["open"], "high": c["high"],
-                    "low": c["low"], "close": c["close"],
-                    "volume": c["volume"],
+            newest_ts = max(c["ts"] for c in cached)
+            age_seconds = time.time() - newest_ts
+            max_age = 7200 if res != "D" else 172800  # 2h intraday, 2d daily
+            if age_seconds <= max_age:
+                from datetime import datetime as _dt, timezone as _tz
+                result = cached[-count:] if len(cached) > count else cached
+                candles = [
+                    {
+                        "timestamp": _dt.fromtimestamp(c["ts"], tz=_tz.utc).isoformat(),
+                        "open": c["open"], "high": c["high"],
+                        "low": c["low"], "close": c["close"],
+                        "volume": c["volume"],
+                    }
+                    for c in result
+                ]
+                return {
+                    "symbol": symbol.upper(),
+                    "timeframe": timeframe,
+                    "count": len(candles),
+                    "candles": candles,
+                    "source": "sqlite_cache",
                 }
-                for c in result
-            ]
-            return {
-                "symbol": symbol.upper(),
-                "timeframe": timeframe,
-                "count": len(candles),
-                "candles": candles,
-                "source": "sqlite_cache",
-            }
     except Exception as e:
         logger.debug(f"Candle cache fallback failed: {e}")
 
@@ -2958,9 +3385,43 @@ async def portfolio_margin():
     description="Returns all configured strategies with status, P&L, and position counts.",
 )
 async def list_strategies():
-    strategies = _mock.strategies()
+    from core.strategy_fit import STRATEGY_FIT
 
-    # Merge any status overrides from pause/resume actions
+    strategies = []
+    for strategy_class, tmpl in STRATEGY_FIT.items():
+        strategies.append({
+            "strategy_id": strategy_class,
+            "strategy_class": strategy_class,
+            "name": tmpl["name"],
+            "description": tmpl.get("description", ""),
+            "edge": tmpl.get("edge", ""),
+            "underlying": "NIFTY",
+            "strategy_type": strategy_class,
+            "status": "STOPPED",
+            "mode": "PAPER",
+            "risk_profile": "Defined Risk" if any(l["action"] == "BUY" for l in tmpl.get("default_legs", [])) else "Managed Risk",
+            "category": tmpl.get("category", ""),
+            "win_rate": round(tmpl.get("win_rate", 0.5) * 100),
+            "avg_return_pct": tmpl.get("avg_return_pct", 0),
+            "max_loss_pct": tmpl.get("max_loss_pct", 0),
+            "capital_req": tmpl.get("capital_req", 100000),
+            "ideal_regime": tmpl.get("ideal_regime", []),
+            "schedule_window": tmpl.get("schedule_window", []),
+            "default_legs": tmpl.get("default_legs", []),
+            "entry_conditions": tmpl.get("entry_conditions", []),
+            "risk_params": tmpl.get("risk_params", {}),
+            "pnl_today": 0,
+            "pnl_week": 0,
+            "pnl_month": 0,
+            "positions_count": len(tmpl.get("default_legs", [])),
+            "orders_today": 0,
+            "max_drawdown_pct": 0,
+            "sharpe": 0,
+            "avg_trade": 0,
+            "params": tmpl.get("risk_params", {}),
+        })
+
+    # Merge status overrides
     for s in strategies:
         sid = s["strategy_id"]
         if sid in _strategy_overrides:
@@ -2974,9 +3435,9 @@ async def list_strategies():
     return {
         "strategies": strategies,
         "count": len(strategies),
-        "running": sum(1 for s in strategies if s["status"] == "RUNNING"),
-        "paused": sum(1 for s in strategies if s["status"] == "PAUSED"),
-        "stopped": sum(1 for s in strategies if s["status"] == "STOPPED"),
+        "running": sum(1 for s in strategies if s.get("status") == "RUNNING"),
+        "paused": sum(1 for s in strategies if s.get("status") == "PAUSED"),
+        "stopped": sum(1 for s in strategies if s.get("status") == "STOPPED"),
     }
 
 
@@ -3243,7 +3704,15 @@ async def deploy_strategy(body: dict = Body(...)):
     # Persist to SQLite
     try:
         from core.state_store import get_store
-        get_store().save_strategy(sid, strategy_entry)
+        store = get_store()
+        store.save_strategy(sid, strategy_entry)
+        store.log_risk_event(
+            event_type="STRATEGY_DEPLOY",
+            severity="INFO",
+            limit_name="strategy",
+            message=f"Strategy '{strategy_entry['name']}' deployed in {mode.upper()} mode on {underlying}",
+            metadata={"strategy_id": sid, "strategy_class": body.get("strategy_class"), "mode": mode, "underlying": underlying},
+        )
     except Exception:
         pass
 
@@ -3440,10 +3909,20 @@ async def stop_deployed_strategy(strategy_id: str):
     strat["status"] = "STOPPED"
     _strategy_overrides[strategy_id] = {"status": "STOPPED"}
 
-    # Persist stopped state to SQLite
+    # Persist stopped state to SQLite + log notification
     try:
         from core.state_store import get_store
-        get_store().save_strategy(strategy_id, strat)
+        store = get_store()
+        store.save_strategy(strategy_id, strat)
+        pnl = strat.get("realized_pnl", 0.0) or strat.get("pnl", 0.0) or 0.0
+        store.log_risk_event(
+            event_type="STRATEGY_STOP",
+            severity="WARN" if pnl < 0 else "INFO",
+            limit_name="strategy",
+            current_value=float(pnl),
+            message=f"Strategy '{strat.get('name', strategy_id)}' stopped. P&L: Rs {pnl:,.0f}",
+            metadata={"strategy_id": strategy_id, "exit_reason": strat.get("exit_reason"), "pnl": pnl},
+        )
     except Exception:
         pass
 
@@ -5540,6 +6019,203 @@ async def backtest_list():
 
 
 # ===================================================================
+# VectorBT Backtesting + Optuna Optimizer + QuantStats Reports
+# ===================================================================
+
+
+@app.get(
+    "/api/vbt/strategies",
+    tags=["VectorBT"],
+    summary="List available vectorbt strategies",
+)
+async def vbt_strategies():
+    from core.backtest.vectorbt_engine import VectorBTEngine
+    engine = VectorBTEngine()
+    return {"strategies": engine.available_strategies()}
+
+
+@app.post(
+    "/api/vbt/backtest",
+    tags=["VectorBT"],
+    summary="Run a vectorized backtest",
+    description="Fast vectorized backtesting using vectorbt. Reads from SQLite candle cache.",
+)
+async def vbt_backtest(body: dict = Body(...)):
+    from core.backtest.vectorbt_engine import VBTBacktestConfig, VectorBTEngine
+
+    config = VBTBacktestConfig(
+        strategy=body.get("strategy", "rsi_reversal"),
+        symbol=body.get("symbol", "NIFTY"),
+        resolution=body.get("resolution", "5"),
+        start_date=body.get("start_date"),
+        end_date=body.get("end_date"),
+        initial_capital=body.get("initial_capital", 10_000_000),
+        lot_size=body.get("lot_size", 75),
+        params=body.get("params", {}),
+        instrument_type=body.get("instrument_type", "options"),
+        sl_pct=body.get("sl_pct"),
+        tp_pct=body.get("tp_pct"),
+    )
+
+    try:
+        from core.state_store import get_store
+        engine = VectorBTEngine(state_store=get_store())
+        result = engine.run(config)
+        return {"ok": True, "result": result.to_dict()}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"ok": False, "error": str(e)})
+    except Exception as e:
+        logger.exception("VBT backtest failed")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.post(
+    "/api/vbt/optimize",
+    tags=["VectorBT"],
+    summary="Optimize strategy parameters using Optuna",
+    description="Runs Optuna TPE optimization to find optimal strategy parameters.",
+)
+async def vbt_optimize(body: dict = Body(...)):
+    from core.backtest.optimizer import OptimizationConfig, StrategyOptimizer
+
+    config = OptimizationConfig(
+        strategy=body.get("strategy", "rsi_reversal"),
+        symbol=body.get("symbol", "NIFTY"),
+        resolution=body.get("resolution", "5"),
+        start_date=body.get("start_date"),
+        end_date=body.get("end_date"),
+        initial_capital=body.get("initial_capital", 10_000_000),
+        lot_size=body.get("lot_size", 75),
+        n_trials=min(body.get("n_trials", 50), 200),
+        objective=body.get("objective", "sharpe"),
+        sl_pct=body.get("sl_pct"),
+        tp_pct=body.get("tp_pct"),
+    )
+
+    try:
+        from core.state_store import get_store
+        optimizer = StrategyOptimizer(state_store=get_store())
+        result = optimizer.optimize(config)
+        return {"ok": True, "result": result.to_dict()}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"ok": False, "error": str(e)})
+    except Exception as e:
+        logger.exception("Optimization failed")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.get(
+    "/api/vbt/objectives",
+    tags=["VectorBT"],
+    summary="List optimization objectives",
+)
+async def vbt_objectives():
+    from core.backtest.optimizer import StrategyOptimizer
+    optimizer = StrategyOptimizer()
+    return {"objectives": optimizer.available_objectives()}
+
+
+@app.post(
+    "/api/vbt/report",
+    tags=["VectorBT"],
+    summary="Generate QuantStats performance report",
+    description="Generate metrics and optional HTML tearsheet from backtest equity curve.",
+)
+async def vbt_report(body: dict = Body(...)):
+    from core.backtest.reports import generate_metrics, generate_html_tearsheet, generate_snapshot
+
+    equity_curve = body.get("equity_curve", [])
+    strategy_name = body.get("strategy_name", "Strategy")
+    report_type = body.get("type", "metrics")
+
+    if not equity_curve:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "No equity_curve provided"})
+
+    try:
+        if report_type == "snapshot":
+            data = generate_snapshot(equity_curve)
+            return {"ok": True, "snapshot": data}
+        elif report_type == "tearsheet":
+            filepath = generate_html_tearsheet(equity_curve, strategy_name=strategy_name)
+            if filepath:
+                return {"ok": True, "tearsheet_path": filepath, "metrics": generate_metrics(equity_curve)}
+            return JSONResponse(status_code=500, content={"ok": False, "error": "Tearsheet generation failed"})
+        else:
+            data = generate_metrics(equity_curve)
+            return {"ok": True, "metrics": data}
+    except Exception as e:
+        logger.exception("Report generation failed")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.post(
+    "/api/vbt/compare",
+    tags=["VectorBT"],
+    summary="Compare multiple backtest results",
+)
+async def vbt_compare(body: dict = Body(...)):
+    from core.backtest.reports import compare_strategies
+
+    results = body.get("results", [])
+    if not results:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "No results to compare"})
+
+    comparison = compare_strategies(results)
+    return {"ok": True, "comparison": comparison}
+
+
+@app.get(
+    "/api/indicators/available",
+    tags=["Indicators"],
+    summary="List available technical indicators",
+)
+async def list_indicators():
+    from core.indicators import HAS_TALIB
+    base = [
+        {"name": "RSI", "category": "momentum", "params": "period=14"},
+        {"name": "MACD", "category": "momentum", "params": "fast=12, slow=26, signal=9"},
+        {"name": "ADX", "category": "trend", "params": "period=14"},
+        {"name": "ATR", "category": "volatility", "params": "period=14"},
+        {"name": "Bollinger Bands", "category": "volatility", "params": "period=20, std=2.0"},
+        {"name": "Supertrend", "category": "trend", "params": "period=10, multiplier=3.0"},
+        {"name": "EMA", "category": "moving_avg", "params": "period=20"},
+        {"name": "SMA", "category": "moving_avg", "params": "period=20"},
+        {"name": "VWAP", "category": "volume", "params": "intraday"},
+        {"name": "OBV", "category": "volume", "params": "none"},
+    ]
+    extended = [
+        {"name": "Stochastic", "category": "momentum", "params": "fastk=14, slowk=3, slowd=3"},
+        {"name": "CCI", "category": "momentum", "params": "period=20"},
+        {"name": "Williams %R", "category": "momentum", "params": "period=14"},
+        {"name": "MFI", "category": "volume", "params": "period=14"},
+        {"name": "Aroon", "category": "trend", "params": "period=25"},
+        {"name": "Keltner Channel", "category": "volatility", "params": "ema=20, atr=14, mult=2.0"},
+        {"name": "Donchian Channel", "category": "volatility", "params": "period=20"},
+        {"name": "Ichimoku Cloud", "category": "trend", "params": "tenkan=9, kijun=26, senkou=52"},
+        {"name": "Pivot Points", "category": "support_resistance", "params": "prev_day HLC"},
+        {"name": "WMA", "category": "moving_avg", "params": "period=20"},
+        {"name": "DEMA", "category": "moving_avg", "params": "period=20"},
+        {"name": "TEMA", "category": "moving_avg", "params": "period=20"},
+        {"name": "KAMA", "category": "moving_avg", "params": "period=30"},
+        {"name": "Chaikin A/D", "category": "volume", "params": "none"},
+        {"name": "CMF", "category": "volume", "params": "period=20"},
+    ]
+    if HAS_TALIB:
+        extended.append({"name": "Candlestick Patterns", "category": "pattern", "params": "17 patterns"})
+
+    return {
+        "total": len(base) + len(extended),
+        "talib_available": HAS_TALIB,
+        "base_indicators": base,
+        "extended_indicators": extended,
+    }
+
+
+# ===================================================================
 # Monitoring & Alerting Endpoints (Phase 12)
 # ===================================================================
 
@@ -6123,9 +6799,50 @@ async def paper_trading_stats():
         raise HTTPException(status_code=409, detail="No active paper trading session")
 
     try:
-        return _paper_trading_manager.get_session_stats()
+        broker_stats = _paper_trading_manager.get_session_stats()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+    # Aggregate P&L from deployed strategies (the real source of truth)
+    total_pnl = 0.0
+    realized_pnl = 0.0
+    unrealized_pnl = 0.0
+    entered_count = 0
+    exited_count = 0
+    winning = 0
+    total_with_pnl = 0
+    for strat in _deployed_strategies.values():
+        _refresh_strategy_pnl(strat)
+        spnl = float(strat.get("pnl", 0) or 0)
+        total_pnl += spnl
+        realized_pnl += float(strat.get("realized_pnl", 0) or 0)
+        unrealized_pnl += float(strat.get("unrealized_pnl", 0) or 0)
+        if strat.get("entered"):
+            entered_count += 1
+        status = (strat.get("status") or "").upper()
+        if status == "EXITED":
+            exited_count += 1
+            total_with_pnl += 1
+            if float(strat.get("realized_pnl", 0) or 0) > 0:
+                winning += 1
+        elif strat.get("entered") and spnl != 0:
+            total_with_pnl += 1
+            if spnl > 0:
+                winning += 1
+
+    win_rate = (winning / total_with_pnl) if total_with_pnl > 0 else 0.0
+
+    broker_stats["total_pnl"] = round(total_pnl, 2)
+    broker_stats["net_pnl"] = round(total_pnl, 2)
+    broker_stats["realized_pnl"] = round(realized_pnl, 2)
+    broker_stats["unrealized_pnl"] = round(unrealized_pnl, 2)
+    broker_stats["total_trades"] = entered_count + exited_count
+    broker_stats["trades_count"] = entered_count
+    broker_stats["win_rate"] = round(win_rate, 4)
+    broker_stats["entered_strategies"] = entered_count
+    broker_stats["exited_strategies"] = exited_count
+
+    return broker_stats
 
 
 @app.get(
@@ -6319,6 +7036,7 @@ async def paper_trading_strategies():
         # Even when no paper session, return AI-deployed strategies so they're visible
         ai_strategies = []
         for sid, strat in _deployed_strategies.items():
+            _refresh_strategy_pnl(strat)
             ai_strategies.append({
                 "strategy_id": sid,
                 "name": strat.get("name", ""),
@@ -6330,9 +7048,13 @@ async def paper_trading_strategies():
                 "trades_count": len(strat.get("positions", [])),
                 "positions_count": len(strat.get("positions", [])),
                 "entered": strat.get("entered", False),
+                "entered_at": strat.get("entered_at", ""),
+                "exit_reason": strat.get("exit_reason", ""),
+                "exited_at": strat.get("exited_at", ""),
                 "mode": strat.get("mode", "paper"),
                 "deployed_at": strat.get("deployed_at", ""),
                 "ai_deployed": strat.get("ai_deployed", False),
+                "risk_params": strat.get("risk_params", {}),
             })
         return {"strategies": ai_strategies, "session_active": False, "count": len(ai_strategies)}
 
@@ -6343,6 +7065,7 @@ async def paper_trading_strategies():
     for sid, strat in _deployed_strategies.items():
         if sid in seen_ids:
             continue  # avoid duplicates
+        _refresh_strategy_pnl(strat)
         strategies.append({
             "strategy_id": sid,
             "name": strat.get("name", ""),
@@ -6354,9 +7077,13 @@ async def paper_trading_strategies():
             "trades_count": len(strat.get("positions", [])),
             "positions_count": len(strat.get("positions", [])),
             "entered": strat.get("entered", False),
+            "entered_at": strat.get("entered_at", ""),
+            "exit_reason": strat.get("exit_reason", ""),
+            "exited_at": strat.get("exited_at", ""),
             "mode": strat.get("mode", "paper"),
             "deployed_at": strat.get("deployed_at", ""),
             "ai_deployed": strat.get("ai_deployed", False),
+            "risk_params": strat.get("risk_params", {}),
         })
 
     return {
@@ -6699,6 +7426,29 @@ async def get_auto_deploy_recommendations(symbol: str = "NIFTY"):
     ),
 )
 async def execute_auto_deploy(body: dict = Body(default={})):
+    symbol = (body.get("symbol") or "NIFTY").upper()
+    threshold = float(body.get("threshold") or 0)
+    return await _execute_auto_deploy_core(symbol, threshold)
+
+
+# ── Auto-deploy: shared core + background loop ──────────────────────────────
+
+# In-memory auto-deploy config (toggle via /api/auto-deploy/config)
+_auto_deploy_config: dict = {
+    "enabled": False,            # OFF by default — opt-in
+    "symbols": ["NIFTY"],        # underlyings to auto-deploy on
+    "min_confidence": 70.0,      # only deploy signals at/above this
+    "max_per_cycle": 2,          # cap deploys per symbol per cycle (safety)
+}
+
+
+async def _execute_auto_deploy_core(symbol: str, threshold: float, max_deploys: int | None = None) -> dict:
+    """Shared auto-deploy logic used by the endpoint AND the background loop.
+
+    Deploys AI-recommended strategies (confidence >= threshold AND ready) to
+    paper, with duplicate prevention and an optional per-call cap. Respects the
+    kill switch.
+    """
     from core.ai_signal_engine import generate_signals, build_deploy_payload
     from core import symbol_master
 
@@ -6712,16 +7462,14 @@ async def execute_auto_deploy(body: dict = Body(default={})):
                 "ok": False,
                 "error": "kill_switch_active",
                 "message": f"Kill switch active: {meta.get('reason', 'risk limits breached')}. Auto-deploy blocked.",
-                "deployed": [], "deploy_count": 0,
+                "deployed": [], "deployed_count": 0, "skipped": [], "skipped_count": 0,
                 "kill_switch_meta": meta,
                 "timestamp": datetime.now(IST).isoformat(),
             }
     except Exception:
         pass
 
-    symbol = (body.get("symbol") or "NIFTY").upper()
-    threshold = float(body.get("threshold") or 0)
-
+    symbol = (symbol or "NIFTY").upper()
     ctx = await _build_market_context(symbol)
     result = generate_signals(symbol=symbol, **{k: v for k, v in ctx.items() if k != "symbol"})
 
@@ -6734,7 +7482,6 @@ async def execute_auto_deploy(body: dict = Body(default={})):
         if strat.get("status") == "RUNNING":
             sclass = strat.get("strategy_class", "")
             if not sclass:
-                # Derive from name: "Bear Put Spread [AI]" → "bear_put_spread"
                 raw_name = (strat.get("name") or "").replace("[AI]", "").strip()
                 sclass = raw_name.lower().replace(" ", "_").replace("(", "").replace(")", "")
             running_classes.add(sclass.lower())
@@ -6742,24 +7489,20 @@ async def execute_auto_deploy(body: dict = Body(default={})):
     deployed = []
     skipped = []
     for sig in result["signals"]:
+        if max_deploys is not None and len(deployed) >= max_deploys:
+            break
         if threshold > 0 and sig["confidence"] < threshold:
             skipped.append({"strategy": sig["strategy_class"], "reason": f"below threshold ({sig['confidence']}<{threshold})"})
             continue
         if not sig["ready_to_deploy"]:
             skipped.append({"strategy": sig["strategy_class"], "reason": f"not ready (conf={sig['confidence']})"})
             continue
-
-        # Skip if same strategy class already RUNNING (prevents duplicates)
         if sig["strategy_class"].lower() in running_classes:
-            skipped.append({
-                "strategy": sig["strategy_class"],
-                "reason": "already running (duplicate prevented)",
-            })
+            skipped.append({"strategy": sig["strategy_class"], "reason": "already running (duplicate prevented)"})
             continue
 
-        payload = build_deploy_payload(sig, spot_price=spot, lot_size=lot, name_suffix="AI")
+        payload = build_deploy_payload(sig, spot_price=spot, lot_size=lot, name_suffix="AI", underlying=symbol)
         try:
-            # Reuse the platform's own deploy endpoint logic
             deploy_result = await deploy_strategy(payload)
             deployed.append({
                 "strategy_id": deploy_result["strategy_id"],
@@ -6768,8 +7511,6 @@ async def execute_auto_deploy(body: dict = Body(default={})):
                 "confidence": sig["confidence"],
                 "reason": " · ".join(sig["reasoning"][:2]),
             })
-            # Mark this class as running so later signals in the same batch
-            # don't create additional duplicates
             running_classes.add(sig["strategy_class"].lower())
         except Exception as e:
             logger.warning(f"Auto-deploy of {sig['strategy_class']} failed: {e}")
@@ -6783,6 +7524,59 @@ async def execute_auto_deploy(body: dict = Body(default={})):
         "regime": result["regime"]["regime"],
         "timestamp": datetime.now(IST).isoformat(),
     }
+
+
+async def run_auto_deploy_cycle() -> dict:
+    """One auto-deploy cycle across all configured symbols. Called by the
+    background executor when auto-deploy is enabled. No-op if disabled."""
+    cfg = _auto_deploy_config
+    if not cfg.get("enabled"):
+        return {"enabled": False, "deployed_count": 0}
+    total = []
+    for sym in cfg.get("symbols", ["NIFTY"]):
+        try:
+            res = await _execute_auto_deploy_core(
+                sym, float(cfg.get("min_confidence", 70)), max_deploys=int(cfg.get("max_per_cycle", 2)))
+            if res.get("error") == "kill_switch_active":
+                break  # stop the whole cycle if killed
+            for d in res.get("deployed", []):
+                total.append({**d, "underlying": sym})
+        except Exception as e:
+            logger.warning(f"Auto-deploy cycle failed for {sym}: {e}")
+    if total:
+        logger.info(f"Auto-deploy cycle deployed {len(total)} strategies: {[d['strategy_class'] for d in total]}")
+    return {"enabled": True, "deployed_count": len(total), "deployed": total}
+
+
+@app.get(
+    "/api/auto-deploy/config",
+    tags=["Market Intelligence"],
+    summary="Get auto-deploy config",
+    description="Returns the AI auto-deploy loop config (enabled, symbols, min confidence, cap).",
+)
+async def get_auto_deploy_config():
+    return _auto_deploy_config
+
+
+@app.post(
+    "/api/auto-deploy/config",
+    tags=["Market Intelligence"],
+    summary="Update auto-deploy config",
+    description="Toggle/patch the AI auto-deploy loop. When enabled, the executor "
+    "auto-deploys high-confidence signals to paper every ~60s (kill-switch aware).",
+)
+async def set_auto_deploy_config(body: dict = Body(...)):
+    cfg = _auto_deploy_config
+    if "enabled" in body:
+        cfg["enabled"] = bool(body["enabled"])
+    if "symbols" in body and isinstance(body["symbols"], list) and body["symbols"]:
+        cfg["symbols"] = [str(s).upper() for s in body["symbols"]]
+    if "min_confidence" in body:
+        cfg["min_confidence"] = max(0.0, min(100.0, float(body["min_confidence"])))
+    if "max_per_cycle" in body:
+        cfg["max_per_cycle"] = max(1, int(body["max_per_cycle"]))
+    logger.info(f"Auto-deploy config updated: {cfg}")
+    return {"ok": True, "config": cfg}
 
 
 @app.get(
@@ -6892,6 +7686,394 @@ async def get_fyers_status():
         "access_token_preview": token[:20] + "..." if len(token) > 20 else token,
         "live_feed_connected": _live_feed.is_connected if _live_feed else False,
     }
+
+
+# ── Fyers OAuth In-App Authentication ────────────────────────────────────────
+# Handles the full OAuth flow:
+#   1. POST /api/fyers/init-connect  → save creds, spin up callback server on port 8000, return auth URL
+#   2. User authenticates on Fyers site → redirect hits port 8000 callback
+#   3. Callback exchanges auth_code → access_token, saves to .env, reconnects feed
+#   4. GET /api/fyers/connection-status → frontend polls until connected
+#   5. POST /api/fyers/disconnect → clear token, disconnect feed
+
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+_fyers_oauth_state: dict = {
+    "status": "idle",      # idle | waiting | exchanging | connected | error
+    "message": "",
+    "auth_url": "",
+    "callback_server": None,
+    "callback_thread": None,
+}
+
+
+def _build_fyers_auth_url(app_id: str, redirect_uri: str, secret_key: str) -> str:
+    """Generate the Fyers OAuth login URL using the SDK."""
+    from fyers_apiv3 import fyersModel
+    import hashlib
+    state = hashlib.sha256(f"{app_id}:{secret_key}:{time.time()}".encode()).hexdigest()[:16]
+    session = fyersModel.SessionModel(
+        client_id=app_id,
+        secret_key=secret_key,
+        redirect_uri=redirect_uri,
+        response_type="code",
+        grant_type="authorization_code",
+        state=state,
+    )
+    return session.generate_authcode()
+
+
+def _exchange_auth_code(app_id: str, secret_key: str, redirect_uri: str, auth_code: str) -> dict:
+    """Exchange an auth_code for an access_token via the Fyers SDK."""
+    from fyers_apiv3 import fyersModel
+    session = fyersModel.SessionModel(
+        client_id=app_id,
+        secret_key=secret_key,
+        redirect_uri=redirect_uri,
+        response_type="code",
+        grant_type="authorization_code",
+    )
+    session.set_token(auth_code)
+    return session.generate_token()
+
+
+def _save_token_to_env(token: str):
+    """Persist the access_token to the .env file."""
+    import re as _re
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = ""
+
+    pattern = r"^FYERS_ACCESS_TOKEN=.*$"
+    replacement = f"FYERS_ACCESS_TOKEN={token}"
+    if _re.search(pattern, content, flags=_re.MULTILINE):
+        content = _re.sub(pattern, replacement, content, flags=_re.MULTILINE)
+    else:
+        content += f"\n{replacement}"
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str, redirect_uri: str):
+    """Create a new FyersLiveFeed, connect it, and replace the global _live_feed."""
+    global _live_feed, FYERS_ACCESS_TOKEN
+    FYERS_ACCESS_TOKEN = access_token
+
+    if _live_feed is not None:
+        try:
+            if hasattr(_live_feed, 'stop_websocket_stream'):
+                _live_feed.stop_websocket_stream()
+            if hasattr(_live_feed, 'stop_background_refresh'):
+                await _live_feed.stop_background_refresh()
+        except Exception as e:
+            logger.warning(f"Error stopping old feed: {e}")
+
+    new_feed = FyersLiveFeed(
+        app_id=app_id,
+        access_token=access_token,
+        secret_key=secret_key,
+        redirect_uri=redirect_uri,
+    )
+    connected = await new_feed.connect()
+    if connected:
+        logger.info("Fyers OAuth: live feed reconnected successfully")
+        _live_feed = new_feed
+        set_live_feed(new_feed)
+        await new_feed.start_background_refresh(interval=0.5)
+        new_feed.start_websocket_stream()
+        if _paper_trading_manager is not None:
+            _paper_trading_manager._live_feed = new_feed
+        if _dashboard_executor is not None:
+            _dashboard_executor.live_feed = new_feed
+        return True
+    else:
+        logger.error("Fyers OAuth: reconnect failed after token exchange")
+        return False
+
+
+class _FyersCallbackHandler(BaseHTTPRequestHandler):
+    """Handles the OAuth redirect on port 8000."""
+
+    app_id = ""
+    secret_key = ""
+    redirect_uri = ""
+    frontend_url = "http://localhost:5173/settings"
+    loop = None
+
+    def log_message(self, fmt, *args):
+        logger.info(f"Fyers callback server: {fmt % args}")
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/fyers/callback":
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not found")
+            return
+
+        params = parse_qs(parsed.query)
+        auth_code = params.get("auth_code", [None])[0]
+        status = params.get("s", [None])[0]
+
+        if not auth_code or status != "ok":
+            _fyers_oauth_state["status"] = "error"
+            _fyers_oauth_state["message"] = f"Auth failed: {params.get('message', ['Unknown error'])[0]}"
+            self._send_html("Authentication Failed",
+                f"<p style='color:#ef4444'>{_fyers_oauth_state['message']}</p>"
+                f"<p>You can close this tab and try again.</p>")
+            return
+
+        _fyers_oauth_state["status"] = "exchanging"
+        _fyers_oauth_state["message"] = "Exchanging auth code for access token..."
+
+        try:
+            resp = _exchange_auth_code(
+                self.app_id, self.secret_key, self.redirect_uri, auth_code
+            )
+            if resp and resp.get("s") == "ok" and resp.get("access_token"):
+                token = resp["access_token"]
+                _save_token_to_env(token)
+
+                # Schedule async reconnect on the main event loop
+                if self.loop and self.loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        _reconnect_fyers_feed(self.app_id, token, self.secret_key, self.redirect_uri),
+                        self.loop,
+                    )
+
+                _fyers_oauth_state["status"] = "connected"
+                _fyers_oauth_state["message"] = "Connected successfully! Token saved."
+                self._send_html("Connected!",
+                    "<p style='color:#10b981;font-size:24px'>&#10003; Fyers Connected Successfully</p>"
+                    "<p>Your access token has been saved. Live data feed is reconnecting.</p>"
+                    "<p>You can close this tab now.</p>"
+                    f"<script>setTimeout(()=>window.close(),3000)</script>")
+            else:
+                err = resp.get("message", str(resp)) if resp else "No response"
+                _fyers_oauth_state["status"] = "error"
+                _fyers_oauth_state["message"] = f"Token exchange failed: {err}"
+                self._send_html("Token Exchange Failed",
+                    f"<p style='color:#ef4444'>{_fyers_oauth_state['message']}</p>")
+        except Exception as e:
+            _fyers_oauth_state["status"] = "error"
+            _fyers_oauth_state["message"] = f"Exception during token exchange: {e}"
+            self._send_html("Error", f"<p style='color:#ef4444'>{e}</p>")
+
+        # Shut down the callback server after handling
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+    def _send_html(self, title: str, body: str):
+        html = (
+            f"<!DOCTYPE html><html><head><title>{title}</title>"
+            "<style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;"
+            "display:flex;justify-content:center;align-items:center;min-height:100vh;"
+            "text-align:center;margin:0}</style></head>"
+            f"<body><div>{body}</div></body></html>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+        self.wfile.write(html)
+
+
+class _ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+    allow_reuse_port = True
+
+
+def _start_callback_server(app_id: str, secret_key: str, redirect_uri: str, loop):
+    """Start a temporary HTTP server on port 8000 to catch the OAuth callback."""
+    handler = type("Handler", (_FyersCallbackHandler,), {
+        "app_id": app_id,
+        "secret_key": secret_key,
+        "redirect_uri": redirect_uri,
+        "loop": loop,
+    })
+    try:
+        server = _ReusableHTTPServer(("127.0.0.1", 8000), handler)
+    except OSError as e:
+        logger.error(f"Cannot start callback server on port 8000: {e}")
+        _fyers_oauth_state["status"] = "error"
+        _fyers_oauth_state["message"] = f"Port 8000 is busy — close other apps using it and retry. ({e})"
+        return
+    server.timeout = 300
+    _fyers_oauth_state["callback_server"] = server
+    logger.info("Fyers OAuth callback server started on port 8000")
+    server.serve_forever()
+    logger.info("Fyers OAuth callback server stopped")
+    _fyers_oauth_state["callback_server"] = None
+    _fyers_oauth_state["callback_thread"] = None
+
+
+class FyersConnectRequest(_BaseModel):
+    app_id: str
+    secret_key: str
+
+
+@app.post(
+    "/api/fyers/init-connect",
+    tags=["Fyers OAuth"],
+    summary="Start Fyers OAuth flow",
+    description="Save credentials, start callback server on port 8000, return auth URL.",
+)
+async def fyers_init_connect(req: FyersConnectRequest):
+    """Initiate the Fyers OAuth authentication flow."""
+    global FYERS_APP_ID, FYERS_SECRET_KEY
+
+    if not req.app_id or not req.secret_key:
+        raise HTTPException(status_code=400, detail="App ID and Secret Key are required")
+
+    # Stop any existing callback server and wait for port release
+    old_server = _fyers_oauth_state.get("callback_server")
+    old_thread = _fyers_oauth_state.get("callback_thread")
+    if old_server:
+        try:
+            old_server.shutdown()
+        except Exception:
+            pass
+        _fyers_oauth_state["callback_server"] = None
+    if old_thread and old_thread.is_alive():
+        old_thread.join(timeout=2)
+        _fyers_oauth_state["callback_thread"] = None
+    await asyncio.sleep(0.5)
+
+    # Save credentials to .env
+    import re as _re
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        content = ""
+
+    def _set_var(text, key, value):
+        pat = rf"^{key}=.*$"
+        repl = f"{key}={value}"
+        if _re.search(pat, text, flags=_re.MULTILINE):
+            return _re.sub(pat, repl, text, flags=_re.MULTILINE)
+        return text + f"\n{repl}"
+
+    content = _set_var(content, "FYERS_APP_ID", req.app_id)
+    content = _set_var(content, "FYERS_SECRET_KEY", req.secret_key)
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    FYERS_APP_ID = req.app_id
+    FYERS_SECRET_KEY = req.secret_key
+
+    # Generate auth URL
+    try:
+        auth_url = _build_fyers_auth_url(req.app_id, FYERS_REDIRECT_URI, req.secret_key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate auth URL: {e}")
+
+    # Start callback server on port 8000 in a background thread
+    _fyers_oauth_state["status"] = "waiting"
+    _fyers_oauth_state["message"] = "Waiting for Fyers authentication..."
+    _fyers_oauth_state["auth_url"] = auth_url
+
+    loop = asyncio.get_event_loop()
+    t = threading.Thread(
+        target=_start_callback_server,
+        args=(req.app_id, req.secret_key, FYERS_REDIRECT_URI, loop),
+        daemon=True,
+    )
+    t.start()
+    _fyers_oauth_state["callback_thread"] = t
+
+    return {
+        "success": True,
+        "auth_url": auth_url,
+        "message": "Open the auth URL to log in. The callback server is listening on port 8000.",
+    }
+
+
+@app.get(
+    "/api/fyers/connection-status",
+    tags=["Fyers OAuth"],
+    summary="Poll Fyers OAuth connection status",
+)
+async def fyers_connection_status():
+    """Return the current state of the Fyers OAuth flow and live feed."""
+    return {
+        "status": _fyers_oauth_state["status"],
+        "message": _fyers_oauth_state["message"],
+        "live_feed_connected": _live_feed.is_connected if _live_feed else False,
+        "access_token_set": bool(FYERS_ACCESS_TOKEN),
+    }
+
+
+@app.post(
+    "/api/fyers/reconnect",
+    tags=["Fyers OAuth"],
+    summary="Reconnect Fyers live feed using the stored token",
+    description=(
+        "Retries the live feed with the access token already saved in the "
+        "environment — no re-login required. Use when the feed dropped but the "
+        "token is still valid for the day. If the token has expired, this fails "
+        "and a full re-auth (init-connect) is needed."
+    ),
+)
+async def fyers_reconnect():
+    token = os.getenv("FYERS_ACCESS_TOKEN", "") or FYERS_ACCESS_TOKEN
+    if not token:
+        raise HTTPException(status_code=409, detail="No stored access token. Use Connect Fyers to authenticate.")
+    try:
+        ok = await _reconnect_fyers_feed(
+            app_id=os.getenv("FYERS_APP_ID", "") or FYERS_APP_ID,
+            access_token=token,
+            secret_key=os.getenv("FYERS_SECRET_KEY", "") or FYERS_SECRET_KEY,
+            redirect_uri=FYERS_REDIRECT_URI,
+        )
+    except Exception as e:
+        logger.warning(f"Fyers reconnect failed: {e}")
+        ok = False
+    if ok:
+        _fyers_oauth_state["status"] = "connected"
+        _fyers_oauth_state["message"] = "Reconnected using stored token."
+        return {"success": True, "live_feed_connected": True, "message": "Reconnected using stored token."}
+    return {
+        "success": False,
+        "live_feed_connected": False,
+        "message": "Reconnect failed — token likely expired. Use Connect Fyers to re-authenticate.",
+    }
+
+
+@app.post(
+    "/api/fyers/disconnect",
+    tags=["Fyers OAuth"],
+    summary="Disconnect Fyers and clear token",
+)
+async def fyers_disconnect():
+    """Stop the live feed and clear the saved access token."""
+    global _live_feed, FYERS_ACCESS_TOKEN
+
+    if _live_feed is not None:
+        try:
+            if hasattr(_live_feed, 'stop_websocket_stream'):
+                _live_feed.stop_websocket_stream()
+            if hasattr(_live_feed, 'stop_background_refresh'):
+                await _live_feed.stop_background_refresh()
+        except Exception as e:
+            logger.warning(f"Error stopping feed: {e}")
+        _live_feed = None
+        set_live_feed(None)
+
+    FYERS_ACCESS_TOKEN = ""
+    _save_token_to_env("")
+
+    _fyers_oauth_state["status"] = "idle"
+    _fyers_oauth_state["message"] = ""
+    _fyers_oauth_state["auth_url"] = ""
+
+    return {"success": True, "message": "Disconnected. Access token cleared."}
 
 
 # ===================================================================

@@ -34,17 +34,18 @@ export function ThemeProvider({ children }) {
     } catch {}
   }, [theme]);
 
-  // Apply/remove scifi class on <html>
+  // Apply/remove scifi and pro classes on <html>
   useEffect(() => {
     const root = document.documentElement;
+    root.classList.remove('scifi', 'pro');
     if (uiStyle === 'scifi') {
       root.classList.add('scifi');
-      // Sci-fi forces dark mode for best visuals
-      if (theme !== 'dark') {
-        setTheme('dark');
-      }
-    } else {
-      root.classList.remove('scifi');
+    } else if (uiStyle === 'pro') {
+      root.classList.add('pro');
+    }
+    // Both scifi and pro force dark mode
+    if ((uiStyle === 'scifi' || uiStyle === 'pro') && theme !== 'dark') {
+      setTheme('dark');
     }
     try {
       localStorage.setItem('smartalgo-ui-style', uiStyle);
@@ -52,15 +53,15 @@ export function ThemeProvider({ children }) {
   }, [uiStyle]);
 
   const toggleTheme = () => {
-    // Don't allow light mode while scifi is active
-    if (uiStyle === 'scifi') return;
+    if (uiStyle === 'scifi' || uiStyle === 'pro') return;
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
   const toggleUiStyle = () => setUiStyle(prev => (prev === 'classic' ? 'scifi' : 'classic'));
+  const toggleProStyle = () => setUiStyle(prev => (prev === 'pro' ? 'classic' : 'pro'));
 
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme, uiStyle, toggleUiStyle }}>
+    <ThemeContext.Provider value={{ theme, toggleTheme, uiStyle, toggleUiStyle, toggleProStyle }}>
       {children}
     </ThemeContext.Provider>
   );

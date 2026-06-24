@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, DollarSign, BarChart3, Receipt,
   ArrowUpRight, ArrowDownRight, Clock, Trophy, Target, Percent,
-  Filter,
+  Filter, Download,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -14,6 +14,7 @@ import DataTable from '../components/common/DataTable';
 import {
   usePnLSummary, usePnLByStrategy, usePnLCharges, usePnLEquityCurve, usePnLTradeBook,
 } from '../hooks/useApi';
+import { downloadCsv, formatPnLForExport } from '../utils/exportCsv';
 
 // ── Fallback data (zeros — no mock) ────────────────────────────────
 const fallbackSummary = {
@@ -303,7 +304,13 @@ export default function PnLAnalytics() {
           </Card>
 
           {/* ── Quick Strategy Snapshot ── */}
-          <Card title="Strategy P&L Snapshot">
+          <Card title="Strategy P&L Snapshot" actions={
+            strategies.length > 0 && (
+              <button onClick={() => downloadCsv(formatPnLForExport(strategies), `strategy_pnl_${new Date().toISOString().slice(0,10)}.csv`)} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white" title="Export strategy P&L to CSV">
+                <Download className="w-3.5 h-3.5" />
+              </button>
+            )
+          }>
             <div className="space-y-3">
               {strategies.map((s, i) => {
                 const pnl = s.net_pnl || 0;
@@ -599,7 +606,13 @@ export default function PnLAnalytics() {
           </div>
 
           {/* ── Trade Table ── */}
-          <Card title={`Trade Book (${filteredTrades.length})`}>
+          <Card title={`Trade Book (${filteredTrades.length})`} actions={
+            filteredTrades.length > 0 && (
+              <button onClick={() => downloadCsv(filteredTrades, `pnl_trades_${new Date().toISOString().slice(0,10)}.csv`)} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white" title="Export trade book to CSV">
+                <Download className="w-3.5 h-3.5" />
+              </button>
+            )
+          }>
             <DataTable columns={tradeColumns} data={filteredTrades} />
           </Card>
         </>

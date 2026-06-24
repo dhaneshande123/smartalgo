@@ -1,9 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   BarChart3,
-  Briefcase,
   Bot,
   ShieldAlert,
   FileText,
@@ -11,6 +10,7 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   TrendingUp,
   IndianRupee,
   Settings,
@@ -20,24 +20,32 @@ import {
   X,
   Flame,
   Brain,
+  Zap,
   ClipboardList,
+  Briefcase,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 
-const navItems = [
+// Primary navigation — the daily-driver pages
+const mainNav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/ai-signals', icon: Brain, label: 'AI Signals' },
+  { to: '/scalper', icon: Zap, label: 'Scalper' },
   { to: '/market', icon: BarChart3, label: 'Market Data' },
   { to: '/charts', icon: CandlestickChart, label: 'Charts' },
-  { to: '/portfolio', icon: Briefcase, label: 'Portfolio' },
   { to: '/strategies', icon: Bot, label: 'Strategies' },
-  { to: '/builder', icon: Wrench, label: 'Builder' },
-  { to: '/risk', icon: ShieldAlert, label: 'Risk' },
-  { to: '/orders', icon: FileText, label: 'Orders' },
-  { to: '/backtest', icon: FlaskConical, label: 'Backtest' },
-  { to: '/pnl', icon: IndianRupee, label: 'P&L Analytics' },
-  { to: '/iv-surface', icon: Flame, label: 'IV Surface' },
   { to: '/paper', icon: FlaskRound, label: 'Paper Trading' },
-  { to: '/ai-signals', icon: Brain, label: 'AI Signals' },
+  { to: '/backtest', icon: FlaskConical, label: 'Backtest' },
+];
+
+// Secondary navigation — analytics, tools, admin (collapsed by default)
+const moreNav = [
+  { to: '/pnl', icon: IndianRupee, label: 'P&L Analytics' },
+  { to: '/orders', icon: FileText, label: 'Orders' },
+  { to: '/portfolio', icon: Briefcase, label: 'Portfolio' },
+  { to: '/risk', icon: ShieldAlert, label: 'Risk' },
+  { to: '/builder', icon: Wrench, label: 'Builder' },
+  { to: '/iv-surface', icon: Flame, label: 'IV Surface' },
   { to: '/trade-analytics', icon: ClipboardList, label: 'Trade Analytics' },
   { to: '/monitoring', icon: Activity, label: 'Monitoring' },
   { to: '/settings', icon: Settings, label: 'Settings' },
@@ -45,6 +53,16 @@ const navItems = [
 
 export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }) {
   const { theme } = useTheme();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const showLabels = !collapsed || mobileOpen;
+
+  const linkClass = ({ isActive }) =>
+    `flex items-center px-3 py-2.5 mx-2 rounded-xl text-sm font-medium transition-all duration-200 ${
+      isActive
+        ? 'bg-accent/15 text-accent border-l-2 border-accent shadow-sm shadow-accent/5'
+        : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+    }`;
+
   return (
     <>
       {/* Mobile backdrop overlay */}
@@ -92,24 +110,46 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose
 
         {/* Navigation */}
         <nav className="flex-1 py-3 space-y-0.5 overflow-y-auto">
-          {navItems.map(({ to, icon: Icon, label }) => (
+          {/* Primary group */}
+          {mainNav.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}
               to={to}
               end={to === '/'}
               onClick={onMobileClose}
-              className={({ isActive }) =>
-                `flex items-center px-3 py-2.5 mx-2 rounded-xl text-sm font-medium transition-all duration-200 ${
-                  isActive
-                    ? 'bg-accent/15 text-accent border-l-2 border-accent shadow-sm shadow-accent/5'
-                    : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
-                }`
-              }
+              className={linkClass}
             >
               <Icon className="w-5 h-5 flex-shrink-0" />
-              {(!collapsed || mobileOpen) && <span className="ml-3">{label}</span>}
+              {showLabels && <span className="ml-3">{label}</span>}
             </NavLink>
           ))}
+
+          {/* More group — collapsible */}
+          <div className="pt-2 mt-2 border-t border-terminal-border/60">
+            {showLabels ? (
+              <button
+                onClick={() => setMoreOpen((v) => !v)}
+                className="flex items-center justify-between w-full px-3 py-2 mx-2 rounded-xl text-[11px] font-semibold uppercase tracking-wide text-slate-500 hover:text-slate-300 transition-colors"
+                style={{ width: 'calc(100% - 1rem)' }}
+              >
+                <span>More</span>
+                <ChevronDown className={`w-4 h-4 transition-transform ${moreOpen ? 'rotate-180' : ''}`} />
+              </button>
+            ) : (
+              <div className="h-px" />
+            )}
+            {(moreOpen || !showLabels) && moreNav.map(({ to, icon: Icon, label }) => (
+              <NavLink
+                key={to}
+                to={to}
+                onClick={onMobileClose}
+                className={linkClass}
+              >
+                <Icon className="w-5 h-5 flex-shrink-0" />
+                {showLabels && <span className="ml-3">{label}</span>}
+              </NavLink>
+            ))}
+          </div>
         </nav>
 
         {/* Collapse toggle — desktop only */}

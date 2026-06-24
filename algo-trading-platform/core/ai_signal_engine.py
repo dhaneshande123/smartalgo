@@ -250,6 +250,7 @@ def build_deploy_payload(
     spot_price: float,
     lot_size: int,
     name_suffix: str = "AI",
+    underlying: str = "NIFTY",
 ) -> dict[str, Any]:
     """Construct a strategy-deploy payload from a signal.
 
@@ -270,7 +271,7 @@ def build_deploy_payload(
     """
     return {
         "name": f"{signal['strategy_name']} [{name_suffix}]",
-        "underlying": "NIFTY",
+        "underlying": underlying,
         "spot_price": spot_price,
         "lot_size": lot_size,
         "legs": signal.get("default_legs", []),

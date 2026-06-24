@@ -2,10 +2,37 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as api from '../api/client';
 
 export const useHealth = () => useQuery({ queryKey: ['health'], queryFn: api.getHealth });
-export const useIndices = () => useQuery({ queryKey: ['indices'], queryFn: api.getIndices, refetchInterval: 2000 });
+export const useIndices = () => useQuery({ queryKey: ['indices'], queryFn: api.getIndices, refetchInterval: 1000 });
 export const useMarketStatus = () => useQuery({ queryKey: ['marketStatus'], queryFn: api.getMarketStatus });
 export const useOptionChain = (symbol, expiry) =>
-  useQuery({ queryKey: ['optionChain', symbol, expiry], queryFn: () => api.getOptionChain(symbol, expiry), refetchInterval: 3000 });
+  useQuery({ queryKey: ['optionChain', symbol, expiry], queryFn: () => api.getOptionChain(symbol, expiry), refetchInterval: 1000 });
+export const useOISignals = (symbol, expiry) =>
+  useQuery({ queryKey: ['oiSignals', symbol, expiry], queryFn: () => api.getOISignals(symbol, expiry), refetchInterval: 2000 });
+
+// Scalper (expiry-day option buying)
+export const useScalperSignal = (symbol = 'NIFTY') =>
+  useQuery({ queryKey: ['scalperSignal', symbol], queryFn: () => api.getScalperSignal(symbol), refetchInterval: 2000 });
+export const useScalperConfig = () =>
+  useQuery({ queryKey: ['scalperConfig'], queryFn: api.getScalperConfig });
+export const useScalperPerformance = () =>
+  useQuery({ queryKey: ['scalperPerformance'], queryFn: api.getScalperPerformance, refetchInterval: 5000 });
+export const useSetScalperConfig = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.setScalperConfig,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['scalperConfig'] }),
+  });
+};
+export const useDeployScalp = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ symbol, force }) => api.deployScalp(symbol, force),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
+      qc.invalidateQueries({ queryKey: ['paperStrategies'] });
+    },
+  });
+};
 export const useExpiries = (symbol) =>
   useQuery({ queryKey: ['expiries', symbol], queryFn: () => api.getExpiries(symbol) });
 export const useLotSizes = () =>
@@ -126,6 +153,48 @@ export const useSaveFyersSettings = () => {
   });
 };
 
+export const useFyersStatus = () =>
+  useQuery({ queryKey: ['fyersStatus'], queryFn: api.getFyersStatus, refetchInterval: 5000 });
+
+export const useInitFyersConnect = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.initFyersConnect,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['fyersConnectionStatus'] }),
+  });
+};
+
+export const useFyersConnectionStatus = (enabled = false) =>
+  useQuery({
+    queryKey: ['fyersConnectionStatus'],
+    queryFn: api.getFyersConnectionStatus,
+    refetchInterval: enabled ? 2000 : false,
+    enabled,
+  });
+
+export const useDisconnectFyers = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.disconnectFyers,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['fyersStatus'] });
+      qc.invalidateQueries({ queryKey: ['fyersConnectionStatus'] });
+      qc.invalidateQueries({ queryKey: ['health'] });
+    },
+  });
+};
+export const useReconnectFyers = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.reconnectFyers,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['fyersStatus'] });
+      qc.invalidateQueries({ queryKey: ['fyersConnectionStatus'] });
+      qc.invalidateQueries({ queryKey: ['health'] });
+    },
+  });
+};
+
 // Trading mode (paper / live)
 export const useTradingMode = () =>
   useQuery({ queryKey: ['tradingMode'], queryFn: api.getTradingMode, refetchInterval: 5000 });
@@ -242,12 +311,12 @@ export const usePnLEquityCurve = () => useQuery({ queryKey: ['pnlEquityCurve'], 
 export const usePnLTradeBook = () => useQuery({ queryKey: ['pnlTradeBook'], queryFn: api.getPnLTradeBook, refetchInterval: 5000 });
 
 // Market Intelligence
-export const useMarketRegime = () =>
-  useQuery({ queryKey: ['marketRegime'], queryFn: api.getMarketRegime, refetchInterval: 5000 });
-export const useStrategySignals = () =>
-  useQuery({ queryKey: ['strategySignals'], queryFn: api.getStrategySignals, refetchInterval: 5000 });
-export const useAutoDeployRecommendations = () =>
-  useQuery({ queryKey: ['autoDeployRecs'], queryFn: api.getAutoDeployRecommendations, refetchInterval: 10000 });
+export const useMarketRegime = (symbol = 'NIFTY') =>
+  useQuery({ queryKey: ['marketRegime', symbol], queryFn: () => api.getMarketRegime(symbol), refetchInterval: 5000 });
+export const useStrategySignals = (symbol = 'NIFTY') =>
+  useQuery({ queryKey: ['strategySignals', symbol], queryFn: () => api.getStrategySignals(symbol), refetchInterval: 5000 });
+export const useAutoDeployRecommendations = (symbol = 'NIFTY') =>
+  useQuery({ queryKey: ['autoDeployRecs', symbol], queryFn: () => api.getAutoDeployRecommendations(symbol), refetchInterval: 10000 });
 export const useExecuteAutoDeploy = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -255,19 +324,28 @@ export const useExecuteAutoDeploy = () => {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['paperStrategies'] }); qc.invalidateQueries({ queryKey: ['autoDeployRecs'] }); },
   });
 };
+export const useAutoDeployConfig = () =>
+  useQuery({ queryKey: ['autoDeployConfig'], queryFn: api.getAutoDeployConfig, refetchInterval: 5000 });
+export const useSetAutoDeployConfig = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.setAutoDeployConfig,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['autoDeployConfig'] }),
+  });
+};
 
 // Paper Trading
 export const usePaperTradingStatus = () =>
-  useQuery({ queryKey: ['paperStatus'], queryFn: api.getPaperTradingStatus, refetchInterval: 3000 });
+  useQuery({ queryKey: ['paperStatus'], queryFn: api.getPaperTradingStatus, refetchInterval: 2000 });
 export const usePaperTradingStats = (enabled = true) =>
-  useQuery({ queryKey: ['paperStats'], queryFn: api.getPaperTradingStats, refetchInterval: 3000, retry: false, enabled });
+  useQuery({ queryKey: ['paperStats'], queryFn: api.getPaperTradingStats, refetchInterval: 2000, retry: false, enabled });
 export const usePaperTradingStrategies = (enabled = true) =>
-  useQuery({ queryKey: ['paperStrategies'], queryFn: api.getPaperTradingStrategies, refetchInterval: 3000, enabled });
+  useQuery({ queryKey: ['paperStrategies'], queryFn: api.getPaperTradingStrategies, refetchInterval: 2000, enabled });
 
 export const usePaperTradingPositions = (enabled = true) =>
-  useQuery({ queryKey: ['paperPositions'], queryFn: api.getPaperTradingPositions, refetchInterval: 3000, retry: false, enabled });
+  useQuery({ queryKey: ['paperPositions'], queryFn: api.getPaperTradingPositions, refetchInterval: 2000, retry: false, enabled });
 export const usePaperTradingOrders = (enabled = true) =>
-  useQuery({ queryKey: ['paperOrders'], queryFn: api.getPaperTradingOrders, refetchInterval: 3000, retry: false, enabled });
+  useQuery({ queryKey: ['paperOrders'], queryFn: api.getPaperTradingOrders, refetchInterval: 2000, retry: false, enabled });
 
 export const useStartPaperTrading = () => {
   const qc = useQueryClient();
@@ -314,7 +392,7 @@ export const useCandles = (symbol, timeframe, count) =>
   useQuery({
     queryKey: ['candles', symbol, timeframe, count],
     queryFn: () => api.getCandles(symbol, timeframe, count),
-    refetchInterval: timeframe === 'M1' ? 5000 : timeframe === 'M5' ? 15000 : 30000,
+    refetchInterval: timeframe === 'M1' ? 3000 : timeframe === 'M5' ? 5000 : 10000,
   });
 
 // Greeks & IV Surface
@@ -332,3 +410,26 @@ export const useBacktestResults = (jobId) =>
       return data?.status === 'running' ? 1500 : false;
     },
   });
+
+// VectorBT Backtesting
+export const useVbtStrategies = () =>
+  useQuery({ queryKey: ['vbtStrategies'], queryFn: api.getVbtStrategies, staleTime: 60_000 });
+
+export const useVbtObjectives = () =>
+  useQuery({ queryKey: ['vbtObjectives'], queryFn: api.getVbtObjectives, staleTime: 60_000 });
+
+export const useRunVbtBacktest = () => {
+  return useMutation({ mutationFn: api.runVbtBacktest });
+};
+
+export const useRunVbtOptimize = () => {
+  return useMutation({ mutationFn: api.runVbtOptimize });
+};
+
+export const useVbtReport = () => {
+  return useMutation({ mutationFn: api.getVbtReport });
+};
+
+export const useCompareVbtResults = () => {
+  return useMutation({ mutationFn: api.compareVbtResults });
+};

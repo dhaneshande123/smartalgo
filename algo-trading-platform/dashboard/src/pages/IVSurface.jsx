@@ -26,6 +26,7 @@ import {
   Bar,
 } from 'recharts';
 import { useIVSurface } from '../hooks/useApi';
+import { useUnderlying, UNDERLYINGS } from '../context/UnderlyingContext';
 
 /* ─── Color helpers ─────────────────────────────────────────── */
 function ivToColor(iv, minIV, maxIV) {
@@ -117,7 +118,7 @@ function TermTooltip({ active, payload, label }) {
    IV Surface Page
    ═══════════════════════════════════════════════════════════════ */
 export default function IVSurface() {
-  const [symbol, setSymbol] = useState('NIFTY');
+  const { underlying: symbol, setUnderlying: setSymbol } = useUnderlying();
   const [ivType, setIvType] = useState('call'); // 'call' | 'put'
   const [selectedDte, setSelectedDte] = useState(null);
   const [hoveredCell, setHoveredCell] = useState(null);
@@ -252,9 +253,7 @@ export default function IVSurface() {
             onChange={(e) => setSymbol(e.target.value)}
             className="bg-slate-800 border border-terminal-border rounded-lg px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-accent"
           >
-            <option value="NIFTY">NIFTY</option>
-            <option value="BANKNIFTY">BANKNIFTY</option>
-            <option value="FINNIFTY">FINNIFTY</option>
+            {UNDERLYINGS.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
 
           {/* Call/Put toggle */}

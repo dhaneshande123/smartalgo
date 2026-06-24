@@ -1,13 +1,14 @@
 import { useState, useCallback } from 'react';
 import {
   Plus, X, Send, Ban, Filter, FileText, BarChart3,
-  ArrowUpCircle, ArrowDownCircle, Clock, AlertTriangle,
+  ArrowUpCircle, ArrowDownCircle, Clock, AlertTriangle, Download,
 } from 'lucide-react';
 import Card from '../components/common/Card';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import { useOrders, useTrades, useAuditTrail, usePlaceOrder, useCancelOrder } from '../hooks/useApi';
 import { useToast } from '../components/common/ToastProvider';
+import { downloadCsv } from '../utils/exportCsv';
 
 /* ════════════════════════════════════════════════════════════
    Fallback Data
@@ -403,6 +404,11 @@ export default function Orders() {
                   {f}
                 </button>
               ))}
+              {filteredOrders.length > 0 && (
+                <button onClick={() => downloadCsv(filteredOrders, `orders_${new Date().toISOString().slice(0,10)}.csv`)} className="ml-2 p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white" title="Export orders to CSV">
+                  <Download className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           }
         >
@@ -418,7 +424,13 @@ export default function Orders() {
 
       {/* Trades Tab */}
       {tab === 'trades' && (
-        <Card title={`Trade Book (${trades.length})`}>
+        <Card title={`Trade Book (${trades.length})`} actions={
+          trades.length > 0 && (
+            <button onClick={() => downloadCsv(trades, `trades_${new Date().toISOString().slice(0,10)}.csv`)} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white" title="Export trades to CSV">
+              <Download className="w-3.5 h-3.5" />
+            </button>
+          )
+        }>
           {trades.length === 0 ? (
             <div className="text-center py-8 text-slate-500">
               No trades yet — deploy a strategy to start trading

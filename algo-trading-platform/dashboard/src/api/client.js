@@ -27,6 +27,17 @@ export const getLotSizes = () => api.get('/market/lot-sizes');
 export const getMarketStatus = () => api.get('/market/status');
 export const getCandles = (symbol = 'NIFTY', timeframe = 'M5', count = 100) =>
   api.get(`/market/candles/${symbol}`, { params: { timeframe, count } });
+export const getOISignals = (symbol = 'NIFTY', expiry = '') =>
+  api.get(`/market/oi-signals/${symbol}`, { params: expiry ? { expiry } : {} });
+
+// Scalper (expiry-day option buying)
+export const getScalperSignal = (symbol = 'NIFTY') =>
+  api.get(`/scalper/signals/${symbol}`);
+export const getScalperConfig = () => api.get('/scalper/config');
+export const getScalperPerformance = () => api.get('/scalper/performance');
+export const setScalperConfig = (patch) => api.post('/scalper/config', patch);
+export const deployScalp = (symbol = 'NIFTY', force = false) =>
+  api.post('/scalper/deploy', { symbol, force });
 
 // Greeks & IV
 export const getIVSurface = (symbol = 'NIFTY') =>
@@ -121,10 +132,12 @@ export const getPaperTradingOrders = () => api.get('/paper-trading/orders');
 export const placePaperOrder = (order) => api.post('/paper-trading/order', order);
 
 // Market Intelligence
-export const getMarketRegime = () => api.get('/market-regime');
-export const getStrategySignals = () => api.get('/strategy-signals');
-export const getAutoDeployRecommendations = () => api.get('/auto-deploy/recommendations');
-export const executeAutoDeploy = () => api.post('/auto-deploy/execute');
+export const getMarketRegime = (symbol = 'NIFTY') => api.get(`/market-regime?symbol=${symbol}`);
+export const getStrategySignals = (symbol = 'NIFTY') => api.get(`/strategy-signals?symbol=${symbol}`);
+export const getAutoDeployRecommendations = (symbol = 'NIFTY') => api.get(`/auto-deploy/recommendations?symbol=${symbol}`);
+export const executeAutoDeploy = (symbol = 'NIFTY') => api.post('/auto-deploy/execute', { symbol });
+export const getAutoDeployConfig = () => api.get('/auto-deploy/config');
+export const setAutoDeployConfig = (patch) => api.post('/auto-deploy/config', patch);
 
 // Trade Analytics (SQLite-backed)
 export const getTradeAnalytics = () => api.get('/trade-analytics');
@@ -144,11 +157,25 @@ export const getPnLTradeBook = () => api.get('/pnl/trade-book');
 export const getSystemInfo = () => api.get('/system/info');
 export const getSystemConfig = () => api.get('/system/config');
 export const saveFyersSettings = (creds) => api.post('/settings/fyers', creds);
+export const getFyersStatus = () => api.get('/settings/fyers');
+export const initFyersConnect = (creds) => api.post('/fyers/init-connect', creds);
+export const getFyersConnectionStatus = () => api.get('/fyers/connection-status');
+export const disconnectFyers = () => api.post('/fyers/disconnect');
+export const reconnectFyers = () => api.post('/fyers/reconnect');
 
 // Account / Fyers live data
 export const getFunds = () => api.get('/account/funds');
 export const getHoldings = () => api.get('/account/holdings');
 export const getMarketDepth = (symbol) => api.get(`/market/depth/${symbol}`);
+
+// VectorBT Backtesting
+export const getVbtStrategies = () => api.get('/vbt/strategies');
+export const runVbtBacktest = (config) => api.post('/vbt/backtest', config);
+export const runVbtOptimize = (config) => api.post('/vbt/optimize', config);
+export const getVbtObjectives = () => api.get('/vbt/objectives');
+export const getVbtReport = (body) => api.post('/vbt/report', body);
+export const compareVbtResults = (results) => api.post('/vbt/compare', { results });
+export const getAvailableIndicators = () => api.get('/indicators/available');
 
 // Monitoring
 export const getMonitoringHealth = () => api.get('/monitoring/health');

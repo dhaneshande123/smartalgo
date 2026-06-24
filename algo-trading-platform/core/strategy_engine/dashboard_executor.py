@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-TICK_INTERVAL = 5.0  # seconds between executor ticks
+TICK_INTERVAL = 1.0  # seconds between executor ticks (was 5.0 — reduced for near-real-time P&L)
 
 SCHEDULE_TIMES = {
     "market_open": dtime(9, 20),     # 09:20 IST
@@ -61,6 +61,8 @@ MARKET_CLOSE = dtime(15, 30)
 # Risk enforcement cadence
 EQUITY_SNAPSHOT_INTERVAL = 60.0  # seconds between equity snapshots (1 per minute)
 RISK_CHECK_EVERY_N_TICKS = 1     # check risk every tick (5s)
+AUTO_DEPLOY_INTERVAL = 60.0      # seconds between AI auto-deploy cycles (when enabled)
+CHAIN_REFRESH_INTERVAL = 3.0     # min seconds between executor option-chain fetches (Fyers rate limit)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +97,8 @@ class DashboardStrategyExecutor:
         self._last_tick_at: datetime | None = None
         # Risk enforcement state
         self._last_equity_snapshot_at: datetime | None = None
+        self._last_auto_deploy_at: datetime | None = None
+        self._last_chain_refresh_at: datetime | None = None
         self._last_breach_alert_at: dict[str, datetime] = {}  # debounce per-limit
         self._auto_kill_armed = True   # set False to disable auto-kill (manual mode)
 
@@ -167,6 +171,12 @@ class DashboardStrategyExecutor:
         except Exception as e:
             logger.debug(f"Equity snapshot skipped: {e}")
 
+        # 5. AI auto-deploy cycle (every ~60s, only if enabled in config)
+        try:
+            await self._maybe_auto_deploy()
+        except Exception as e:
+            logger.debug(f"Auto-deploy cycle skipped: {e}")
+
     async def _refresh_option_chains_if_needed(self) -> None:
         """Pull fresh option chains for underlyings with running strategies.
 
@@ -185,6 +195,15 @@ class DashboardStrategyExecutor:
         }
         if not underlyings:
             return
+
+        # Throttle: the option chain is the rate-limited Fyers call. Refreshing
+        # every 1s tick per underlying blows the ~200 req/min budget (429s).
+        # P&L still updates every tick from the cached chain between refreshes.
+        now = datetime.now(IST)
+        if self._last_chain_refresh_at:
+            if (now - self._last_chain_refresh_at).total_seconds() < CHAIN_REFRESH_INTERVAL:
+                return
+        self._last_chain_refresh_at = now
 
         try:
             # Import locally to avoid circular dependency
@@ -249,7 +268,13 @@ class DashboardStrategyExecutor:
 
         # ---- 3. Risk checks (only after entry)
         if strat.get("entered", False):
-            exit_reason = self._check_exit_conditions(strat, now_t)
+            risk = strat.get("risk_params", {}) or {}
+            if risk.get("scalp"):
+                # Scalper: partial-book + trail + structural stop (may book a
+                # partial as a side-effect and return None to keep the runner)
+                exit_reason = self._manage_scalp(sid, strat, now_t)
+            else:
+                exit_reason = self._check_exit_conditions(strat, now_t)
             if exit_reason:
                 await self._place_exit_orders(sid, strat, reason=exit_reason)
 
@@ -383,12 +408,24 @@ class DashboardStrategyExecutor:
         # Max loss per trade
         max_loss = self._get_risk_value(risk, "maxLossPerTrade", "max_loss")
         if max_loss is not None and pnl <= -abs(max_loss):
-            return f"stop_loss_hit (pnl={pnl:.0f} ≤ -{abs(max_loss):.0f})"
+            return f"stop_loss_hit (pnl={pnl:.0f} <= -{abs(max_loss):.0f})"
 
         # Target profit
         target = self._get_risk_value(risk, "target", "targetProfit", "target_profit", "targetPct")
         if target is not None and pnl >= abs(target):
-            return f"target_hit (pnl={pnl:.0f} ≥ {abs(target):.0f})"
+            return f"target_hit (pnl={pnl:.0f} >= {abs(target):.0f})"
+
+        # Max hold time
+        max_hold = self._get_risk_value(risk, "maxHoldMinutes", "max_hold_minutes", "max_hold")
+        entered_at = strat.get("entered_at")
+        if max_hold is not None and entered_at:
+            try:
+                entry_dt = datetime.fromisoformat(entered_at)
+                held_minutes = (datetime.now(IST) - entry_dt).total_seconds() / 60.0
+                if held_minutes >= float(max_hold):
+                    return f"max_hold_exceeded ({held_minutes:.0f}min >= {max_hold:.0f}min limit)"
+            except (ValueError, TypeError):
+                pass
 
         # Trailing stop
         hwm = strat.get("_high_water_mark", 0.0)
@@ -400,7 +437,95 @@ class DashboardStrategyExecutor:
         if trailing_pct and hwm > 0:
             drawdown = (hwm - pnl) / hwm if hwm > 0 else 0
             if drawdown * 100 >= float(trailing_pct):
-                return f"trailing_stop_hit (drawdown={drawdown*100:.1f}% from peak ₹{hwm:.0f})"
+                return f"trailing_stop_hit (drawdown={drawdown*100:.1f}% from peak Rs{hwm:.0f})"
+
+        return None
+
+    def _manage_scalp(self, sid: str, strat: dict, now_t: dtime) -> str | None:
+        """Manage an expiry-day scalp: partial-book + trail + structural stop.
+
+        Returns a reason string for a FULL exit, or None (which may include a
+        partial book as a side-effect, leaving a runner). The exit plan:
+          - book half at +book_partial_pct, move stop to breakeven
+          - after booking: trail (give back X% from peak) or breakeven stop
+          - before booking: premium-floor stop (backstop)
+          - structural stop (any time): spot reclaims the broken level
+          - EOD square-off + late-session tightening
+        """
+        risk = strat.get("risk_params", {}) or {}
+        positions = strat.get("positions", [])
+        if not positions:
+            return None
+        pos = positions[0]  # scalp is a single BUY leg
+        entry = float(pos.get("entry_price", 0) or 0)
+        ltp = float(pos.get("ltp", entry) or entry)
+        qty = int(pos.get("qty", 0) or 0)
+        if entry <= 0 or qty <= 0:
+            return None
+
+        lot_size = int(strat.get("lot_size", 1) or 1)
+        direction = (risk.get("stop_dir") or "BULLISH").upper()
+        spot = float(strat.get("spot_price", 0) or 0)
+        stop_level = float(risk.get("stop_level", 0) or 0)
+        pnl_pct = (ltp / entry - 1.0) * 100.0
+
+        # ── EOD square-off (highest priority) ──
+        if now_t >= SQUARE_OFF_TIME:
+            return "eod_square_off"
+
+        # ── Structural stop: spot reclaims the broken level ──
+        if stop_level > 0 and spot > 0:
+            if direction == "BULLISH" and spot < stop_level:
+                return f"structural_stop (spot {spot:.0f} < level {stop_level:.0f})"
+            if direction == "BEARISH" and spot > stop_level:
+                return f"structural_stop (spot {spot:.0f} > level {stop_level:.0f})"
+
+        # ── Track peak P&L% (high-water mark) ──
+        hwm = float(strat.get("_scalp_hwm_pct", 0.0))
+        if pnl_pct > hwm:
+            strat["_scalp_hwm_pct"] = pnl_pct
+            hwm = pnl_pct
+
+        booked = bool(strat.get("_scalp_booked", False))
+        book_at = float(risk.get("book_partial_pct", 50))
+        floor = float(risk.get("premium_floor_pct", 35))
+        trail_give = float(risk.get("trail_giveback_pct", 30))
+
+        # ── Partial book at +book_at% (keep a runner) ──
+        if not booked and pnl_pct >= book_at and qty > lot_size:
+            book_qty = max(lot_size, round((qty / 2) / lot_size) * lot_size)
+            book_qty = min(book_qty, qty - lot_size)  # always leave >= 1 lot running
+            realized_add = (ltp - entry) * book_qty
+            pos["qty"] = qty - book_qty
+            pos["lots"] = max(1, int(pos["qty"] / lot_size))
+            strat["realized_pnl"] = float(strat.get("realized_pnl", 0.0)) + realized_add
+            strat["_scalp_booked"] = True
+            logger.info(
+                f"Scalp {sid}: booked {book_qty} @ {ltp:.2f} (+{pnl_pct:.0f}%), "
+                f"realized +{realized_add:.0f}, trailing {pos['qty']} runner"
+            )
+            return None  # not a full exit
+
+        # ── After partial: breakeven + trail the runner ──
+        if booked:
+            if ltp <= entry:
+                return "breakeven_stop (runner fell back to entry after booking)"
+            if hwm > 0 and (hwm - pnl_pct) >= trail_give:
+                return f"trail_stop (gave back {hwm - pnl_pct:.0f}% from peak +{hwm:.0f}%)"
+        else:
+            # ── Before partial: premium-floor backstop ──
+            if pnl_pct <= -floor:
+                return f"premium_floor_stop ({pnl_pct:.0f}% <= -{floor:.0f}%)"
+
+        # ── Late-session tightening (theta crush) ──
+        tighten = risk.get("tighten_after")
+        if tighten:
+            try:
+                th, tm = map(int, str(tighten).split(":"))
+                if now_t >= dtime(th, tm) and pnl_pct <= -(floor / 2):
+                    return f"late_tighten_stop ({pnl_pct:.0f}% after {tighten})"
+            except (ValueError, TypeError):
+                pass
 
         return None
 
@@ -783,6 +908,26 @@ class DashboardStrategyExecutor:
             logger.critical(f"AUTO-KILL TRIGGERED: {reason}. Stopped {len(squared)} strategies.")
         except Exception as e:
             logger.error(f"Auto-kill failed: {e}", exc_info=True)
+
+    async def _maybe_auto_deploy(self) -> None:
+        """Run an AI auto-deploy cycle every AUTO_DEPLOY_INTERVAL seconds when
+        enabled. Only acts during market hours; the cycle itself is a no-op when
+        the config is disabled and is kill-switch aware."""
+        now = datetime.now(IST)
+        if not (MARKET_OPEN <= now.time() < SQUARE_OFF_TIME):
+            return
+        if self._last_auto_deploy_at:
+            if (now - self._last_auto_deploy_at).total_seconds() < AUTO_DEPLOY_INTERVAL:
+                return
+        try:
+            from core import api as api_mod
+            # Cheap gate: skip entirely (and don't stamp the timer) when disabled
+            if not getattr(api_mod, "_auto_deploy_config", {}).get("enabled"):
+                return
+            self._last_auto_deploy_at = now
+            await api_mod.run_auto_deploy_cycle()
+        except Exception as e:
+            logger.debug(f"Auto-deploy cycle error: {e}")
 
     async def _maybe_snapshot_equity(self) -> None:
         """Persist an equity snapshot once every EQUITY_SNAPSHOT_INTERVAL seconds."""

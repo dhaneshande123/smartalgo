@@ -1,0 +1,735 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   SmartAlgo — Pro Theme (Professional Fintech)
+   ═══════════════════════════════════════════════════════════════════════════
+   Scoped under html.pro so it only activates when the class is present.
+   Clean, institutional design — deep navy, teal accents, data-dense layout.
+   Inspired by Bloomberg Terminal × modern fintech dashboards.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────────────────
+   1. CSS VARIABLES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro {
+  --pro-bg-deep:       #020617;
+  --pro-bg-surface:    #0B1120;
+  --pro-bg-card:       #0F172A;
+  --pro-bg-card-hover: #131D33;
+  --pro-bg-elevated:   #1E293B;
+  --pro-bg-sidebar:    #060C1A;
+  --pro-bg-header:     rgba(11, 17, 32, 0.88);
+
+  --pro-border:        rgba(51, 65, 85, 0.5);
+  --pro-border-subtle: rgba(51, 65, 85, 0.3);
+  --pro-border-hover:  rgba(56, 189, 248, 0.25);
+  --pro-border-accent: rgba(56, 189, 248, 0.4);
+
+  --pro-accent:        #38BDF8;
+  --pro-accent-dim:    rgba(56, 189, 248, 0.6);
+  --pro-accent-muted:  rgba(56, 189, 248, 0.12);
+  --pro-accent-ghost:  rgba(56, 189, 248, 0.06);
+  --pro-teal:          #2DD4BF;
+  --pro-teal-muted:    rgba(45, 212, 191, 0.12);
+
+  --pro-green:         #34D399;
+  --pro-green-dim:     rgba(52, 211, 153, 0.5);
+  --pro-red:           #F87171;
+  --pro-red-dim:       rgba(248, 113, 113, 0.5);
+  --pro-amber:         #FBBF24;
+  --pro-amber-dim:     rgba(251, 191, 36, 0.5);
+
+  --pro-text-primary:  #F1F5F9;
+  --pro-text-secondary:#94A3B8;
+  --pro-text-muted:    #64748B;
+  --pro-text-dim:      #475569;
+
+  --pro-font-sans:     'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --pro-font-mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  --color-profit:      #34D399;
+  --color-loss:        #F87171;
+  --color-warning:     #FBBF24;
+  --color-accent:      #38BDF8;
+
+  --pro-radius-sm:     6px;
+  --pro-radius-md:     10px;
+  --pro-radius-lg:     14px;
+  --pro-radius-xl:     18px;
+
+  --pro-shadow-sm:     0 1px 3px rgba(0, 0, 0, 0.3);
+  --pro-shadow-md:     0 4px 16px rgba(0, 0, 0, 0.35);
+  --pro-shadow-lg:     0 8px 32px rgba(0, 0, 0, 0.4);
+  --pro-shadow-glow:   0 0 20px rgba(56, 189, 248, 0.08);
+
+  --pro-transition:    200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   2. BODY & ROOT
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro body {
+  background-color: var(--pro-bg-deep) !important;
+  color: var(--pro-text-primary);
+  font-family: var(--pro-font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html.pro body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(56, 189, 248, 0.03) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 50% at 80% 90%, rgba(45, 212, 191, 0.02) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+/* ── Scrollbar ── */
+html.pro ::-webkit-scrollbar { width: 5px; height: 5px; }
+html.pro ::-webkit-scrollbar-track { background: var(--pro-bg-deep); }
+html.pro ::-webkit-scrollbar-thumb { background: var(--pro-border); border-radius: 3px; }
+html.pro ::-webkit-scrollbar-thumb:hover { background: var(--pro-text-muted); }
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   3. SIDEBAR
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro aside {
+  background: var(--pro-bg-sidebar) !important;
+  border-color: var(--pro-border-subtle) !important;
+  backdrop-filter: none !important;
+}
+
+html.pro aside .text-lg.font-bold {
+  color: var(--pro-text-primary) !important;
+  letter-spacing: -0.02em;
+}
+
+html.pro aside nav a {
+  color: var(--pro-text-muted) !important;
+  border-radius: var(--pro-radius-md) !important;
+  border-left: 2px solid transparent !important;
+  transition: all var(--pro-transition) !important;
+  font-weight: 500 !important;
+  font-size: 13px !important;
+}
+
+html.pro aside nav a:hover {
+  color: var(--pro-text-primary) !important;
+  background: rgba(56, 189, 248, 0.06) !important;
+}
+
+html.pro aside nav a.active {
+  color: var(--pro-accent) !important;
+  background: var(--pro-accent-muted) !important;
+  border-left-color: var(--pro-accent) !important;
+  box-shadow: none !important;
+}
+
+html.pro aside nav a.active svg {
+  color: var(--pro-accent) !important;
+}
+
+html.pro aside .border-t {
+  border-color: var(--pro-border-subtle) !important;
+}
+
+html.pro aside .border-b {
+  border-color: var(--pro-border-subtle) !important;
+}
+
+/* Logo icon */
+html.pro aside .bg-gradient-to-br {
+  background: linear-gradient(135deg, #0EA5E9, #38BDF8) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   4. HEADER
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro header {
+  background: var(--pro-bg-header) !important;
+  border-color: var(--pro-border-subtle) !important;
+  backdrop-filter: blur(16px) saturate(1.2) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.2) !important;
+}
+
+html.pro header h1 {
+  color: var(--pro-text-secondary) !important;
+  font-family: var(--pro-font-sans) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.06em !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   5. MAIN CONTENT AREA
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro main {
+  background: var(--pro-bg-deep) !important;
+}
+
+html.pro main > div {
+  font-family: var(--pro-font-sans);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   6. GLASS CARDS → SOLID PRO CARDS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .glass-card {
+  background: var(--pro-bg-card) !important;
+  border: 1px solid var(--pro-border-subtle) !important;
+  border-radius: var(--pro-radius-lg) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: var(--pro-shadow-sm) !important;
+  transition: all var(--pro-transition) !important;
+}
+
+html.pro .glass-card:hover {
+  border-color: var(--pro-border) !important;
+  box-shadow: var(--pro-shadow-md) !important;
+  transform: none !important;
+}
+
+html.pro .glass-card-interactive:hover {
+  border-color: var(--pro-border-hover) !important;
+  box-shadow: var(--pro-shadow-md), var(--pro-shadow-glow) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Category cards */
+html.pro .category-card {
+  background: var(--pro-bg-card) !important;
+  border: 1px solid var(--pro-border-subtle) !important;
+  border-radius: var(--pro-radius-lg) !important;
+  backdrop-filter: none !important;
+}
+
+html.pro .category-card:hover {
+  background: var(--pro-bg-card-hover) !important;
+  border-color: var(--pro-border) !important;
+  transform: translateY(-2px) !important;
+  box-shadow: var(--pro-shadow-md) !important;
+}
+
+html.pro .category-card.active {
+  border-color: var(--pro-border-accent) !important;
+  background: var(--pro-accent-ghost) !important;
+  box-shadow: var(--pro-shadow-glow) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   7. GENERIC CARD / TERMINAL BACKGROUNDS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .bg-terminal-card,
+html.pro [class*="bg-terminal-card"] {
+  background-color: var(--pro-bg-card) !important;
+}
+
+html.pro .bg-terminal-bg,
+html.pro [class*="bg-terminal-bg"] {
+  background-color: var(--pro-bg-deep) !important;
+}
+
+html.pro .border-terminal-border,
+html.pro [class*="border-terminal-border"] {
+  border-color: var(--pro-border-subtle) !important;
+}
+
+/* Inline background overrides for common rgba patterns */
+html.pro [style*="rgba(19, 23, 32"] {
+  background: var(--pro-bg-card) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   8. TYPOGRAPHY
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .font-mono,
+html.pro [class*="font-mono"] {
+  font-family: var(--pro-font-mono) !important;
+}
+
+html.pro .text-slate-300 { color: var(--pro-text-primary) !important; }
+html.pro .text-slate-400 { color: var(--pro-text-secondary) !important; }
+html.pro .text-slate-500 { color: var(--pro-text-muted) !important; }
+html.pro .text-slate-600 { color: var(--pro-text-dim) !important; }
+html.pro .text-white { color: var(--pro-text-primary) !important; }
+
+/* Headings */
+html.pro h1, html.pro h2, html.pro h3 {
+  font-family: var(--pro-font-sans) !important;
+  letter-spacing: -0.02em;
+}
+
+/* Card headers */
+html.pro .card-header,
+html.pro .text-xs.font-semibold.uppercase.tracking-wider {
+  color: var(--pro-text-muted) !important;
+  letter-spacing: 0.08em !important;
+  font-size: 11px !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   9. PROFIT / LOSS COLORS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .text-profit { color: var(--pro-green) !important; }
+html.pro .text-loss   { color: var(--pro-red) !important; }
+
+html.pro .bg-profit\/10 { background: rgba(52, 211, 153, 0.1) !important; }
+html.pro .bg-loss\/10   { background: rgba(248, 113, 113, 0.1) !important; }
+
+html.pro .ticker-up {
+  color: var(--pro-green) !important;
+  background: rgba(52, 211, 153, 0.08) !important;
+}
+
+html.pro .ticker-down {
+  color: var(--pro-red) !important;
+  background: rgba(248, 113, 113, 0.08) !important;
+}
+
+html.pro .return-badge-positive {
+  background: rgba(52, 211, 153, 0.06) !important;
+  color: var(--pro-green) !important;
+  border-color: rgba(52, 211, 153, 0.15) !important;
+}
+
+html.pro .return-badge-negative {
+  background: rgba(248, 113, 113, 0.06) !important;
+  color: var(--pro-red) !important;
+  border-color: rgba(248, 113, 113, 0.15) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   10. ACCENT / INTERACTIVE ELEMENTS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .text-accent { color: var(--pro-accent) !important; }
+html.pro .bg-accent\/15 { background: var(--pro-accent-muted) !important; }
+html.pro .bg-accent\/10 { background: var(--pro-accent-ghost) !important; }
+html.pro .border-accent { border-color: var(--pro-accent) !important; }
+
+/* Accent gradient override */
+html.pro .bg-gradient-to-br.from-accent {
+  background: linear-gradient(135deg, #0EA5E9, #38BDF8) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   11. BUTTONS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .btn-deploy {
+  background: linear-gradient(135deg, #0EA5E9, #38BDF8) !important;
+  border-radius: var(--pro-radius-md) !important;
+  font-family: var(--pro-font-sans) !important;
+  font-weight: 600 !important;
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.2) !important;
+}
+
+html.pro .btn-deploy:hover {
+  background: linear-gradient(135deg, #0284C7, #0EA5E9) !important;
+  box-shadow: 0 4px 16px rgba(56, 189, 248, 0.3) !important;
+  transform: translateY(-1px) !important;
+}
+
+html.pro .btn-deploy-live {
+  background: linear-gradient(135deg, #059669, #34D399) !important;
+}
+
+html.pro .btn-deploy-live:hover {
+  background: linear-gradient(135deg, #047857, #10B981) !important;
+  box-shadow: 0 4px 16px rgba(52, 211, 153, 0.25) !important;
+}
+
+html.pro .btn-primary,
+html.pro button.bg-blue-600 {
+  background: var(--pro-accent) !important;
+  border-radius: var(--pro-radius-sm) !important;
+  font-weight: 600 !important;
+}
+
+html.pro .btn-primary:hover,
+html.pro button.bg-blue-600:hover {
+  background: #0EA5E9 !important;
+}
+
+html.pro .btn-secondary {
+  background: var(--pro-bg-elevated) !important;
+  border: 1px solid var(--pro-border) !important;
+  border-radius: var(--pro-radius-sm) !important;
+}
+
+html.pro .btn-danger {
+  background: #DC2626 !important;
+  border-radius: var(--pro-radius-sm) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   12. TABLES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .table-header {
+  color: var(--pro-text-muted) !important;
+  font-family: var(--pro-font-sans) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  background: var(--pro-bg-surface) !important;
+}
+
+html.pro .table-cell {
+  color: var(--pro-text-primary) !important;
+  border-color: var(--pro-border-subtle) !important;
+  font-size: 13px !important;
+}
+
+html.pro table thead th {
+  background: var(--pro-bg-surface) !important;
+  color: var(--pro-text-muted) !important;
+  border-color: var(--pro-border-subtle) !important;
+  font-weight: 600 !important;
+  font-size: 11px !important;
+  letter-spacing: 0.05em !important;
+}
+
+html.pro table tbody tr {
+  border-color: var(--pro-border-subtle) !important;
+  transition: background var(--pro-transition) !important;
+}
+
+html.pro table tbody tr:hover {
+  background: rgba(56, 189, 248, 0.03) !important;
+}
+
+html.pro table tbody td {
+  color: var(--pro-text-primary) !important;
+  border-color: var(--pro-border-subtle) !important;
+}
+
+/* Sticky table headers */
+html.pro thead.sticky th {
+  background: var(--pro-bg-card) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   13. FORM INPUTS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .input-field,
+html.pro input[type="text"],
+html.pro input[type="number"],
+html.pro input[type="password"],
+html.pro select,
+html.pro textarea {
+  background: var(--pro-bg-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+  border-radius: var(--pro-radius-sm) !important;
+  color: var(--pro-text-primary) !important;
+  font-family: var(--pro-font-sans) !important;
+  transition: border-color var(--pro-transition), box-shadow var(--pro-transition) !important;
+}
+
+html.pro .input-field:focus,
+html.pro input:focus,
+html.pro select:focus,
+html.pro textarea:focus {
+  border-color: var(--pro-accent) !important;
+  box-shadow: 0 0 0 2px var(--pro-accent-muted) !important;
+  outline: none !important;
+}
+
+html.pro .search-input {
+  background: var(--pro-bg-surface) !important;
+  border: 1px solid var(--pro-border) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   14. BADGES & TAGS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .strategy-tag {
+  background: rgba(56, 189, 248, 0.06) !important;
+  color: var(--pro-text-secondary) !important;
+  border-color: var(--pro-border-subtle) !important;
+  border-radius: 6px !important;
+}
+
+html.pro .strategy-tag:hover {
+  background: var(--pro-accent-muted) !important;
+  color: var(--pro-accent) !important;
+}
+
+html.pro .featured-ribbon {
+  background: linear-gradient(135deg, #0EA5E9, #38BDF8) !important;
+  color: white !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   15. PREMIUM CHECKBOX
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .premium-checkbox {
+  border-color: var(--pro-border) !important;
+}
+
+html.pro .premium-checkbox:checked {
+  background: var(--pro-accent) !important;
+  border-color: var(--pro-accent) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   16. TABS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro button[class*="border-b-2"][class*="border-accent"],
+html.pro button[class*="border-b-2"][class*="text-accent"] {
+  border-color: var(--pro-accent) !important;
+  color: var(--pro-accent) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   17. CHARTS (Recharts)
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .recharts-cartesian-grid line {
+  stroke: var(--pro-border-subtle) !important;
+}
+
+html.pro .recharts-text {
+  fill: var(--pro-text-muted) !important;
+  font-family: var(--pro-font-sans) !important;
+  font-size: 11px !important;
+}
+
+html.pro .recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--pro-bg-card) !important;
+  border: 1px solid var(--pro-border) !important;
+  border-radius: var(--pro-radius-md) !important;
+  box-shadow: var(--pro-shadow-lg) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   18. MODAL / OVERLAY
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro [class*="bg-black/50"],
+html.pro [class*="bg-black\\/50"] {
+  background: rgba(2, 6, 23, 0.75) !important;
+  backdrop-filter: blur(4px) !important;
+}
+
+html.pro [class*="fixed"][class*="rounded-xl"][class*="border-terminal-border"] {
+  background: var(--pro-bg-card) !important;
+  border-color: var(--pro-border) !important;
+  border-radius: var(--pro-radius-xl) !important;
+  box-shadow: var(--pro-shadow-lg), 0 0 60px rgba(0, 0, 0, 0.4) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   19. USER MENU DROPDOWN
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .absolute.right-0[class*="rounded-xl"][class*="border"] {
+  background: var(--pro-bg-card) !important;
+  border-color: var(--pro-border) !important;
+  box-shadow: var(--pro-shadow-lg) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   20. TOAST NOTIFICATIONS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .toast-item {
+  background: var(--pro-bg-card) !important;
+  border: 1px solid var(--pro-border) !important;
+  border-radius: var(--pro-radius-md) !important;
+  box-shadow: var(--pro-shadow-lg) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   21. ANIMATIONS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .glass-card,
+html.pro .category-card,
+html.pro button,
+html.pro a {
+  transition: all var(--pro-transition) !important;
+}
+
+/* Subtle page transition */
+html.pro .animate-page-enter {
+  animation: proPageEnter 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes proPageEnter {
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+html.pro .animate-card-reveal {
+  animation: proCardReveal 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes proCardReveal {
+  0% { opacity: 0; transform: translateY(8px) scale(0.99); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   22. HOVER / INTERACTIVE STATES
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .hover\:bg-white\/\[0\.04\]:hover,
+html.pro [class*="hover:bg-white/[0.04]"]:hover {
+  background: rgba(56, 189, 248, 0.04) !important;
+}
+
+html.pro .hover\:bg-white\/\[0\.08\]:hover,
+html.pro [class*="hover:bg-white/[0.08]"]:hover {
+  background: rgba(56, 189, 248, 0.08) !important;
+}
+
+html.pro .bg-white\/\[0\.04\],
+html.pro [class*="bg-white/[0.04]"] {
+  background: rgba(56, 189, 248, 0.04) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   23. LIVE STATUS INDICATORS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .animate-pulse {
+  animation: proPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+}
+
+@keyframes proPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Connection status badge */
+html.pro .bg-profit\/10 {
+  background: rgba(52, 211, 153, 0.08) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   24. GLASSMORPHIC SIDEBAR OVERRIDE (for inline styles)
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro aside[style] {
+  background: var(--pro-bg-sidebar) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+
+html.pro header[style] {
+  background: var(--pro-bg-header) !important;
+  box-shadow: 0 1px 0 var(--pro-border-subtle) !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   25. KPI / STAT NUMBERS
+   ───────────────────────────────────────────────────────────────────────── */
+
+html.pro .font-mono.text-2xl,
+html.pro .font-mono.text-xl,
+html.pro .font-mono.text-lg,
+html.pro .font-mono.text-3xl {
+  font-family: var(--pro-font-mono) !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em !important;
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   26. SPECIFIC COMPONENT OVERRIDES
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Rounded full pills (status badges) */
+html.pro .rounded-full[class*="bg-"][class*="text-"] {
+  font-weight: 600 !important;
+}
+
+/* Dividers */
+html.pro hr,
+html.pro .border-t {
+  border-color: var(--pro-border-subtle) !important;
+}
+
+html.pro .border-b {
+  border-color: var(--pro-border-subtle) !important;
+}
+
+/* Shimmer loading */
+html.pro .shimmer-loading {
+  background: linear-gradient(
+    90deg,
+    var(--pro-bg-card) 25%,
+    var(--pro-bg-card-hover) 50%,
+    var(--pro-bg-card) 75%
+  ) !important;
+  background-size: 200% 100% !important;
+}
+
+/* Focus ring */
+html.pro *:focus-visible {
+  outline: 2px solid var(--pro-accent) !important;
+  outline-offset: 2px !important;
+  border-radius: var(--pro-radius-sm);
+}
+
+/* Selection */
+html.pro ::selection {
+  background: rgba(56, 189, 248, 0.25);
+  color: var(--pro-text-primary);
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────
+   27. REDUCED MOTION
+   ───────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html.pro *,
+  html.pro *::before,
+  html.pro *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

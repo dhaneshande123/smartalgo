@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "sqlite": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite", "C:/Users/931063/Downloads/smartalgo/algo-trading-platform/data/platform_state.db"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/931063/Downloads/smartalgo/algo-trading-platform"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "finstack": {
+      "command": "finstack-mcp",
+      "args": []
+    }
+  }
+}

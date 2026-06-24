@@ -54,6 +54,9 @@ SUPPORTED_INDICATORS = {
     "BB_UPPER": {"params": ["period", "std"], "type": "number"},
     "BB_LOWER": {"params": ["period", "std"], "type": "number"},
     "BB_BANDWIDTH": {"params": ["period", "std"], "type": "number"},
+    "BB_WIDTH": {"params": ["period", "std"], "type": "number", "desc": "Alias for BB_BANDWIDTH"},
+    "BB_POSITION": {"params": ["period", "std"], "type": "number", "desc": "%B: 0=lower band, 1=upper band"},
+    "IS_EXPIRY_DAY": {"params": [], "type": "bool", "desc": "True if today is the nearest weekly expiry"},
     "VWAP": {"params": [], "type": "number"},
     "VWAP_CROSS": {"params": [], "type": "number", "desc": "Price - VWAP (positive=above)"},
     "SUPERTREND_DIR": {"params": ["period", "multiplier"], "type": "string", "values": ["UP", "DOWN"]},
@@ -144,6 +147,18 @@ class IndicatorContext:
             return get_iv_tracker().iv_percentile(self.symbol)
         if ind == "VIX":
             return self.vix()
+        if ind == "IS_EXPIRY_DAY":
+            # Read the nearest expiry from the option-chain cache (late import
+            # to avoid a circular dependency with core.api at module load).
+            try:
+                from core import api as _api
+                from core.scalper_engine import is_expiry_day
+                chain = (_api._fyers_chain_cache.get(self.symbol)
+                         or _api._fyers_chain_cache.get(f"{self.symbol}:"))
+                return is_expiry_day(chain or {}, self.symbol)
+            except Exception as e:
+                logger.debug(f"IS_EXPIRY_DAY check failed: {e}")
+                return None
         if ind == "REGIME":
             candles = await self.candles()
             reg = classify_regime(
@@ -196,7 +211,7 @@ class IndicatorContext:
                 int(params.get("signal", 9)),
             )
             return res["histogram"] if res else None
-        if ind in ("BB_UPPER", "BB_LOWER", "BB_BANDWIDTH"):
+        if ind in ("BB_UPPER", "BB_LOWER", "BB_BANDWIDTH", "BB_WIDTH", "BB_POSITION"):
             res = indicators.bollinger_bands(
                 arr["Close"],
                 int(params.get("period", 20)),
@@ -204,7 +219,17 @@ class IndicatorContext:
             )
             if not res:
                 return None
-            return res["upper" if ind == "BB_UPPER" else "lower" if ind == "BB_LOWER" else "bandwidth"]
+            if ind == "BB_UPPER":
+                return res["upper"]
+            if ind == "BB_LOWER":
+                return res["lower"]
+            if ind in ("BB_BANDWIDTH", "BB_WIDTH"):
+                return res["bandwidth"]
+            # BB_POSITION = %B = (close - lower) / (upper - lower), clamped 0..1-ish
+            upper, lower = res["upper"], res["lower"]
+            if upper == lower:
+                return 0.5
+            return (float(arr["Close"][-1]) - lower) / (upper - lower)
         if ind == "SUPERTREND_DIR":
             res = indicators.supertrend(
                 arr["High"], arr["Low"], arr["Close"],

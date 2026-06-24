@@ -2,7 +2,7 @@ import { useState } from 'react';
 import {
   Play, Square, Rocket, Power, TrendingUp, DollarSign,
   BarChart3, Trophy, Target, Zap, X,
-  Pause, Activity, Layers,
+  Pause, Activity, Layers, Shield, Clock, AlertTriangle,
 } from 'lucide-react';
 import Card from '../components/common/Card';
 import MetricCard from '../components/common/MetricCard';
@@ -473,6 +473,48 @@ export default function PaperTrading() {
                         )}
                       </div>
                     </div>
+                    {/* Exit Plan / Risk Params row */}
+                    {s.risk_params && Object.keys(s.risk_params).length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-slate-700/20 flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                          <Shield className="w-3 h-3" />
+                          <span className="font-semibold text-slate-400">Exit Plan:</span>
+                        </div>
+                        {s.risk_params.maxLossPerTrade && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-loss/10 text-loss border border-loss/20" title="Strategy exits if loss exceeds this amount">
+                            SL: Rs {formatINR(s.risk_params.maxLossPerTrade)}
+                          </span>
+                        )}
+                        {s.risk_params.target && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-profit/10 text-profit border border-profit/20" title="Strategy exits when profit reaches this target">
+                            Target: Rs {formatINR(s.risk_params.target)}
+                          </span>
+                        )}
+                        {s.risk_params.trailingStopPct && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20" title="Strategy exits if price drops this % from peak P&L">
+                            Trail: {s.risk_params.trailingStopPct}%
+                          </span>
+                        )}
+                        {s.risk_params.maxHoldMinutes && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20" title="Strategy auto-exits after this many minutes">
+                            <Clock className="w-2.5 h-2.5 inline mr-0.5" />
+                            Max Hold: {s.risk_params.maxHoldMinutes}m
+                          </span>
+                        )}
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-700/30 text-slate-400" title="Auto square-off at 15:15 IST (NSE market close buffer)">
+                          EOD: 15:15
+                        </span>
+                      </div>
+                    )}
+                    {/* Exit reason for exited strategies */}
+                    {s.exit_reason && (
+                      <div className="mt-2 flex items-center gap-1.5 text-[10px]">
+                        <AlertTriangle className="w-3 h-3 text-yellow-400" />
+                        <span className="text-slate-400">Exited: </span>
+                        <span className="text-yellow-400 font-medium">{s.exit_reason}</span>
+                        {s.exited_at && <span className="text-slate-500 ml-1">at {new Date(s.exited_at).toLocaleTimeString()}</span>}
+                      </div>
+                    )}
                   </div>
                 );
               }) : (
