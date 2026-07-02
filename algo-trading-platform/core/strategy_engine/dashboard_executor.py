@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, time as dtime
 from typing import Any, Callable
@@ -62,7 +63,15 @@ MARKET_CLOSE = dtime(15, 30)
 EQUITY_SNAPSHOT_INTERVAL = 60.0  # seconds between equity snapshots (1 per minute)
 RISK_CHECK_EVERY_N_TICKS = 1     # check risk every tick (5s)
 AUTO_DEPLOY_INTERVAL = 60.0      # seconds between AI auto-deploy cycles (when enabled)
+SCALPER_AUTO_INTERVAL = 25.0     # seconds between hands-free scalper auto-deploy cycles (when enabled)
 CHAIN_REFRESH_INTERVAL = 3.0     # min seconds between executor option-chain fetches (Fyers rate limit)
+
+# Fyers connection self-heal: retry a dropped feed without waiting for a
+# manual "Reconnect" click. Backs off after repeated failures so a genuinely
+# expired token (needing full re-auth) doesn't hammer Fyers every tick.
+FYERS_RECONNECT_INTERVAL = 30.0        # seconds between retries while disconnected
+FYERS_RECONNECT_BACKOFF_AFTER = 5      # consecutive failures before backing off
+FYERS_RECONNECT_BACKOFF_INTERVAL = 300.0  # seconds between retries once backed off
 
 
 # ---------------------------------------------------------------------------
@@ -98,9 +107,27 @@ class DashboardStrategyExecutor:
         # Risk enforcement state
         self._last_equity_snapshot_at: datetime | None = None
         self._last_auto_deploy_at: datetime | None = None
+        self._last_scalper_auto_at: datetime | None = None
         self._last_chain_refresh_at: datetime | None = None
         self._last_breach_alert_at: dict[str, datetime] = {}  # debounce per-limit
         self._auto_kill_armed = True   # set False to disable auto-kill (manual mode)
+        # Fyers connection watchdog state
+        self._last_fyers_reconnect_at: datetime | None = None
+        self._last_fyers_ws_restart_at: datetime | None = None
+        self._fyers_reconnect_failures = 0
+
+    @property
+    def live_feed(self):
+        return self._live_feed
+
+    @live_feed.setter
+    def live_feed(self, value) -> None:
+        # api.py's Fyers OAuth/reconnect flow replaces the live feed by
+        # assigning `executor.live_feed = new_feed` after a successful
+        # reconnect. Without this property that assignment silently created
+        # an unused public attribute, leaving every internal call site
+        # (which reads `self._live_feed`) stuck on the old, dead feed object.
+        self._live_feed = value
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -147,6 +174,12 @@ class DashboardStrategyExecutor:
         self._last_tick_at = datetime.now(IST)
         now_t = self._last_tick_at.time()
 
+        # 0. Self-heal the Fyers connection if it dropped (no manual click needed)
+        try:
+            await self._maybe_reconnect_fyers()
+        except Exception as e:
+            logger.debug(f"Fyers reconnect watchdog skipped: {e}")
+
         # 1. Refresh option chains for every underlying that has a RUNNING
         #    strategy. Without this the per-leg LTP lookup in
         #    _refresh_strategy_pnl is stale and P&L gets stuck at zero.
@@ -176,6 +209,74 @@ class DashboardStrategyExecutor:
             await self._maybe_auto_deploy()
         except Exception as e:
             logger.debug(f"Auto-deploy cycle skipped: {e}")
+
+        # 6. Hands-free scalper auto-deploy (every ~25s, only if enabled)
+        try:
+            await self._maybe_scalper_auto()
+        except Exception as e:
+            logger.debug(f"Scalper auto cycle skipped: {e}")
+
+    async def _maybe_reconnect_fyers(self) -> None:
+        """Retry a dropped Fyers connection automatically.
+
+        Two failure modes are handled:
+        1. The REST session itself is down (``is_connected`` False) — do a
+           full reconnect using the stored access token (same path as the
+           Settings page "Reconnect" button).
+        2. The REST session is fine but the WebSocket died silently (the
+           Fyers SDK's own ``reconnect=True`` didn't recover it) — just
+           restart the WS stream, which is far cheaper than a full reconnect.
+        """
+        now = datetime.now(IST)
+
+        if self._live_feed and self._live_feed.is_connected:
+            self._fyers_reconnect_failures = 0
+            if getattr(self._live_feed, "ws_connected", True):
+                return
+            if (self._last_fyers_ws_restart_at
+                    and (now - self._last_fyers_ws_restart_at).total_seconds() < FYERS_RECONNECT_INTERVAL):
+                return
+            self._last_fyers_ws_restart_at = now
+            try:
+                self._live_feed.start_websocket_stream()
+                logger.info("Fyers WebSocket restarted (was silently disconnected)")
+            except Exception as e:
+                logger.warning(f"Fyers WebSocket restart failed: {e}")
+            return
+
+        interval = (
+            FYERS_RECONNECT_BACKOFF_INTERVAL
+            if self._fyers_reconnect_failures >= FYERS_RECONNECT_BACKOFF_AFTER
+            else FYERS_RECONNECT_INTERVAL
+        )
+        if (self._last_fyers_reconnect_at
+                and (now - self._last_fyers_reconnect_at).total_seconds() < interval):
+            return
+        self._last_fyers_reconnect_at = now
+
+        from core import api as _api_mod
+
+        token = os.getenv("FYERS_ACCESS_TOKEN", "") or _api_mod.FYERS_ACCESS_TOKEN
+        if not token:
+            return  # nothing to retry with — needs a fresh login via Connect Fyers
+
+        try:
+            ok = await _api_mod._reconnect_fyers_feed(
+                app_id=os.getenv("FYERS_APP_ID", "") or _api_mod.FYERS_APP_ID,
+                access_token=token,
+                secret_key=os.getenv("FYERS_SECRET_KEY", "") or _api_mod.FYERS_SECRET_KEY,
+                redirect_uri=_api_mod.FYERS_REDIRECT_URI,
+            )
+        except Exception as e:
+            logger.warning(f"Fyers auto-reconnect attempt failed: {e}")
+            ok = False
+
+        if ok:
+            logger.info("Fyers auto-reconnect succeeded")
+            self._fyers_reconnect_failures = 0
+        else:
+            self._fyers_reconnect_failures += 1
+            logger.warning(f"Fyers auto-reconnect failed (consecutive failures: {self._fyers_reconnect_failures})")
 
     async def _refresh_option_chains_if_needed(self) -> None:
         """Pull fresh option chains for underlyings with running strategies.
@@ -928,6 +1029,27 @@ class DashboardStrategyExecutor:
             await api_mod.run_auto_deploy_cycle()
         except Exception as e:
             logger.debug(f"Auto-deploy cycle error: {e}")
+
+    async def _maybe_scalper_auto(self) -> None:
+        """Run a hands-free scalper auto-deploy cycle every SCALPER_AUTO_INTERVAL
+        seconds when enabled. Only during market hours; the cycle is a no-op when
+        the scalper config's auto_deploy is off, and the signal's own gates
+        (expiry-only, entry window, strict regime) still apply."""
+        now = datetime.now(IST)
+        if not (MARKET_OPEN <= now.time() < SQUARE_OFF_TIME):
+            return
+        if self._last_scalper_auto_at:
+            if (now - self._last_scalper_auto_at).total_seconds() < SCALPER_AUTO_INTERVAL:
+                return
+        try:
+            from core import api as api_mod
+            cfg = getattr(api_mod, "_scalper_config", {}) or {}
+            if not cfg.get("auto_deploy"):
+                return
+            self._last_scalper_auto_at = now
+            await api_mod.run_scalper_auto_cycle()
+        except Exception as e:
+            logger.debug(f"Scalper auto cycle error: {e}")
 
     async def _maybe_snapshot_equity(self) -> None:
         """Persist an equity snapshot once every EQUITY_SNAPSHOT_INTERVAL seconds."""

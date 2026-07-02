@@ -48,7 +48,9 @@ DEFAULT_CONFIG = {
     "adx_min_strict": 20.0,
     "adx_min_balanced": 15.0,
     "entry_start": "09:20",
-    "entry_cutoff": "14:30",        # no new entries after this (theta crush)
+    "entry_cutoff": "15:10",        # no new entries after this — leaves a buffer
+                                     # before the 15:15 EOD square-off while still
+                                     # catching the ~15:00 late-session spike window
     "tighten_after": "14:00",       # tighten trail after this
     "book_partial_pct": 50.0,       # book half at +50%
     "trail_giveback_pct": 30.0,     # exit runner if it gives back 30% from peak
@@ -60,6 +62,8 @@ DEFAULT_CONFIG = {
     "max_lots": 20,                 # cap size on ultra-cheap options
     "level_proximity_pct": 0.12,    # spot within this % of a level = "at the wall"
     "breakout_pct": 0.04,           # close past level by this % = breaking
+    "auto_deploy": False,           # hands-free: auto-deploy a scalp when a confirmed signal forms
+    "auto_symbols": ["NIFTY"],      # which underlyings the auto loop watches
 }
 
 # Strike offset (in strike-steps) by time-of-day phase

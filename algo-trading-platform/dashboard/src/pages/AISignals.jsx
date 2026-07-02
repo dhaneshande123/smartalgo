@@ -199,7 +199,7 @@ export default function AISignals() {
               <div key={label} className="flex items-center gap-1.5">
                 <span className="text-[10px] text-slate-600">{label}:</span>
                 <span className={`text-xs font-bold font-mono ${
-                  label === 'P&L' ? ((paperStats.total_pnl || 0) >= 0 ? 'text-profit' : 'text-loss') : 'text-slate-300'
+                  label === 'P&L' ? 'text-profit' : 'text-slate-300'
                 }`}>{value}</span>
               </div>
             ))}

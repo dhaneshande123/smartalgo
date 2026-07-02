@@ -41,6 +41,7 @@ function KPIRow({ summary }) {
           value={summary.net_pnl ?? summary.total_pnl}
           prefix="₹"
           icon={summary.total_pnl >= 0 ? TrendingUp : TrendingDown}
+          colorClass="text-profit"
         />
       </div>
       <div title="Profit/loss before charges — shows raw strategy performance quality">
@@ -49,6 +50,7 @@ function KPIRow({ summary }) {
           value={summary.gross_pnl ?? summary.total_pnl}
           prefix="₹"
           icon={summary.gross_pnl >= 0 ? ArrowUpRight : ArrowDownRight}
+          colorClass="text-profit"
         />
       </div>
       <div title="Percentage of trades that made money (based on gross P&L, before charges)">

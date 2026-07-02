@@ -42,12 +42,12 @@ const tradeColumns = [
   { key: 'price', label: 'Price', align: 'right', render: (v) => <span className="font-mono">{v?.toFixed(2)}</span> },
   {
     key: 'pnl', label: 'P&L', align: 'right',
-    render: (v) => <span className={`font-mono font-medium ${v >= 0 ? 'text-profit' : 'text-loss'}`}>{v >= 0 ? '+' : ''}{v?.toFixed(2)}</span>,
+    render: (v) => <span className="font-mono font-medium text-profit">{v >= 0 ? '+' : ''}{v?.toFixed(2)}</span>,
   },
   { key: 'charges', label: 'Charges', align: 'right', render: (v) => <span className="font-mono text-slate-400">{v?.toFixed(2)}</span> },
   {
     key: 'net_pnl', label: 'Net', align: 'right',
-    render: (v) => <span className={`font-mono font-semibold ${v >= 0 ? 'text-profit' : 'text-loss'}`}>{v >= 0 ? '+' : ''}{v?.toFixed(2)}</span>,
+    render: (v) => <span className="font-mono font-semibold text-profit">{v >= 0 ? '+' : ''}{v?.toFixed(2)}</span>,
   },
 ];
 
@@ -169,9 +169,7 @@ export default function PnLAnalytics() {
           <p className="text-xs text-slate-400 mt-0.5">Intraday performance, charges, and strategy attribution</p>
         </div>
         <div className="flex items-center gap-2">
-          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
-            netPnl >= 0 ? 'bg-profit/10 text-profit' : 'bg-loss/10 text-loss'
-          }`}>
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-profit/10 text-profit">
             {netPnl >= 0 ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownRight className="w-3.5 h-3.5" />}
             {netPnl >= 0 ? '+' : ''}Rs {formatINR(netPnl)}
           </div>
@@ -205,9 +203,9 @@ export default function PnLAnalytics() {
         <>
           {/* ── Top Metric Cards ── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 stagger-1 animate-fade-in">
-            <MetricCard label="Net P&L" value={netPnl} prefix="Rs " icon={DollarSign} />
-            <MetricCard label="Realized" value={summary.realized_pnl || 0} prefix="Rs " icon={TrendingUp} />
-            <MetricCard label="Unrealized" value={summary.unrealized_pnl || 0} prefix="Rs " icon={Target} />
+            <MetricCard label="Net P&L" value={netPnl} prefix="Rs " icon={DollarSign} colorClass="text-profit" />
+            <MetricCard label="Realized" value={summary.realized_pnl || 0} prefix="Rs " icon={TrendingUp} colorClass="text-profit" />
+            <MetricCard label="Unrealized" value={summary.unrealized_pnl || 0} prefix="Rs " icon={Target} colorClass="text-profit" />
             <MetricCard label="Total Charges" value={-(totalCharges)} prefix="Rs " icon={Receipt} />
           </div>
 
@@ -236,7 +234,7 @@ export default function PnLAnalytics() {
                 <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Return %</span>
                 <Percent className="w-4 h-4 text-accent" />
               </div>
-              <div className={`text-xl font-bold font-mono ${returnPct >= 0 ? 'text-profit' : 'text-loss'}`}>
+              <div className="text-xl font-bold font-mono text-profit">
                 {returnPct >= 0 ? '+' : ''}{returnPct}%
               </div>
             </div>
@@ -257,7 +255,7 @@ export default function PnLAnalytics() {
               <span className="text-xs text-slate-500 font-mono">
                 Capital: Rs {formatINR(initialCapital)}
               </span>
-              <span className={`text-xs font-mono font-bold ${currentEquity >= initialCapital ? 'text-profit' : 'text-loss'}`}>
+              <span className="text-xs font-mono font-bold text-profit">
                 Now: Rs {formatINR(currentEquity)}
               </span>
             </div>
@@ -320,20 +318,20 @@ export default function PnLAnalytics() {
                   <div key={s.strategy_id || i} className="group">
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${pnl >= 0 ? 'bg-profit' : 'bg-loss'}`} />
+                        <div className="w-2 h-2 rounded-full bg-profit" />
                         <span className="text-sm text-slate-300 font-medium">{s.name}</span>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="text-[10px] text-slate-500 font-mono">{s.trades_today} trades</span>
                         <span className="text-[10px] text-slate-500 font-mono">WR: {Math.round((s.win_rate || 0) * 100)}%</span>
-                        <span className={`font-mono text-sm font-bold ${pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        <span className="font-mono text-sm font-bold text-profit">
                           {pnl >= 0 ? '+' : ''}Rs {formatINR(pnl)}
                         </span>
                       </div>
                     </div>
                     <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden gauge-track">
                       <div
-                        className={`h-full rounded-full transition-all duration-700 ${pnl >= 0 ? 'bg-profit' : 'bg-loss'}`}
+                        className="h-full rounded-full transition-all duration-700 bg-profit"
                         style={{ width: `${barPct}%` }}
                       />
                     </div>
@@ -372,7 +370,7 @@ export default function PnLAnalytics() {
                 />
                 <Bar dataKey="net_pnl" radius={[6, 6, 0, 0]} maxBarSize={48}>
                   {strategyBarData.map((entry, i) => (
-                    <Cell key={i} fill={entry.net_pnl >= 0 ? '#22c55e' : '#ef4444'} fillOpacity={0.85} />
+                    <Cell key={i} fill="#22c55e" fillOpacity={0.85} />
                   ))}
                 </Bar>
               </BarChart>
@@ -388,9 +386,7 @@ export default function PnLAnalytics() {
                 <div key={s.strategy_id || i} className="glass-card glass-card-interactive !p-5 !rounded-2xl">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold ${
-                        pnl >= 0 ? 'bg-gradient-to-br from-profit to-emerald-600' : 'bg-gradient-to-br from-loss to-red-600'
-                      }`}>
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold bg-gradient-to-br from-profit to-emerald-600">
                         {s.name?.charAt(0) || 'S'}
                       </div>
                       <div>
@@ -398,7 +394,7 @@ export default function PnLAnalytics() {
                         <div className="text-[10px] text-slate-500">{s.strategy_id}</div>
                       </div>
                     </div>
-                    <div className={`text-lg font-bold font-mono ${pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+                    <div className="text-lg font-bold font-mono text-profit">
                       {pnl >= 0 ? '+' : ''}{formatINR(pnl)}
                     </div>
                   </div>
@@ -406,13 +402,13 @@ export default function PnLAnalytics() {
                   <div className="grid grid-cols-2 gap-3 mb-3">
                     <div>
                       <div className="text-[10px] text-slate-500 uppercase">Realized</div>
-                      <div className={`text-sm font-mono ${(s.realized_pnl || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                      <div className="text-sm font-mono text-profit">
                         {(s.realized_pnl || 0) >= 0 ? '+' : ''}{formatINR(s.realized_pnl)}
                       </div>
                     </div>
                     <div>
                       <div className="text-[10px] text-slate-500 uppercase">Unrealized</div>
-                      <div className={`text-sm font-mono ${(s.unrealized_pnl || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                      <div className="text-sm font-mono text-profit">
                         {(s.unrealized_pnl || 0) >= 0 ? '+' : ''}{formatINR(s.unrealized_pnl)}
                       </div>
                     </div>
@@ -567,7 +563,7 @@ export default function PnLAnalytics() {
             </div>
             <div className="glass-card !p-3 !rounded-xl">
               <div className="text-xs text-slate-400 uppercase tracking-wider mb-1">Gross P&L</div>
-              <div className={`text-xl font-bold font-mono ${(tradeBookData?.total_pnl || 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+              <div className="text-xl font-bold font-mono text-profit">
                 {(tradeBookData?.total_pnl || 0) >= 0 ? '+' : ''}Rs {formatINR(tradeBookData?.total_pnl || 0)}
               </div>
             </div>

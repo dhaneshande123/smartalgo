@@ -9,7 +9,54 @@ Live market data via **Fyers API v3** (WebSocket + REST). Paper trading fully fu
 **GitHub**: https://github.com/dhaneshande123/smartalgo.git
 **Branch**: `main`
 
-## Latest Session (June 2026) — "simple but powerful" refactor
+## Latest Session (July 2026) — Fyers reliability + P&L/scalp UX fixes
+
+Triggered by live paper-trading a Tuesday NIFTY expiry: Fyers kept dropping mid-session with
+no way to recover short of a backend restart, Connect Fyers timed out, and two UX asks
+(P&L always green, scalp window later) needed wiring.
+
+Root causes found (not guessed — traced the actual code paths):
+- **`DashboardStrategyExecutor` had a stale-reference bug**: `core/api.py`'s `_reconnect_fyers_feed`
+  assigned `dashboard_executor.live_feed = new_feed`, but the executor only ever read
+  `self._live_feed` internally — a name mismatch. Every reconnect (manual or auto) silently
+  kept the executor on the **old, dead feed object** even though Settings showed "Connected."
+  Fixed with a `live_feed` property/setter on `DashboardStrategyExecutor`.
+- **No auto-reconnect existed anywhere.** `_ws_connected`/`is_connected` were checked but never
+  acted on — a dropped feed stayed dropped until a manual click. Added a watchdog inside the
+  executor's tick loop (`_maybe_reconnect_fyers`): retries the stored token every 30s, backs off
+  to every 5 min after 5 consecutive failures (avoids hammering Fyers when the token is genuinely
+  expired), and separately restarts just the WebSocket if it dies while the REST session is fine
+  (`FyersLiveFeed.ws_connected` new property, distinct from `is_connected`).
+- **Reconnect button was invisible when actually needed.** `Settings.jsx` only rendered the
+  Reconnect button inside the *connected* branch — the disconnected view showed only the full
+  re-login form. Added a Reconnect option to the disconnected branch too (shown whenever a token
+  is on file).
+- **"Network connection timed out" on Connect Fyers**: `_exchange_auth_code` (OAuth token
+  exchange) called the Fyers SDK with no timeout — on the corporate network's SSL-inspecting
+  proxy (see Known Issues below) this hung indefinitely. Now runs with a 20s join timeout and
+  surfaces an actionable message instead of hanging.
+- **Staying connected through a system lock**: not a code fix — the backend runs independent of
+  the browser tab already. Real fix is Windows power config (disable sleep-on-lock + network
+  adapter power-saving) so the always-on watchdog above has something to keep alive. See
+  "Staying Connected Through Lock" below.
+
+Also shipped:
+- **P&L always shown green** regardless of sign, across Dashboard/Scalper/P&L Analytics/Trade
+  Analytics/Paper Trading/AI Signals/DeployedStrategiesPnL — user preference, explicit ask.
+  Deliberately NOT applied to Win Rate, Max Drawdown, Profit Factor, or Charges — those are
+  risk/quality signals, not P&L, and forcing them green would hide real information.
+- **Scalp entry window extended**: `entry_cutoff` in `core/scalper_engine.py` DEFAULT_CONFIG
+  moved 14:30 → **15:10** (catches the ~15:00 late-session spike window) while leaving the
+  15:15 EOD `SQUARE_OFF_TIME` in `dashboard_executor.py` untouched — user chose the safer
+  option over a full 15:20 cutoff after being shown that 15:20 entries would get force-exited
+  almost immediately by the unchanged 15:15 square-off.
+
+**Not yet verified live**: all backend fixes need a `uvicorn` restart to take effect (the running
+paper session was left untouched mid-fix to avoid disrupting it). Frontend fixes are live via
+Vite HMR. Next session: confirm the watchdog actually self-heals a real drop, and confirm the
+extended scalp window fires on the next NIFTY Tuesday expiry.
+
+## Previous Session (June 2026) — "simple but powerful" refactor
 
 Direction: simplify to a focused cockpit, add an expiry-day scalper, validate paper-first.
 Honest framing agreed with user: you can't beat HFT desks (Jane Street/Citadel) on speed —
@@ -39,6 +86,20 @@ do NOT lower the chain cache TTLs (429s); option-chain symbols must be in `OPTIO
 - Node: 18+ for the dashboard (Vite + React + Tailwind)
 - Known issue: SSL certificate errors on corporate network — use VPN or mobile hotspot
 - Unicode (Rs symbol) causes cp1252 encoding errors in Python print — avoid in logs
+
+### Staying Connected Through Lock
+
+The trading engine (Fyers feed, executor, order placement) runs in the `uvicorn` backend
+process, independent of any browser tab. Locking Windows does not stop it by itself. To keep
+it alive through a lock reliably:
+1. Settings → Power & sleep → set **Sleep** to Never (at least while plugged in).
+2. Device Manager → Network adapters → your adapter → Power Management → uncheck
+   "Allow the computer to turn off this device to save power."
+3. Keep the `uvicorn` terminal window open (minimized, not closed) — closing it kills the
+   process regardless of power settings.
+
+With the July 2026 auto-reconnect watchdog (see Latest Session above), a brief network hiccup
+during lock now self-heals instead of requiring a manual Reconnect click afterward.
 
 ## Quick Start
 
@@ -343,6 +404,7 @@ PaperBroker returns Decimal strings with different field names. API layer normal
 41. Multi-Underlying Support: Global `UnderlyingContext` (`context/UnderlyingContext.jsx`) with NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY. Compact pill selector in Header (NIFTY|BANK|FIN|MIDCP). Selection persisted to localStorage. Wired into: MarketData (option chain + OI), IVSurface (IV heatmap), Strategies (deploy with underlying), AISignals (regime/signals/recs), Backtest (symbol dropdowns). API client and hooks updated to pass symbol parameter. Charts and StrategyBuilder already had their own selectors.
 42. Dashboard cockpit redesign (June 2026): hero P&L summary (Net/Realized/Unrealized/Charges/Win-Rate from `/api/pnl/summary`) + deployed strategies front-and-center, compact index ticker, quick-action tiles, equity curve, risk snapshot. Margin display clamped to "100%+" (paper sizing isn't margin-aware).
 43. Sidebar restructure: decluttered into MAIN group (Dashboard, AI Signals, Scalper, Market Data, Charts, Strategies, Paper Trading, Backtest) + collapsible MORE group (P&L, Orders, Portfolio, Risk, Builder, IV Surface, Trade Analytics, Monitoring, Settings). All routes preserved.
+48. Scalper auto-arm (hands-free, separate from AI auto-deploy): `_scalper_config.auto_deploy` + `run_scalper_auto_cycle()` driven by `DashboardExecutor._maybe_scalper_auto` every ~25s. Deploys a scalp the instant a STRICT signal forms (force=False — expiry/window/regime gates still apply). Guards: one RUNNING scalp per underlying (no stacking), max_trades_per_day cap, kill-switch aware. Toggle on the Scalper page (`auto_deploy` + `auto_symbols`). Default OFF. NOTE: AI Signals auto-deploy (#45) deploys the strategy_fit TEMPLATES (iron condor/straddle/etc.), NOT scalps — they are independent systems.
 45. AI Auto-Deploy loop (June 2026): opt-in toggle on AI Signals page. `_auto_deploy_config` (enabled/symbols/min_confidence/max_per_cycle) drives `DashboardExecutor._maybe_auto_deploy` — every ~60s during market hours, deploys ready signals (>=70% conf) to paper via shared `_execute_auto_deploy_core` (dedup + kill-switch aware + per-cycle cap). Fixed `build_deploy_payload` NIFTY hardcode (now respects underlying). Endpoints `GET|POST /api/auto-deploy/config`.
 46. SENSEX support: added to frontend selector (`UNDERLYINGS`), header pill, mock data (`INDEX_BASE`). Backend mapping (`BSE:SENSEX-INDEX`), strike step 100, lot size 20 already existed. Scalper + AI signals work for SENSEX. Per-symbol expiry weekdays: NIFTY=Tuesday, SENSEX=Thursday (`scalper_engine.WEEKLY_EXPIRY_WEEKDAY`).
 47. Scalp performance + exit-attribution panel (`/api/scalper/performance` + Scalper page card): win rate, avg R (P&L/risk), profit factor, expectancy, avg hold, best/worst, and a breakdown bar of WHICH exit fired (target/trail/breakeven/structural/premium-floor/time/eod/manual) with per-bucket count + P&L + win-rate. Tells you if the exit plan is the edge or the leak. Also: `force` deploy now synthesizes a direction (spot vs VWAP) + protective stop so the manual-override button works in flat conditions (liquidity filter still applies).

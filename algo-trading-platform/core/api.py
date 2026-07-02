@@ -7548,6 +7548,62 @@ async def run_auto_deploy_cycle() -> dict:
     return {"enabled": True, "deployed_count": len(total), "deployed": total}
 
 
+async def run_scalper_auto_cycle() -> dict:
+    """Hands-free scalper: when scalper config ``auto_deploy`` is on, deploy a
+    scalp the moment a confirmed signal forms. Called by the background executor.
+
+    Guards: only one RUNNING scalp per underlying (no stacking), respects
+    max_trades_per_day, and the standard kill-switch check inside deploy_strategy.
+    Uses the STRICT signal (force=False) — the regime/expiry/window gates still
+    apply, so it stays quiet through chop and off-expiry days.
+    """
+    cfg = _get_scalper_config()
+    if not cfg.get("auto_deploy"):
+        return {"enabled": False, "deployed": 0}
+
+    from core import scalper_engine as se
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+
+    # Daily trade cap (count today's scalps across all underlyings)
+    today = datetime.now(IST).date().isoformat()
+    todays = [s for s in _deployed_strategies.values()
+              if (s.get("risk_params") or {}).get("scalp")
+              and str(s.get("deployed_at", "")).startswith(today)]
+    if len(todays) >= int(cfg.get("max_trades_per_day", 8)):
+        return {"enabled": True, "deployed": 0, "reason": "max_trades_per_day reached"}
+
+    deployed = []
+    for sym in (cfg.get("auto_symbols") or ["NIFTY"]):
+        sym = str(sym).upper()
+        # Dedup: skip if a scalp on this underlying is already RUNNING
+        if any((s.get("risk_params") or {}).get("scalp")
+               and s.get("status") == "RUNNING"
+               and str(s.get("underlying", "")).upper() == sym
+               for s in _deployed_strategies.values()):
+            continue
+        try:
+            chain_data, daily, intra = await _scalper_fetch_market(sym)
+            if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+                continue
+            spot = float(chain_data.get("spot_price", 0) or 0)
+            sig = se.generate_signal(
+                symbol=sym, spot=spot, daily_candles=daily, intraday_candles=intra,
+                chain=chain_data, strike_step=STRIKE_STEPS.get(sym, 50),
+                lot_size=symbol_master.get_lot_size(sym) or 1, cfg=cfg, force=False,
+            )
+            if sig.has_signal and sig.deploy_payload.get("legs"):
+                res = await deploy_strategy(sig.deploy_payload)
+                if res.get("ok") is False:
+                    break  # kill switch active — stop the cycle
+                deployed.append({"underlying": sym, "strategy_id": res.get("strategy_id"),
+                                 "action": sig.action, "strike": sig.strike})
+                logger.info(f"Scalper auto-deployed {sym} {sig.action} {sig.strike}{sig.option_type} ({sig.reason})")
+        except Exception as e:
+            logger.warning(f"Scalper auto cycle failed for {sym}: {e}")
+    return {"enabled": True, "deployed": len(deployed), "trades": deployed}
+
+
 @app.get(
     "/api/auto-deploy/config",
     tags=["Market Intelligence"],
@@ -7832,10 +7888,44 @@ class _FyersCallbackHandler(BaseHTTPRequestHandler):
         _fyers_oauth_state["status"] = "exchanging"
         _fyers_oauth_state["message"] = "Exchanging auth code for access token..."
 
-        try:
-            resp = _exchange_auth_code(
-                self.app_id, self.secret_key, self.redirect_uri, auth_code
+        # The Fyers SDK issues a plain `requests` call with no timeout of its
+        # own. On networks with SSL-inspecting proxies (see corporate-network
+        # note in CLAUDE.md) that call can hang indefinitely, which used to
+        # surface to the user as a vague "network connection timed out" with
+        # no way to recover except restarting the backend. Run it in a daemon
+        # thread with an explicit join timeout so it fails fast with an
+        # actionable message instead.
+        result_box: dict = {}
+
+        def _do_exchange():
+            try:
+                result_box["resp"] = _exchange_auth_code(
+                    self.app_id, self.secret_key, self.redirect_uri, auth_code
+                )
+            except Exception as exc:
+                result_box["error"] = exc
+
+        exchange_thread = threading.Thread(target=_do_exchange, daemon=True)
+        exchange_thread.start()
+        exchange_thread.join(timeout=20)
+
+        if exchange_thread.is_alive():
+            _fyers_oauth_state["status"] = "error"
+            _fyers_oauth_state["message"] = (
+                "Token exchange timed out after 20s. This usually means the "
+                "current network (often a corporate proxy/VPN with SSL "
+                "inspection) is blocking the connection to Fyers. Try a "
+                "personal VPN or mobile hotspot and retry Connect Fyers."
             )
+            self._send_html("Connection Timed Out",
+                f"<p style='color:#ef4444'>{_fyers_oauth_state['message']}</p>")
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return
+
+        try:
+            if "error" in result_box:
+                raise result_box["error"]
+            resp = result_box.get("resp")
             if resp and resp.get("s") == "ok" and resp.get("access_token"):
                 token = resp["access_token"]
                 _save_token_to_env(token)

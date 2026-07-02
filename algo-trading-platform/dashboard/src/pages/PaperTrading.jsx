@@ -358,7 +358,7 @@ export default function PaperTrading() {
       {isActive && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <span title="Total virtual money available for paper trading"><MetricCard label="Capital" value={stats.initial_capital || stats.capital || 2000000} prefix="Rs " icon={DollarSign} colorClass="text-white" /></span>
-          <span title="Total profit or loss from all trades today"><MetricCard label="Net P&L" value={stats.total_pnl ?? stats.net_pnl ?? 0} prefix="Rs " icon={TrendingUp} /></span>
+          <span title="Total profit or loss from all trades today"><MetricCard label="Net P&L" value={stats.total_pnl ?? stats.net_pnl ?? 0} prefix="Rs " icon={TrendingUp} colorClass="text-profit" /></span>
           <span title="Total number of trades executed this session"><MetricCard label="Total Trades" value={stats.total_trades ?? stats.trades_count ?? 0} icon={BarChart3} colorClass="text-white" /></span>
           <span title="Percentage of trades that ended in profit"><MetricCard label="Win Rate" value={stats.win_rate != null ? `${(stats.win_rate * 100).toFixed(0)}%` : '--'} icon={Trophy} colorClass={
             (stats.win_rate ?? 0) >= 0.6 ? 'text-profit' : (stats.win_rate ?? 0) >= 0.45 ? 'text-yellow-400' : 'text-loss'
@@ -450,7 +450,7 @@ export default function PaperTrading() {
                       <div className="flex items-center gap-4">
                         <div className="text-right">
                           <div className={`text-lg font-bold font-mono ${
-                            !isEntered && pnl === 0 ? 'text-slate-500' : pnl >= 0 ? 'text-profit' : 'text-loss'
+                            !isEntered && pnl === 0 ? 'text-slate-500' : 'text-profit'
                           }`}>
                             {!isEntered && pnl === 0 ? '--' : `${pnl >= 0 ? '+' : ''}Rs ${formatINR(pnl)}`}
                           </div>

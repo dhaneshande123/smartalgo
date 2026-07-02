@@ -637,6 +637,32 @@ export default function Settings() {
             ) : (
               /* Disconnected state — show connect form */
               <div className="space-y-5">
+                {/* Stored token exists — offer a one-click reconnect before the
+                    full re-auth form, so a dropped feed never leaves the user
+                    stuck without a recovery button. */}
+                {fyersStatus.access_token_set && (
+                  <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg"
+                    style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                    <div>
+                      <div className="text-sm font-semibold text-amber-400">Feed dropped — a saved token is still on file</div>
+                      <div className="text-[11px] text-slate-500">
+                        Try Reconnect first (no re-login). If the token expired, use Connect Fyers below.
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleFyersReconnect}
+                      disabled={reconnectFyers.isPending}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold flex-shrink-0
+                        bg-accent/10 text-accent border border-accent/20
+                        hover:bg-accent/20 active:scale-95 transition-all duration-150
+                        disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${reconnectFyers.isPending ? 'animate-spin' : ''}`} />
+                      {reconnectFyers.isPending ? 'Reconnecting...' : 'Reconnect'}
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex items-start gap-2.5 px-3 py-3 rounded-lg text-xs"
                   style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.15)' }}>
                   <Key className="w-3.5 h-3.5 text-blue-400 mt-0.5 flex-shrink-0" />

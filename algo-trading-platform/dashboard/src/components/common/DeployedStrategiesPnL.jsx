@@ -71,9 +71,7 @@ export default function DeployedStrategiesPnL({ compact = false }) {
             </span>
             <span className="text-slate-500">Total P&amp;L</span>
             <span
-              className={`font-mono font-bold ${
-                totalPnL >= 0 ? 'text-profit' : 'text-loss'
-              }`}
+              className="font-mono font-bold text-profit"
             >
               ₹{totalPnL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
             </span>
@@ -166,11 +164,7 @@ export default function DeployedStrategiesPnL({ compact = false }) {
               <div className="grid grid-cols-2 gap-2 mb-3">
                 <div className="rounded-lg bg-slate-900/40 px-2.5 py-1.5">
                   <div className="text-[9px] text-slate-500 uppercase font-semibold">Net P&amp;L</div>
-                  <div
-                    className={`text-base font-bold flex items-center gap-1 ${
-                      isProfit ? 'text-profit' : 'text-loss'
-                    }`}
-                  >
+                  <div className="text-base font-bold flex items-center gap-1 text-profit">
                     {isProfit ? (
                       <TrendingUp className="w-3.5 h-3.5" />
                     ) : (
@@ -181,11 +175,7 @@ export default function DeployedStrategiesPnL({ compact = false }) {
                 </div>
                 <div className="rounded-lg bg-slate-900/40 px-2.5 py-1.5">
                   <div className="text-[9px] text-slate-500 uppercase font-semibold">Unrealized</div>
-                  <div
-                    className={`text-base font-bold ${
-                      (s.unrealized_pnl || 0) >= 0 ? 'text-profit' : 'text-loss'
-                    }`}
-                  >
+                  <div className="text-base font-bold text-profit">
                     ₹
                     {Number(s.unrealized_pnl || 0).toLocaleString('en-IN', {
                       maximumFractionDigits: 2,
@@ -230,11 +220,7 @@ export default function DeployedStrategiesPnL({ compact = false }) {
                           <span className="text-slate-400 font-mono">
                             ₹{Number(p.ltp || 0).toFixed(2)}
                           </span>
-                          <span
-                            className={`font-mono font-semibold ${
-                              legProfit ? 'text-profit' : 'text-loss'
-                            }`}
-                          >
+                          <span className="font-mono font-semibold text-profit">
                             {legProfit ? '+' : ''}
                             {legPnl.toFixed(0)}
                           </span>

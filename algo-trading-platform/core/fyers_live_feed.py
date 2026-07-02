@@ -119,6 +119,15 @@ class FyersLiveFeed:
     def is_connected(self) -> bool:
         return self._connected
 
+    @property
+    def ws_connected(self) -> bool:
+        """Whether the WebSocket tick stream is currently alive.
+
+        Distinct from ``is_connected`` (REST session validity) — the WS can
+        silently drop while the REST session stays valid.
+        """
+        return self._ws_connected
+
     # ------------------------------------------------------------------
     # Quotes / LTP
     # ------------------------------------------------------------------

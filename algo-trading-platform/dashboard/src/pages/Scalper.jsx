@@ -124,7 +124,7 @@ function ScalpPerformance({ perf }) {
   }
 
   const wr = Math.round((perf.win_rate || 0) * 100);
-  const pnlTone = perf.total_pnl > 0 ? 'profit' : perf.total_pnl < 0 ? 'loss' : 'neutral';
+  const pnlTone = 'profit';
   const rTone = perf.avg_r > 0 ? 'profit' : perf.avg_r < 0 ? 'loss' : 'neutral';
   const maxBucket = Math.max(1, ...(perf.exit_breakdown || []).map((b) => b.count));
 
@@ -165,7 +165,7 @@ function ScalpPerformance({ perf }) {
                   <span className="text-slate-500">{Math.round(b.win_rate * 100)}% win</span>
                 </div>
               </div>
-              <div className={`w-20 text-right text-xs font-mono font-semibold ${b.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+              <div className="w-20 text-right text-xs font-mono font-semibold text-profit">
                 {b.pnl >= 0 ? '+' : ''}₹{fmt(b.pnl)}
               </div>
             </div>
@@ -236,6 +236,11 @@ export default function Scalper() {
     if (cfg) setConfig.mutate({ expiry_only: !cfg.expiry_only });
   };
 
+  const autoOn = cfg?.auto_deploy || false;
+  const toggleAuto = () => {
+    if (cfg) setConfig.mutate({ auto_deploy: !autoOn, auto_symbols: [underlying] });
+  };
+
   return (
     <div className="space-y-4 max-w-[1440px] mx-auto animate-fade-in">
       {/* ── Header ── */}
@@ -249,6 +254,21 @@ export default function Scalper() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Hands-free auto-arm toggle */}
+          <button
+            onClick={toggleAuto}
+            disabled={setConfig.isPending}
+            title={autoOn
+              ? `Auto-arm ON for ${cfg?.auto_symbols?.join(', ') || underlying} — deploys a scalp automatically the instant a confirmed signal forms (strict gate, max ${cfg?.max_trades_per_day ?? 8} trades/day, kill-switch aware)`
+              : 'Turn on hands-free auto-arm: the scalper deploys by itself when a confirmed signal forms'}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
+              autoOn ? 'bg-profit/15 text-profit border-profit/30' : 'bg-slate-700/40 text-slate-400 border-white/5 hover:text-slate-200'
+            }`}>
+            <span className={`relative w-7 h-4 rounded-full transition-colors ${autoOn ? 'bg-profit/40' : 'bg-slate-600/50'}`}>
+              <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${autoOn ? 'left-3.5' : 'left-0.5'}`} />
+            </span>
+            {autoOn ? `AUTO-ARM ON (${(cfg?.auto_symbols || [underlying]).join(',')})` : 'AUTO-ARM OFF'}
+          </button>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
             isExpiry ? 'bg-yellow-500/15 text-yellow-400' : 'bg-slate-700/40 text-slate-400'
           }`}>
@@ -258,6 +278,18 @@ export default function Scalper() {
           <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/15 text-accent">{underlying}</span>
         </div>
       </div>
+
+      {/* ── Auto-arm active banner ── */}
+      {autoOn && (
+        <div className="glass-card !rounded-2xl !p-3 flex items-center gap-3 !border-profit/20">
+          <Zap className="w-4 h-4 text-profit flex-shrink-0" />
+          <div className="flex-1 text-xs text-slate-300">
+            <span className="font-semibold text-profit">Hands-free auto-arm is ON</span> for {(cfg?.auto_symbols || [underlying]).join(', ')}.
+            The scalper will deploy automatically when a confirmed signal forms — within {cfg?.entry_start}–{cfg?.entry_cutoff},
+            max {cfg?.max_trades_per_day ?? 8} trades/day, one position per underlying. Paper mode.
+          </div>
+        </div>
+      )}
 
       {/* ── Expiry-only warning ── */}
       {cfg && cfg.expiry_only && !isExpiry && (
@@ -397,7 +429,7 @@ export default function Scalper() {
                             {booked && <span className="text-accent">½ booked · trailing</span>}
                           </div>
                         </div>
-                        <div className={`text-lg font-bold font-mono ${pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        <div className="text-lg font-bold font-mono text-profit">
                           {pnl >= 0 ? '+' : ''}₹{fmt(pnl)}
                         </div>
                       </div>

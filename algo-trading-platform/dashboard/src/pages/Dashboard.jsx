@@ -163,14 +163,14 @@ export default function Dashboard() {
           <HeroStat
             label="Net P&L Today"
             value={fmtINR(netPnl, { sign: true })}
-            tone={netPnl > 0 ? 'profit' : netPnl < 0 ? 'loss' : 'neutral'}
+            tone="profit"
             icon={netPnl >= 0 ? TrendingUp : TrendingDown}
             sub={pnlData?.source === 'fyers_live' ? 'Live broker positions' : 'Paper · deployed strategies'}
             big
           />
         </div>
-        <HeroStat label="Realized" value={fmtINR(realized, { sign: true })} tone={realized >= 0 ? 'profit' : 'loss'} icon={DollarSign} />
-        <HeroStat label="Unrealized" value={fmtINR(unrealized, { sign: true })} tone={unrealized >= 0 ? 'profit' : 'loss'} icon={TrendingUp} />
+        <HeroStat label="Realized" value={fmtINR(realized, { sign: true })} tone="profit" icon={DollarSign} />
+        <HeroStat label="Unrealized" value={fmtINR(unrealized, { sign: true })} tone="profit" icon={TrendingUp} />
         <HeroStat label="Charges" value={charges ? `-${fmtINR(charges)}` : '0'} prefix="Rs " tone="neutral" icon={Wallet} />
         <HeroStat
           label="Win Rate"
