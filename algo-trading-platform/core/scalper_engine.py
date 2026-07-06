@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
     "breakout_pct": 0.04,           # close past level by this % = breaking
     "auto_deploy": False,           # hands-free: auto-deploy a scalp when a confirmed signal forms
     "auto_symbols": ["NIFTY"],      # which underlyings the auto loop watches
+    "profile": "expiry",            # active profile: "expiry" | "daily" | "momentum"
+    "momentum_body_atr_pct": 60.0,  # momentum: candle body > this % of ATR
+    "momentum_vol_spike": 1.5,      # momentum: volume > this x 6-candle avg
 }
 
 # Strike offset (in strike-steps) by time-of-day phase
@@ -71,6 +74,44 @@ PHASE_OFFSETS = {
     "morning": 2,   # 2 strikes OTM — cheap, max gamma
     "midday": 1,    # 1 strike OTM
     "afternoon": 0, # ATM — survives theta, better delta
+}
+
+# ── Profile presets (theme-switcher: only keys that change) ─────────────────
+PROFILE_PRESETS = {
+    "expiry": {
+        "expiry_only": True,
+        "adx_min_strict": 20.0,
+        "book_partial_pct": 50.0,
+        "trail_giveback_pct": 30.0,
+        "premium_floor_pct": 35.0,
+        "max_trades_per_day": 8,
+        "entry_cutoff": "15:10",
+    },
+    "daily": {
+        "expiry_only": False,
+        "adx_min_strict": 22.0,
+        "book_partial_pct": 30.0,
+        "trail_giveback_pct": 20.0,
+        "premium_floor_pct": 25.0,
+        "max_trades_per_day": 4,
+        "entry_cutoff": "15:10",
+    },
+    "momentum": {
+        "expiry_only": False,
+        "regime": "balanced",           # use lower ADX threshold — momentum candle IS the confirmation
+        "adx_min_balanced": 12.0,       # ADX is lagging; best momentum entries start from low ADX
+        "book_partial_pct": 20.0,
+        "trail_giveback_pct": 15.0,
+        "premium_floor_pct": 20.0,
+        "max_trades_per_day": 3,
+        "entry_cutoff": "15:10",
+    },
+}
+
+PROFILE_OFFSETS = {
+    "expiry":   {"morning": 2, "midday": 1, "afternoon": 0},
+    "daily":    {"morning": 1, "midday": 0, "afternoon": 0},
+    "momentum": {"morning": 0, "midday": 0, "afternoon": 0},
 }
 
 
@@ -353,8 +394,48 @@ def _volume_confirms(intraday_candles: list[dict]) -> bool:
     return last >= avg * 0.9  # allow slight slack
 
 
+def _detect_momentum_candle(
+    intraday_candles: list[dict], cfg: dict
+) -> Optional[tuple[str, str]]:
+    """Strong directional candle + volume spike — no S/R breakout required.
+
+    Returns ("BULLISH"|"BEARISH", reason) or None.
+    """
+    if len(intraday_candles) < 7:
+        return None
+
+    last = intraday_candles[-1]
+    open_ = float(last.get("open", last.get("Open", 0)))
+    close = float(last.get("close", last.get("Close", 0)))
+    body = abs(close - open_)
+
+    arr = ind.split_ohlcv(intraday_candles)
+    atr_val = ind.atr(arr["High"], arr["Low"], arr["Close"], period=14)
+    if not atr_val or atr_val <= 0:
+        return None
+
+    body_pct = (body / atr_val) * 100.0
+    threshold = float(cfg.get("momentum_body_atr_pct", 60.0))
+    if body_pct < threshold:
+        return None
+
+    vols = [float(c.get("volume", c.get("Volume", 0)) or 0)
+            for c in intraday_candles[-7:-1]]
+    avg_vol = sum(vols) / max(1, len(vols))
+    last_vol = float(last.get("volume", last.get("Volume", 0)) or 0)
+    spike_req = float(cfg.get("momentum_vol_spike", 1.5))
+    if avg_vol > 0 and last_vol < avg_vol * spike_req:
+        return None
+
+    direction = "BULLISH" if close > open_ else "BEARISH"
+    reason = (f"Momentum {direction}: body {body:.0f} = {body_pct:.0f}% of ATR "
+              f"({atr_val:.0f}), vol {last_vol:.0f} = {last_vol / avg_vol:.1f}x avg")
+    return (direction, reason)
+
+
 def select_strike(
-    spot: float, direction: str, now_t: dtime, chain: dict, strike_step: int, cfg: dict
+    spot: float, direction: str, now_t: dtime, chain: dict, strike_step: int, cfg: dict,
+    offsets: dict | None = None,
 ) -> Optional[dict]:
     """Pick the strike + premium for the scalp, with a liquidity filter.
 
@@ -363,7 +444,7 @@ def select_strike(
     """
     opt_type = "CE" if direction == "BULLISH" else "PE"
     phase = _phase(now_t)
-    offset_strikes = PHASE_OFFSETS[phase]
+    offset_strikes = (offsets or PHASE_OFFSETS)[phase]
     # OTM direction: calls -> higher strike, puts -> lower strike
     atm = round(spot / strike_step) * strike_step
     target = atm + offset_strikes * strike_step if opt_type == "CE" else atm - offset_strikes * strike_step
@@ -438,6 +519,7 @@ def generate_signal(
     now = now or datetime.now(IST)
     now_t = now.time()
     blockers: list[str] = []
+    profile = cfg.get("profile", "expiry")
 
     levels = compute_sr_levels(daily_candles, intraday_candles, chain, spot, strike_step)
 
@@ -456,14 +538,31 @@ def generate_signal(
     if not regime["ok"]:
         blockers.append(regime["reason"])
 
-    # ── Breakout detection ──
+    # ── Signal detection (profile-dependent) ──
     breaking = None
-    if intraday_candles:
-        breaking = _nearest_breaking_level(levels, spot, intraday_candles[-1], cfg)
-    if not breaking:
-        blockers.append("no confirmed level break (need candle CLOSE beyond a level)")
-    elif not _volume_confirms(intraday_candles):
-        blockers.append("breakout not confirmed by volume")
+    momentum_reason = ""
+    if profile == "momentum":
+        mom = _detect_momentum_candle(intraday_candles, cfg)
+        if mom:
+            direction, momentum_reason = mom
+            if direction == "BULLISH":
+                below = [l for l in levels if l.price < spot]
+                stop_ref = max(below, key=lambda l: l.price) if below else \
+                    SRLevel("Spot-1%", round(spot * 0.99, 2), "support", "round")
+            else:
+                above = [l for l in levels if l.price > spot]
+                stop_ref = min(above, key=lambda l: l.price) if above else \
+                    SRLevel("Spot+1%", round(spot * 1.01, 2), "resistance", "round")
+            breaking = (stop_ref, direction)
+        if not breaking:
+            blockers.append("no momentum candle (need body > ATR threshold + volume spike)")
+    else:
+        if intraday_candles:
+            breaking = _nearest_breaking_level(levels, spot, intraday_candles[-1], cfg)
+        if not breaking:
+            blockers.append("no confirmed level break (need candle CLOSE beyond a level)")
+        elif not _volume_confirms(intraday_candles):
+            blockers.append("breakout not confirmed by volume")
 
     forced = False
     if force and not breaking:
@@ -497,7 +596,8 @@ def generate_signal(
     level, direction = breaking
 
     # ── Strike + liquidity ──
-    pick = select_strike(spot, direction, now_t, chain, strike_step, cfg)
+    pick = select_strike(spot, direction, now_t, chain, strike_step, cfg,
+                         offsets=PROFILE_OFFSETS.get(profile))
     if not pick:
         return ScalpSignal(
             has_signal=False, spot=spot, adx=regime["adx"],
@@ -520,9 +620,12 @@ def generate_signal(
         "ai_confidence": (50 if forced else min(95, 55 + regime["adx"])),
         "ai_reasoning": [
             (f"FORCED {direction} entry (manual override, stop @ {level.name} {level.price})"
-             if forced else f"{direction} break of {level.name} @ {level.price}"),
+             if forced else
+             momentum_reason if momentum_reason else
+             f"{direction} break of {level.name} @ {level.price}"),
             f"ADX {regime['adx']:.0f}" + ("" if forced else " (trend confirmed)"),
             f"strike {pick['strike']}{pick['option_type']} @ Rs{pick['premium']} (OI {pick['oi']:,}, spread {pick['spread_pct']}%)",
+            f"profile: {profile}",
         ],
         "spot_price": spot,
         "lot_size": lot_size,
@@ -536,6 +639,7 @@ def generate_signal(
         "risk_params": {
             "maxLossPerTrade": cfg["risk_per_trade"],
             "scalp": True,
+            "scalp_profile": profile,
             "book_partial_pct": cfg["book_partial_pct"],
             "trail_giveback_pct": cfg["trail_giveback_pct"],
             "premium_floor_pct": cfg["premium_floor_pct"],

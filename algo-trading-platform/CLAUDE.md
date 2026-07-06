@@ -9,7 +9,43 @@ Live market data via **Fyers API v3** (WebSocket + REST). Paper trading fully fu
 **GitHub**: https://github.com/dhaneshande123/smartalgo.git
 **Branch**: `main`
 
-## Latest Session (July 2026) — Fyers reliability + P&L/scalp UX fixes
+## Latest Session (July 2026) — Multi-profile scalper + Fyers reliability
+
+### Multi-Profile Scalper (July 6, 2026)
+
+Added 3 scalper profiles — **Expiry**, **Daily**, **Momentum** — with a profile-switcher UI.
+
+**Architecture**: single flat `_scalper_config` dict with a `profile` key. Switching profiles
+applies a preset (`PROFILE_PRESETS` in `scalper_engine.py`) that overwrites profile-specific
+keys (ADX threshold, book/trail/stop %, strike offsets, entry cutoff) while preserving shared
+config (risk_per_trade, min_oi, auto_deploy toggle). Exit params are baked into each strategy's
+`risk_params` at deploy time — switching profiles mid-position is safe.
+
+**Profiles**:
+- **Expiry** (default): S/R breakout, 2/1/0 OTM strikes, +50% book, -35% floor, ADX>20 strict
+- **Daily**: S/R breakout, 1/0/0 OTM (closer to ATM), +30% book, -25% floor, ADX>22 strict
+- **Momentum**: ATM candle momentum (body > 60% ATR + 1.5x vol spike, no S/R breakout needed),
+  always ATM strikes, +20% quick book, -20% floor, ADX>12 balanced (lower because candle IS
+  the confirmation)
+
+**Files modified**:
+- `core/scalper_engine.py` — `PROFILE_PRESETS`, `PROFILE_OFFSETS`, `_detect_momentum_candle()`,
+  `select_strike(offsets=)`, `generate_signal` profile branching, `scalp_profile` in risk_params
+- `core/api.py` — `POST /api/scalper/profile` endpoint, performance `?profile=` filter
+- `dashboard/src/pages/Scalper.jsx` — profile pill selector, dynamic header, live ADX badge,
+  profile in config strip
+- `dashboard/src/api/client.js` + `hooks/useApi.js` — `switchScalperProfile` + hook
+
+**Auto-deploy** works for all 3 profiles (executor reads current config's `auto_deploy` flag;
+profile switch preserves it). Default OFF for daily/momentum — paper-validate first.
+
+**Future enhancements** (not yet implemented, in priority order):
+1. VWAP Mean Reversion — new strategy for ranging days (opposite of breakout scalper)
+2. GEX (Gamma Exposure) levels — add to `compute_sr_levels()` for smarter breakout targets
+3. OI Change Rate — supplementary signal filter (delta OI confirms direction)
+4. IV vs Realized Vol gap — gate for buy vs sell decision
+
+### Fyers reliability + P&L/scalp UX fixes (July 2-3, 2026)
 
 Triggered by live paper-trading a Tuesday NIFTY expiry: Fyers kept dropping mid-session with
 no way to recover short of a backend restart, Connect Fyers timed out, and two UX asks

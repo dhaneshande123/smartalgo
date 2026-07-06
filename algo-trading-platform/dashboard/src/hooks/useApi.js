@@ -9,7 +9,7 @@ export const useOptionChain = (symbol, expiry) =>
 export const useOISignals = (symbol, expiry) =>
   useQuery({ queryKey: ['oiSignals', symbol, expiry], queryFn: () => api.getOISignals(symbol, expiry), refetchInterval: 2000 });
 
-// Scalper (expiry-day option buying)
+// Scalper (expiry / daily / momentum option buying)
 export const useScalperSignal = (symbol = 'NIFTY') =>
   useQuery({ queryKey: ['scalperSignal', symbol], queryFn: () => api.getScalperSignal(symbol), refetchInterval: 2000 });
 export const useScalperConfig = () =>
@@ -21,6 +21,16 @@ export const useSetScalperConfig = () => {
   return useMutation({
     mutationFn: api.setScalperConfig,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['scalperConfig'] }),
+  });
+};
+export const useSwitchScalperProfile = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (profile) => api.switchScalperProfile(profile),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['scalperConfig'] });
+      qc.invalidateQueries({ queryKey: ['scalperSignal'] });
+    },
   });
 };
 export const useDeployScalp = () => {

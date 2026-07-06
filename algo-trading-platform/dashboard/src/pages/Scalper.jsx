@@ -9,8 +9,15 @@ import { useUnderlying } from '../context/UnderlyingContext';
 import { useToast } from '../components/common/ToastProvider';
 import {
   useScalperSignal, useScalperConfig, useSetScalperConfig, useDeployScalp,
-  useDeployedStrategies, useScalperPerformance,
+  useDeployedStrategies, useScalperPerformance, useSwitchScalperProfile,
 } from '../hooks/useApi';
+
+// ── Profile labels ──
+const PROFILE_META = {
+  expiry:   { title: 'Expiry Scalper',   desc: 'S/R-driven OTM option buying — catch the 1₹→50₹ gamma moves on expiry.', Icon: Zap },
+  daily:    { title: 'Daily Scalper',    desc: 'S/R breakout scalping on any trading day — tighter targets, earlier cutoff.', Icon: TrendingUp },
+  momentum: { title: 'Momentum Scalper', desc: 'ATM option buying on strong directional candles — delta-driven, quick targets.', Icon: Activity },
+};
 
 // ── Level source → colour/label ──
 const SOURCE_META = {
@@ -205,11 +212,22 @@ export default function Scalper() {
   const { data: sig } = useScalperSignal(underlying);
   const { data: cfg } = useScalperConfig();
   const setConfig = useSetScalperConfig();
+  const switchProfile = useSwitchScalperProfile();
   const deployScalp = useDeployScalp();
   const { data: deployedData } = useDeployedStrategies();
   const { data: perf } = useScalperPerformance();
 
   const [deploying, setDeploying] = useState(false);
+  const activeProfile = cfg?.profile || 'expiry';
+  const profileInfo = PROFILE_META[activeProfile] || PROFILE_META.expiry;
+
+  const handleProfileSwitch = (profile) => {
+    if (profile === activeProfile) return;
+    switchProfile.mutate(profile, {
+      onSuccess: () => toast?.addToast?.({ level: 'success', message: `Switched to ${PROFILE_META[profile]?.title || profile}`, source: 'scalper' }),
+      onError: () => toast?.addToast?.({ level: 'WARNING', message: 'Profile switch failed', source: 'scalper' }),
+    });
+  };
 
   // Active scalps (running scalper strategies)
   const scalps = (deployedData?.strategies || []).filter(
@@ -247,13 +265,31 @@ export default function Scalper() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-            <Zap className="w-5 h-5 text-yellow-400" /> Expiry Scalper
+            <profileInfo.Icon className="w-5 h-5 text-yellow-400" /> {profileInfo.title}
           </h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            S/R-driven OTM option buying — catch the 1₹→50₹ gamma moves on expiry. Paper mode.
+            {profileInfo.desc} Paper mode.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Profile selector pills */}
+          <div className="flex items-center gap-0.5 rounded-full bg-slate-800/40 p-0.5 border border-white/5">
+            {Object.entries(PROFILE_META).map(([key, { title, Icon }]) => (
+              <button
+                key={key}
+                onClick={() => handleProfileSwitch(key)}
+                disabled={switchProfile.isPending}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                  activeProfile === key
+                    ? 'bg-accent/20 text-accent border border-accent/30'
+                    : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                }`}
+              >
+                <Icon className="w-3 h-3" />
+                {title.split(' ')[0]}
+              </button>
+            ))}
+          </div>
           {/* Hands-free auto-arm toggle */}
           <button
             onClick={toggleAuto}
@@ -275,6 +311,14 @@ export default function Scalper() {
             <Clock className="w-3.5 h-3.5" />
             {isExpiry ? 'EXPIRY DAY' : 'Not Expiry'}
           </span>
+          {sig?.adx != null && (
+            <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
+              sig.adx >= 25 ? 'bg-profit/15 text-profit' : sig.adx >= 20 ? 'bg-yellow-500/15 text-yellow-400' : 'bg-slate-700/40 text-slate-400'
+            }`}>
+              <Gauge className="w-3.5 h-3.5" />
+              ADX {Number(sig.adx).toFixed(0)} {sig.adx >= 25 ? '— Strong Trend' : sig.adx >= 20 ? '— Trending' : '— Weak/Chop'}
+            </span>
+          )}
           <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/15 text-accent">{underlying}</span>
         </div>
       </div>
@@ -461,7 +505,8 @@ export default function Scalper() {
       {/* ── Config strip ── */}
       {cfg && (
         <Card title="Scalper Settings">
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 text-xs">
+            <ConfigStat label="Profile" value={cfg.profile || 'expiry'} />
             <ConfigStat label="Risk / Trade" value={`₹${fmt(cfg.risk_per_trade)}`} />
             <ConfigStat label="Regime" value={cfg.regime} />
             <ConfigStat label="ADX Min" value={cfg.regime === 'strict' ? cfg.adx_min_strict : cfg.adx_min_balanced} />

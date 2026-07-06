@@ -2549,10 +2549,29 @@ async def scalper_set_config(body: dict = Body(...)):
     return {"ok": True, "config": cfg}
 
 
+@app.post(
+    "/api/scalper/profile",
+    tags=["Scalper"],
+    summary="Switch scalper profile",
+    description="Apply a preset profile (expiry|daily|momentum). Overwrites profile-specific keys; leaves risk_per_trade, min_oi, etc. unchanged.",
+)
+async def scalper_switch_profile(body: dict = Body(...)):
+    from core.scalper_engine import PROFILE_PRESETS
+    profile = (body.get("profile") or "expiry").lower()
+    if profile not in PROFILE_PRESETS:
+        raise HTTPException(400, f"Unknown profile: {profile}. Valid: {list(PROFILE_PRESETS)}")
+    cfg = _get_scalper_config()
+    cfg["profile"] = profile
+    for k, v in PROFILE_PRESETS[profile].items():
+        if k != "auto_deploy":
+            cfg[k] = v
+    return {"ok": True, "profile": profile, "config": cfg}
+
+
 @app.get(
     "/api/scalper/signals/{symbol}",
     tags=["Scalper"],
-    summary="Expiry-day scalper signal",
+    summary="Scalper signal (expiry/daily/momentum)",
     description=(
         "Computes live S/R levels (CPR, PDH/PDL, VWAP, ORB, round numbers, OI walls), "
         "applies the strict regime gate (ADX + confirmed breakout + volume), selects a "
@@ -2698,11 +2717,13 @@ EXIT_BUCKET_META = {
         "R = realized P&L / risk-per-trade. Helps judge whether the exit plan is the edge."
     ),
 )
-async def scalper_performance():
+async def scalper_performance(profile: str = None):
     cfg = _get_scalper_config()
     risk_per_trade = float(cfg.get("risk_per_trade", 2000) or 2000) or 2000.0
 
     scalps = [s for s in _deployed_strategies.values() if (s.get("risk_params") or {}).get("scalp")]
+    if profile:
+        scalps = [s for s in scalps if (s.get("risk_params") or {}).get("scalp_profile") == profile]
     closed = [s for s in scalps if (s.get("status") or "").upper() in ("EXITED", "STOPPED")]
     running = [s for s in scalps if (s.get("status") or "").upper() == "RUNNING"]
 

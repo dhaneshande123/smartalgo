@@ -30,12 +30,15 @@ export const getCandles = (symbol = 'NIFTY', timeframe = 'M5', count = 100) =>
 export const getOISignals = (symbol = 'NIFTY', expiry = '') =>
   api.get(`/market/oi-signals/${symbol}`, { params: expiry ? { expiry } : {} });
 
-// Scalper (expiry-day option buying)
+// Scalper (expiry / daily / momentum option buying)
 export const getScalperSignal = (symbol = 'NIFTY') =>
   api.get(`/scalper/signals/${symbol}`);
 export const getScalperConfig = () => api.get('/scalper/config');
-export const getScalperPerformance = () => api.get('/scalper/performance');
+export const getScalperPerformance = (profile) =>
+  api.get('/scalper/performance', { params: profile ? { profile } : {} });
 export const setScalperConfig = (patch) => api.post('/scalper/config', patch);
+export const switchScalperProfile = (profile) =>
+  api.post('/scalper/profile', { profile });
 export const deployScalp = (symbol = 'NIFTY', force = false) =>
   api.post('/scalper/deploy', { symbol, force });
 
