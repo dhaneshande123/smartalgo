@@ -23,6 +23,7 @@ import {
   Zap,
   ClipboardList,
   Briefcase,
+  Rocket,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -31,6 +32,7 @@ const mainNav = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/ai-signals', icon: Brain, label: 'AI Signals' },
   { to: '/scalper', icon: Zap, label: 'Scalper' },
+  { to: '/flyhigh', icon: Rocket, label: 'Fly-High' },
   { to: '/market', icon: BarChart3, label: 'Market Data' },
   { to: '/charts', icon: CandlestickChart, label: 'Charts' },
   { to: '/strategies', icon: Bot, label: 'Strategies' },

@@ -9,7 +9,68 @@ Live market data via **Fyers API v3** (WebSocket + REST). Paper trading fully fu
 **GitHub**: https://github.com/dhaneshande123/smartalgo.git
 **Branch**: `main`
 
-## Latest Session (July 2026) — Multi-profile scalper + Fyers reliability
+## Latest Session (August 2026) — Critical fixes + Fly-High VWAP strategy
+
+### Bug Fixes (August 31, 2026)
+
+**Paper positions disappearing**: Split-brain between `_deployed_strategies` (SQLite-persisted)
+and `PaperBroker` (in-memory only). Option chain deploys to `_deployed_strategies` but Paper
+Trading page only read from PaperBroker. Also returned 409 when no paper session was active.
+Fixed: `paper_trading_positions()` now merges both sources via shared `_parse_position()` helper,
+409 block removed, frontend retry changed from `false` to `1`.
+
+**429 Rate Limit storm**: Background index refresh at 0.5s consumed ~120/200 req/min budget alone.
+Combined with frontend polling at 1s for indices + option chain + executor chain refresh, total
+easily exceeded 200 req/min. Fixed: backend refresh interval 0.5s → 3.0s (saves ~100 req/min),
+frontend polling 1s → 3s, 429 retry with exponential backoff (3 retries, 2s/4s/6s) on
+`get_option_chain`, executor now shares `_fyers_chain_cache` instead of making independent calls.
+
+**ADX flickering in Scalper UI**: Two-part — backend early-return response omitted `adx` field
+entirely (returned only `signal: null`), and frontend conditionally hid badge when `adx` was null.
+Fixed: backend early-return now includes `adx: 0.0, regime: "unknown", direction: "", regime_detail: {}`;
+frontend badge always renders with fallback `(sig?.adx ?? 0)`.
+
+**Fyers WebSocket disconnect (no auto-recovery)**: SDK singleton pattern (`FyersDataSocket._instance`)
+prevented creating fresh WebSocket — "new" connections silently reused the dead instance. SDK's
+internal reconnect doesn't call user's `on_close` callback, so `_ws_connected` stayed True.
+Fixed: `stop_websocket_stream()` clears `FyersDataSocket._instance = None` before each start,
+SDK reconnect disabled (`reconnect=False`, we handle it), stale-tick detection (>60s with no tick
+during market hours → dead), REST health tracking via `_consecutive_rest_failures`. Watchdog in
+`dashboard_executor._maybe_reconnect_fyers()` detects REST down + WS flag down + stale ticks.
+
+**Files modified for fixes**:
+- `core/fyers_live_feed.py` — singleton clearing, stale-tick tracking, 429 retry, REST health
+- `core/api.py` — refresh intervals 0.5→3.0, ADX early-return fields, paper positions merge
+- `core/strategy_engine/dashboard_executor.py` — watchdog rewrite, chain cache sharing
+- `dashboard/src/hooks/useApi.js` — polling 1s→3s, retry policy
+- `dashboard/src/pages/Scalper.jsx` — ADX badge always-render
+- `dashboard/src/pages/PaperTrading.jsx` — positions always-poll (no isActive gate)
+
+### Fly-High Strategy (VWAP Crossover)
+
+New strategy tab: **Fly-High** — VWAP crossover on 5-minute candles for intraday momentum entries.
+
+**Entry logic**: When a 5-min candle closes above/below VWAP (crossover detection using candles[-2]
+and candles[-3]), with ADX gate (default ≥20), take a 1-ITM option position (one strike below ATM
+for CE, one above for PE). Skips the first 5-min candle (09:15-09:20 noise). SL = previous candle
+low/high, capped at `max_sl_points` (default 30). Position sizing by Rs-risk (default Rs 3000).
+Max 2 trades/day. Entry window 09:20-14:30.
+
+**Exit plan**: Book 50% at target (+60% default), trail remainder with 25% give-back, structural
+stop if VWAP recross, premium floor -40% backstop.
+
+**New files**:
+- `core/vwap_engine.py` — `compute_vwap_series()`, `detect_crossover()`, `select_itm_strike()`,
+  `generate_signal()`, `DEFAULT_CONFIG`, `FlyHighSignal` dataclass
+- `dashboard/src/pages/FlyHigh.jsx` — full page: VWAP status bar, signal card, deploy button,
+  blockers list, crossover detail, performance stats, editable config, recent trades
+
+**New endpoints**: `GET /api/flyhigh/signal/{symbol}`, `GET /api/flyhigh/config`,
+`POST /api/flyhigh/config`, `POST /api/flyhigh/deploy`, `GET /api/flyhigh/performance`
+
+**Wired into**: App.jsx route, Sidebar (Rocket icon after Scalper), client.js, useApi.js hooks
+
+## Previous Session (July 2026) — Multi-profile scalper + Fyers reliability
 
 ### Multi-Profile Scalper (July 6, 2026)
 
@@ -40,7 +101,7 @@ config (risk_per_trade, min_oi, auto_deploy toggle). Exit params are baked into 
 profile switch preserves it). Default OFF for daily/momentum — paper-validate first.
 
 **Future enhancements** (not yet implemented, in priority order):
-1. VWAP Mean Reversion — new strategy for ranging days (opposite of breakout scalper)
+1. ~~VWAP Mean Reversion~~ (done — implemented as Fly-High VWAP crossover strategy, Aug 2026)
 2. GEX (Gamma Exposure) levels — add to `compute_sr_levels()` for smarter breakout targets
 3. OI Change Rate — supplementary signal filter (delta OI confirms direction)
 4. IV vs Realized Vol gap — gate for buy vs sell decision
@@ -176,9 +237,9 @@ AI Signal Engine / Strategy Builder / Manual
 ### Fyers Rate Limiting (IMPORTANT)
 - Total API budget: ~200 req/min from Fyers; option chain is the rate-limited call.
 - Current safe usage: option chain `_CHAIN_CACHE_TTL=3.0s`, indices `_INDICES_CACHE_TTL=2.0s`,
-  executor chain refresh throttled to `CHAIN_REFRESH_INTERVAL=3.0s` (dashboard_executor) —
-  this last one matters: the executor tick is 1s, so without the throttle it fetches a chain
-  per running-underlying every second and trips 429s.
+  background refresh interval `3.0s` (was 0.5s pre-Aug 2026), frontend polling `3s` (was 1s),
+  executor chain refresh shares `_fyers_chain_cache` instead of independent calls.
+  429 retry with exponential backoff (3 retries, 2s/4s/6s waits) on `get_option_chain`.
 - **Do NOT reduce these TTLs/intervals** — June 2026 a 1.5s chain TTL + per-tick executor refresh
   caused persistent `429 request limit reached` → empty chains (0 strikes) for ALL symbols.
 - Bursty testing (many curls + restarts) can trip Fyers' limit into a cooldown; wait ~30s.
@@ -196,6 +257,7 @@ AI Signal Engine / Strategy Builder / Manual
 | **Risk Engine (classes)** | `core/risk_engine/*.py` | Circuit breaker, drawdown monitor, Greeks aggregator, margin calculator, position tracker, risk manager |
 | **OI Signal Engine** | `core/oi_signal_engine.py` | 4-factor OI signal generation: buildup, PCR, max pain, S/R breach. Confidence scoring + stability filter. |
 | **Scalper Engine** | `core/scalper_engine.py` | Expiry-day OTM option-buying. S/R levels (CPR, PDH/PDL, VWAP, ORB, round numbers, OI walls), STRICT regime gate (ADX + confirmed breakout close + volume), time-based strike selection, liquidity filter, ₹-risk sizing. Stateless; chain-format agnostic (`normalize_chain_rows`). |
+| **VWAP Engine** | `core/vwap_engine.py` | Fly-High strategy: VWAP crossover on 5-min candles, ADX gate, 1-ITM strike selection, capped SL (prev candle low/high), Rs-risk sizing. Reuses `normalize_chain_rows` from scalper. |
 | **AI Signal Engine** | `core/ai_signal_engine.py` | Strategy recommendations from live market data |
 | **Strategy Fit Matrix** | `core/strategy_fit.py` | Maps regimes/IV/ADX to optimal strategy types |
 | **Market Regime** | `core/market_regime.py` | Classifies market: TRENDING_UP/DOWN, RANGING, HIGH_VOL |
@@ -223,6 +285,10 @@ AI Signal Engine / Strategy Builder / Manual
 - `GET|POST /api/auto-deploy/config` — AI auto-deploy loop toggle (enabled, symbols, min_confidence, max_per_cycle)
 - `POST /api/auto-deploy/execute` — manual one-shot auto-deploy of ready signals (paper)
 - `GET /api/scalper/performance` — closed-scalp analytics: win rate, avg R, profit factor, expectancy, avg hold, and exit-reason attribution (target/trail/structural/stop/eod/manual). `_bucket_exit_reason` maps raw reasons to buckets.
+- `GET /api/flyhigh/signal/{symbol}` — VWAP crossover signal: direction, strike, SL, target, premium, blockers
+- `GET|POST /api/flyhigh/config` — Fly-High strategy config (ADX threshold, SL cap, risk/trade, entry window)
+- `POST /api/flyhigh/deploy` — Deploy Fly-High signal to paper trading
+- `GET /api/flyhigh/performance` — Fly-High closed-trade analytics
 - `POST /api/fyers/reconnect` — retry live feed with the stored token (no re-login)
 - `GET /api/market/candles/{symbol}` — Cache-first: SQLite -> Fyers -> mock last resort
 - `GET /api/risk/*` (11 endpoints) — Real Risk Engine: VaR, Greeks, stress test, margin, limits, kill switch, breaches, audit
@@ -267,6 +333,7 @@ All 16 pages use real data. The only "simulated" content is the Strategy catalog
 |------|-------|-------------|--------|
 | Dashboard | `/` | usePnLSummary + useDeployedStrategies + WS ticker + Risk | **REAL** — COCKPIT: hero P&L summary + deployed strategies front-and-center, quick actions, equity curve, risk snapshot |
 | Scalper | `/scalper` | Scalper Engine (S/R + regime + strike) | **REAL** — expiry-day OTM buying, live S/R rail, partial-book+trail deploy, force-override |
+| Fly-High | `/flyhigh` | VWAP Engine (crossover + ADX + 1-ITM) | **REAL** — VWAP crossover on 5-min candles, signal card, deploy, config editor, performance |
 | Market Data | `/market` | Fyers option chain + OI Analysis + OI Signals (4-factor engine + deploy) | **REAL** (3s refresh, OI change arrows, signals 5s) |
 | Charts | `/charts` | Fyers candles via lightweight-charts (TradingView) | **REAL** (interactive zoom/pan/crosshair) |
 | Portfolio | `/portfolio` | deployed_strategies + Risk Engine margin | **REAL** (zeros when empty) |
@@ -444,6 +511,8 @@ PaperBroker returns Decimal strings with different field names. API layer normal
 45. AI Auto-Deploy loop (June 2026): opt-in toggle on AI Signals page. `_auto_deploy_config` (enabled/symbols/min_confidence/max_per_cycle) drives `DashboardExecutor._maybe_auto_deploy` — every ~60s during market hours, deploys ready signals (>=70% conf) to paper via shared `_execute_auto_deploy_core` (dedup + kill-switch aware + per-cycle cap). Fixed `build_deploy_payload` NIFTY hardcode (now respects underlying). Endpoints `GET|POST /api/auto-deploy/config`.
 46. SENSEX support: added to frontend selector (`UNDERLYINGS`), header pill, mock data (`INDEX_BASE`). Backend mapping (`BSE:SENSEX-INDEX`), strike step 100, lot size 20 already existed. Scalper + AI signals work for SENSEX. Per-symbol expiry weekdays: NIFTY=Tuesday, SENSEX=Thursday (`scalper_engine.WEEKLY_EXPIRY_WEEKDAY`).
 47. Scalp performance + exit-attribution panel (`/api/scalper/performance` + Scalper page card): win rate, avg R (P&L/risk), profit factor, expectancy, avg hold, best/worst, and a breakdown bar of WHICH exit fired (target/trail/breakeven/structural/premium-floor/time/eod/manual) with per-bucket count + P&L + win-rate. Tells you if the exit plan is the edge or the leak. Also: `force` deploy now synthesizes a direction (spot vs VWAP) + protective stop so the manual-override button works in flat conditions (liquidity filter still applies).
+49. **Fly-High VWAP Strategy** (`core/vwap_engine.py` + `/flyhigh` page): VWAP crossover on 5-min candles with ADX gate, 1-ITM strike selection, capped SL, partial book + trail exits. Full UI: signal card, deploy, config editor, performance stats.
+50. **Fyers reliability hardening (Aug 2026)**: SDK singleton clearing, stale-tick detection (>60s = dead), REST health tracking, 429 retry with backoff, rate budget optimization (0.5s→3s refresh, 1s→3s frontend polling), paper positions merge (split-brain fix), ADX early-return fields.
 44. Expiry-Day Scalper (`core/scalper_engine.py` + `/scalper` page): S/R-driven OTM option buying for the 1->50 Rs gamma moves. Levels: CPR/PDH-PDL/VWAP/ORB/round-numbers/OI-walls. STRICT regime gate (ADX>=20 + confirmed breakout close + volume) filters chop. Time-based strike (OTM early -> ATM late), liquidity filter (min OI/vol, max spread%), Rs-risk sizing (default Rs2000/trade). Exit plan in `DashboardExecutor._manage_scalp`: book 50% at +50% -> stop to breakeven -> trail (give-back 30%), structural stop (spot reclaims level), premium-floor -35% backstop, late-session tightening, EOD square-off. Paper-validate first. Endpoint is warm-cache + bounded-fetch (<0.5s) to stay under the 10s frontend axios timeout.
 
 ## Trading Intelligence Stack (Installed June 2026)

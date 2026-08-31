@@ -115,8 +115,8 @@ export default function PaperTrading() {
   const feedMode = statusData?.feed_mode || 'mock';
 
   const { data: statsData } = usePaperTradingStats(isActive);
-  const { data: strategiesData } = usePaperTradingStrategies(isActive);
-  const { data: positionsData } = usePaperTradingPositions(isActive);
+  const { data: strategiesData } = usePaperTradingStrategies(true);
+  const { data: positionsData } = usePaperTradingPositions(true);
   const { data: ordersData } = usePaperTradingOrders(isActive);
 
   const startMutation = useStartPaperTrading();

@@ -1815,7 +1815,7 @@ async def lifespan(application: FastAPI):
     if fyers_connected:
         _logging.getLogger(__name__).info("Fyers live feed connected — serving real market data")
         set_live_feed(_live_feed)
-        await _live_feed.start_background_refresh(interval=0.5)
+        await _live_feed.start_background_refresh(interval=3.0)
         # Start true real-time WebSocket stream from Fyers (updates _last_ticks instantly)
         _live_feed.start_websocket_stream()
         # Give paper trading manager access to live feed
@@ -2599,6 +2599,10 @@ async def scalper_signals(symbol: str):
             "levels": [],
             "is_expiry": False,
             "config": cfg,
+            "adx": 0.0,
+            "regime": "unknown",
+            "direction": "",
+            "regime_detail": {},
         }
 
     spot = float(chain_data.get("spot_price", 0) or 0)
@@ -2828,6 +2832,163 @@ async def scalper_performance(profile: str = None):
         "exit_breakdown": exit_breakdown,
         "recent": recent[:15],
         "timestamp": datetime.now(IST).isoformat(),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Fly-High (VWAP Crossover Strategy)
+# ══════════════════════════════════════════════════════════════════════
+
+@app.get(
+    "/api/flyhigh/signal/{symbol}",
+    tags=["Fly-High"],
+    summary="VWAP crossover signal",
+    description="Compute current Fly-High signal: VWAP crossover on 5-min candles with ADX gate.",
+)
+async def flyhigh_signal(symbol: str = "NIFTY"):
+    from core import vwap_engine as ve
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+
+    symbol = symbol.upper()
+    cfg = ve.get_config()
+    strike_step = STRIKE_STEPS.get(symbol, 50)
+    lot_size = symbol_master.get_lot_size(symbol) or 1
+
+    chain_data, _daily, intraday_candles = await _scalper_fetch_market(symbol)
+    if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+        return {
+            "has_signal": False, "reason": "No option chain data yet",
+            "blockers": ["no option chain"], "spot": 0, "vwap": 0, "adx": 0,
+            "config": cfg,
+        }
+
+    spot = float(chain_data.get("spot_price", 0) or 0)
+
+    # Count today's flyhigh trades
+    trades_today = sum(
+        1 for s in _deployed_strategies.values()
+        if (s.get("risk_params") or {}).get("strategy_type") == "flyhigh_vwap"
+        and s.get("deployed_at", "")[:10] == datetime.now(IST).strftime("%Y-%m-%d")
+    )
+
+    sig = ve.generate_signal(
+        symbol=symbol, spot=spot, intraday_candles=intraday_candles,
+        chain=chain_data, strike_step=strike_step, lot_size=lot_size,
+        cfg=cfg, trades_today=trades_today,
+    )
+
+    result = sig.to_dict()
+    result["config"] = cfg
+    result["trades_today"] = trades_today
+    return result
+
+
+@app.get("/api/flyhigh/config", tags=["Fly-High"], summary="Get Fly-High config")
+async def flyhigh_get_config():
+    from core import vwap_engine as ve
+    return ve.get_config()
+
+
+@app.post("/api/flyhigh/config", tags=["Fly-High"], summary="Update Fly-High config")
+async def flyhigh_set_config(body: dict = Body(...)):
+    from core import vwap_engine as ve
+    return {"ok": True, "config": ve.update_config(body)}
+
+
+@app.post(
+    "/api/flyhigh/deploy",
+    tags=["Fly-High"],
+    summary="Deploy a Fly-High trade to paper",
+    description="Regenerates signal and deploys if valid. force=true bypasses gates.",
+)
+async def flyhigh_deploy(body: dict = Body(...)):
+    from core import vwap_engine as ve
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+
+    symbol = (body.get("symbol") or "NIFTY").upper()
+    cfg = ve.get_config()
+    strike_step = STRIKE_STEPS.get(symbol, 50)
+    lot_size = symbol_master.get_lot_size(symbol) or 1
+
+    chain_data, _daily, intraday_candles = await _scalper_fetch_market(symbol)
+    if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+        raise HTTPException(status_code=409, detail="No option chain data available")
+
+    spot = float(chain_data.get("spot_price", 0) or 0)
+
+    trades_today = sum(
+        1 for s in _deployed_strategies.values()
+        if (s.get("risk_params") or {}).get("strategy_type") == "flyhigh_vwap"
+        and s.get("deployed_at", "")[:10] == datetime.now(IST).strftime("%Y-%m-%d")
+    )
+
+    sig = ve.generate_signal(
+        symbol=symbol, spot=spot, intraday_candles=intraday_candles,
+        chain=chain_data, strike_step=strike_step, lot_size=lot_size,
+        cfg=cfg, trades_today=trades_today,
+    )
+
+    if not sig.has_signal:
+        raise HTTPException(status_code=409, detail=f"No signal: {sig.reason}")
+    if not sig.deploy_payload.get("legs"):
+        raise HTTPException(status_code=409, detail="No tradeable strike found")
+
+    result = await deploy_strategy(sig.deploy_payload)
+    return {"ok": True, "signal": sig.to_dict(), "deploy": result}
+
+
+@app.get("/api/flyhigh/performance", tags=["Fly-High"], summary="Fly-High performance stats")
+async def flyhigh_performance():
+    from core import vwap_engine as ve
+    cfg = ve.get_config()
+    risk_per_trade = float(cfg.get("risk_per_trade", 2000) or 2000) or 2000.0
+
+    trades = [
+        s for s in _deployed_strategies.values()
+        if (s.get("risk_params") or {}).get("strategy_type") == "flyhigh_vwap"
+    ]
+    closed = [s for s in trades if (s.get("status") or "").upper() in ("EXITED", "STOPPED")]
+    running = [s for s in trades if (s.get("status") or "").upper() == "RUNNING"]
+
+    wins = losses = 0
+    total_pnl = 0.0
+    r_multiples = []
+    durations = []
+    recent = []
+
+    for s in closed:
+        pnl = float(s.get("realized_pnl", s.get("pnl", 0)) or 0)
+        total_pnl += pnl
+        if pnl > 0: wins += 1
+        elif pnl < 0: losses += 1
+        r_multiples.append(pnl / risk_per_trade)
+        try:
+            ent = datetime.fromisoformat(s["entered_at"])
+            ex = datetime.fromisoformat(s["exited_at"])
+            durations.append((ex - ent).total_seconds() / 60.0)
+        except (KeyError, ValueError, TypeError):
+            pass
+        recent.append({
+            "name": s.get("name", ""), "pnl": round(pnl, 2),
+            "r": round(pnl / risk_per_trade, 2),
+            "exit_reason": s.get("exit_reason", ""),
+            "exited_at": s.get("exited_at", ""),
+        })
+
+    n = len(closed)
+    recent.sort(key=lambda r: r.get("exited_at", ""), reverse=True)
+
+    return {
+        "closed_count": n,
+        "running_count": len(running),
+        "wins": wins, "losses": losses,
+        "win_rate": round(wins / n, 4) if n else 0.0,
+        "total_pnl": round(total_pnl, 2),
+        "avg_r": round(sum(r_multiples) / len(r_multiples), 3) if r_multiples else 0.0,
+        "avg_hold_minutes": round(sum(durations) / len(durations), 1) if durations else 0.0,
+        "recent": recent[:10],
     }
 
 
@@ -6876,15 +7037,8 @@ async def paper_trading_stats():
 async def paper_trading_positions():
     if _paper_trading_manager is None:
         raise HTTPException(status_code=503, detail="Paper trading manager not initialized")
-    if not _paper_trading_manager.is_active:
-        raise HTTPException(status_code=409, detail="No active paper trading session")
 
-    try:
-        raw_positions = await _paper_trading_manager.get_positions()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-
-    # ── Build chain-lookup for LTP refresh (same logic as /api/positions) ──
+    # ── Build chain-lookup for LTP refresh ──
     chain_lookup: dict[str, dict[int, dict]] = {}
     for cache_key, chain_data in _fyers_chain_cache.items():
         if ":" in cache_key:
@@ -6900,21 +7054,16 @@ async def paper_trading_positions():
         if by_strike:
             chain_lookup[cache_key.upper()] = by_strike
 
-    parsed = []
-    for p in raw_positions:
-        # PaperBroker returns Decimal strings — coerce to float
+    def _parse_position(p):
         qty_raw = float(p.get("quantity", 0) or 0)
-        avg = float(p.get("average_price", 0) or 0)
+        avg = float(p.get("average_price", p.get("entry_price", 0)) or 0)
         ltp = float(p.get("ltp", avg) or avg)
-        pnl_u = float(p.get("pnl_unrealized", 0) or 0)
+        pnl_u = float(p.get("pnl_unrealized", p.get("pnl", 0)) or 0)
         pnl_r = float(p.get("pnl_realized", 0) or 0)
         sym = p.get("symbol", "")
+        side = p.get("side", "BUY" if qty_raw >= 0 else "SELL")
+        qty = abs(qty_raw) if qty_raw else float(p.get("qty", 0) or 0)
 
-        # Derive side from signed quantity (+ve = BUY/LONG, -ve = SELL/SHORT)
-        side = "BUY" if qty_raw >= 0 else "SELL"
-        qty = abs(qty_raw)
-
-        # Parse "NIFTY 24000 CE" into underlying / strike / opt_type
         strike = 0
         opt_type = ""
         underlying = sym
@@ -6927,7 +7076,6 @@ async def paper_trading_positions():
                 pass
             opt_type = parts[2] if parts[2] in ("CE", "PE") else ""
 
-        # Refresh LTP from cached option chain (live Fyers data)
         if underlying.upper() in chain_lookup and strike:
             row = chain_lookup[underlying.upper()].get(strike)
             if row:
@@ -6935,10 +7083,11 @@ async def paper_trading_positions():
                 fresh_ltp = float(row.get(key, 0) or 0)
                 if fresh_ltp > 0:
                     ltp = fresh_ltp
-                    if qty_raw != 0:
-                        pnl_u = (ltp - avg) * qty_raw
+                    if qty > 0 and avg > 0:
+                        mult = 1 if side == "BUY" else -1
+                        pnl_u = (ltp - avg) * qty * mult
 
-        parsed.append({
+        return {
             "symbol": sym,
             "side": side,
             "quantity": qty,
@@ -6947,9 +7096,36 @@ async def paper_trading_positions():
             "pnl": pnl_u,
             "pnl_unrealized": pnl_u,
             "pnl_realized": pnl_r,
-            "strategy": p.get("strategy_id", "manual"),
+            "strategy": p.get("strategy_id", p.get("strategy", "manual")),
             "product_type": p.get("product_type", "NRML"),
-        })
+        }
+
+    parsed = []
+    seen_symbols: set[str] = set()
+
+    # Source 1: PaperBroker positions (if session active)
+    if _paper_trading_manager.is_active:
+        try:
+            raw_positions = await _paper_trading_manager.get_positions()
+            for p in raw_positions:
+                pos = _parse_position(p)
+                parsed.append(pos)
+                seen_symbols.add(pos["symbol"])
+        except RuntimeError:
+            pass
+
+    # Source 2: Deployed strategies positions (always available, SQLite-persisted)
+    for sid, strat in _deployed_strategies.items():
+        if strat.get("status") not in ("RUNNING", "ENTERED"):
+            continue
+        if not strat.get("entered"):
+            continue
+        for p in strat.get("positions", []):
+            sym = p.get("symbol", "")
+            if sym in seen_symbols:
+                continue
+            seen_symbols.add(sym)
+            parsed.append(_parse_position(p))
 
     return {"positions": parsed, "count": len(parsed)}
 
@@ -7844,10 +8020,8 @@ async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str,
 
     if _live_feed is not None:
         try:
-            if hasattr(_live_feed, 'stop_websocket_stream'):
-                _live_feed.stop_websocket_stream()
-            if hasattr(_live_feed, 'stop_background_refresh'):
-                await _live_feed.stop_background_refresh()
+            _live_feed.stop_websocket_stream()
+            await _live_feed.stop_background_refresh()
         except Exception as e:
             logger.warning(f"Error stopping old feed: {e}")
 

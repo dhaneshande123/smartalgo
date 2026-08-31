@@ -219,31 +219,43 @@ class DashboardStrategyExecutor:
     async def _maybe_reconnect_fyers(self) -> None:
         """Retry a dropped Fyers connection automatically.
 
-        Two failure modes are handled:
-        1. The REST session itself is down (``is_connected`` False) — do a
-           full reconnect using the stored access token (same path as the
-           Settings page "Reconnect" button).
-        2. The REST session is fine but the WebSocket died silently (the
-           Fyers SDK's own ``reconnect=True`` didn't recover it) — just
-           restart the WS stream, which is far cheaper than a full reconnect.
+        Three failure modes are handled:
+        1. REST session down (``is_connected`` False) — full reconnect.
+        2. WS flag shows disconnected — restart just the WS stream.
+        3. Stale ticks — WS flag may lie (SDK singleton bug); if no tick
+           for 60s during market hours, force a WS restart.
         """
         now = datetime.now(IST)
+        in_market_hours = MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
         if self._live_feed and self._live_feed.is_connected:
-            self._fyers_reconnect_failures = 0
-            if getattr(self._live_feed, "ws_connected", True):
-                return
-            if (self._last_fyers_ws_restart_at
-                    and (now - self._last_fyers_ws_restart_at).total_seconds() < FYERS_RECONNECT_INTERVAL):
-                return
-            self._last_fyers_ws_restart_at = now
-            try:
-                self._live_feed.start_websocket_stream()
-                logger.info("Fyers WebSocket restarted (was silently disconnected)")
-            except Exception as e:
-                logger.warning(f"Fyers WebSocket restart failed: {e}")
-            return
+            # Check REST health — if 3+ consecutive REST failures, mark unhealthy
+            if not getattr(self._live_feed, "rest_healthy", True):
+                logger.warning("Fyers REST unhealthy (3+ consecutive failures), forcing full reconnect")
+                self._live_feed._connected = False
+                # Fall through to full reconnect below
+            else:
+                self._fyers_reconnect_failures = 0
+                ws_alive = getattr(self._live_feed, "ws_connected", True)
+                tick_age = getattr(self._live_feed, "last_tick_age_seconds", 0.0)
+                stale = in_market_hours and tick_age > 60
 
+                if ws_alive and not stale:
+                    return
+
+                reason = "stale ticks" if stale else "ws_connected=False"
+                if (self._last_fyers_ws_restart_at
+                        and (now - self._last_fyers_ws_restart_at).total_seconds() < FYERS_RECONNECT_INTERVAL):
+                    return
+                self._last_fyers_ws_restart_at = now
+                try:
+                    self._live_feed.start_websocket_stream()
+                    logger.info(f"Fyers WebSocket restarted ({reason})")
+                except Exception as e:
+                    logger.warning(f"Fyers WebSocket restart failed: {e}")
+                return
+
+        # Full reconnect path
         interval = (
             FYERS_RECONNECT_BACKOFF_INTERVAL
             if self._fyers_reconnect_failures >= FYERS_RECONNECT_BACKOFF_AFTER
@@ -258,7 +270,7 @@ class DashboardStrategyExecutor:
 
         token = os.getenv("FYERS_ACCESS_TOKEN", "") or _api_mod.FYERS_ACCESS_TOKEN
         if not token:
-            return  # nothing to retry with — needs a fresh login via Connect Fyers
+            return
 
         try:
             ok = await _api_mod._reconnect_fyers_feed(
@@ -312,8 +324,15 @@ class DashboardStrategyExecutor:
         except ImportError:
             return
 
+        import time as _time
         for sym in underlyings:
             try:
+                # Reuse the api layer's cache if it's fresh — avoids a duplicate Fyers call
+                cache_key = sym.upper()
+                cached_time = _api_mod._fyers_chain_cache_time.get(cache_key, 0)
+                if (_time.time() - cached_time) < CHAIN_REFRESH_INTERVAL:
+                    continue  # cache is fresh, no need to re-fetch
+
                 chain = await self._live_feed.get_option_chain(sym, strike_count=25)
                 if not (chain and chain.get("chain")):
                     continue
@@ -347,8 +366,9 @@ class DashboardStrategyExecutor:
 
                 chain["chain"] = sorted(by_strike.values(), key=lambda r: r["strike"])
                 _api_mod._fyers_chain_cache[sym] = chain
-                # also stash by symbol:'' key the cache lookup uses
+                _api_mod._fyers_chain_cache_time[sym] = _time.time()
                 _api_mod._fyers_chain_cache[f"{sym}:"] = chain
+                _api_mod._fyers_chain_cache_time[f"{sym}:"] = _time.time()
             except Exception as e:
                 logger.debug(f"Chain refresh for {sym} failed: {e}")
 

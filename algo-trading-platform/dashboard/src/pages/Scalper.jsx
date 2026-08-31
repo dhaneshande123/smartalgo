@@ -311,14 +311,12 @@ export default function Scalper() {
             <Clock className="w-3.5 h-3.5" />
             {isExpiry ? 'EXPIRY DAY' : 'Not Expiry'}
           </span>
-          {sig?.adx != null && (
-            <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
-              sig.adx >= 25 ? 'bg-profit/15 text-profit' : sig.adx >= 20 ? 'bg-yellow-500/15 text-yellow-400' : 'bg-slate-700/40 text-slate-400'
-            }`}>
-              <Gauge className="w-3.5 h-3.5" />
-              ADX {Number(sig.adx).toFixed(0)} {sig.adx >= 25 ? '— Strong Trend' : sig.adx >= 20 ? '— Trending' : '— Weak/Chop'}
-            </span>
-          )}
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
+            (sig?.adx ?? 0) >= 25 ? 'bg-profit/15 text-profit' : (sig?.adx ?? 0) >= 20 ? 'bg-yellow-500/15 text-yellow-400' : 'bg-slate-700/40 text-slate-400'
+          }`}>
+            <Gauge className="w-3.5 h-3.5" />
+            ADX {Number(sig?.adx ?? 0).toFixed(0)} {(sig?.adx ?? 0) >= 25 ? '— Strong Trend' : (sig?.adx ?? 0) >= 20 ? '— Trending' : '— Weak/Chop'}
+          </span>
           <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/15 text-accent">{underlying}</span>
         </div>
       </div>

@@ -20,6 +20,7 @@ import StrategyBuilder from './pages/StrategyBuilder';
 import IVSurface from './pages/IVSurface';
 import AISignals from './pages/AISignals';
 import Scalper from './pages/Scalper';
+import FlyHigh from './pages/FlyHigh';
 import TradeAnalytics from './pages/TradeAnalytics';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
@@ -123,6 +124,7 @@ function AuthenticatedApp() {
               <Route path="/iv-surface" element={<IVSurface />} />
               <Route path="/ai-signals" element={<AISignals />} />
               <Route path="/scalper" element={<Scalper />} />
+              <Route path="/flyhigh" element={<FlyHigh />} />
               <Route path="/trade-analytics" element={<TradeAnalytics />} />
               <Route path="/paper" element={<PaperTrading />} />
               <Route path="/monitoring" element={<Monitoring />} />

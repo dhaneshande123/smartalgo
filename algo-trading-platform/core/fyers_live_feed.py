@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
@@ -78,6 +79,8 @@ class FyersLiveFeed:
         self._refresh_task: asyncio.Task | None = None
         self._ws = None
         self._ws_connected = False
+        self._consecutive_rest_failures = 0
+        self._last_tick_time: float = 0.0
 
     async def connect(self) -> bool:
         """Initialize Fyers API client and verify connectivity."""
@@ -128,6 +131,18 @@ class FyersLiveFeed:
         """
         return self._ws_connected
 
+    @property
+    def last_tick_age_seconds(self) -> float:
+        """Seconds since the last WS tick was received. Inf if no tick yet."""
+        if self._last_tick_time <= 0:
+            return float("inf")
+        return time.monotonic() - self._last_tick_time
+
+    @property
+    def rest_healthy(self) -> bool:
+        """False after 3+ consecutive REST call failures."""
+        return self._consecutive_rest_failures < 3
+
     # ------------------------------------------------------------------
     # Quotes / LTP
     # ------------------------------------------------------------------
@@ -153,6 +168,7 @@ class FyersLiveFeed:
             )
 
             if response and response.get("s") == "ok" and response.get("d"):
+                self._consecutive_rest_failures = 0
                 results = []
                 for item in response["d"]:
                     v = item.get("v", {})
@@ -178,10 +194,12 @@ class FyersLiveFeed:
                     results.append(tick)
                 return results
             else:
+                self._consecutive_rest_failures += 1
                 logger.warning(f"Fyers quotes failed: {response}")
                 return []
 
         except Exception as e:
+            self._consecutive_rest_failures += 1
             logger.error(f"Fyers quotes error: {e}")
             return []
 
@@ -226,78 +244,92 @@ class FyersLiveFeed:
         if not fyers_sym:
             return {}
 
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self._fyers.optionchain(
-                    data={
-                        "symbol": fyers_sym,
-                        "strikecount": strike_count,
-                        "timestamp": expiry_timestamp,
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._fyers.optionchain(
+                        data={
+                            "symbol": fyers_sym,
+                            "strikecount": strike_count,
+                            "timestamp": expiry_timestamp,
+                        }
+                    ),
+                )
+
+                if response and response.get("code") == 429:
+                    wait = (attempt + 1) * 2
+                    logger.warning(f"Fyers option chain rate limited (429), retry in {wait}s (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                    continue
+
+                if response and response.get("code") == 200 and response.get("data"):
+                    self._consecutive_rest_failures = 0
+                    raw_chain = response["data"].get("optionsChain", [])
+                    expiry_data = response["data"].get("expiryData", [])
+                    vix_data = response["data"].get("indiavixData", {})
+
+                    step = STRIKE_STEPS.get(symbol.upper(), 50)
+                    from core.symbol_master import get_lot_size
+                    lot = get_lot_size(symbol)
+
+                    spot = 0
+                    contracts = []
+                    for opt in raw_chain:
+                        strike = opt.get("strike_price", 0)
+                        if strike == -1:
+                            spot = float(opt.get("ltp", 0))
+                            continue
+
+                        opt_type = opt.get("option_type", "")
+                        contracts.append({
+                            "strike": strike,
+                            "option_type": opt_type,
+                            "fyers_symbol": opt.get("symbol", ""),
+                            "ltp": float(opt.get("ltp", 0)),
+                            "bid": float(opt.get("bid", 0)),
+                            "ask": float(opt.get("ask", 0)),
+                            "volume": int(opt.get("volume", 0)),
+                            "oi": int(opt.get("oi", 0)),
+                            "prev_oi": int(opt.get("prev_oi", 0)),
+                            "oi_change": int(opt.get("oich", 0)),
+                            "oi_change_pct": float(opt.get("oichp", 0)),
+                            "change": float(opt.get("ltpch", 0)),
+                            "change_pct": float(opt.get("ltpchp", 0)),
+                        })
+
+                    atm_strike = round(spot / step) * step if spot else 0
+
+                    return {
+                        "symbol": symbol.upper(),
+                        "fyers_symbol": fyers_sym,
+                        "spot_price": spot,
+                        "atm_strike": atm_strike,
+                        "lot_size": lot,
+                        "expiry_data": expiry_data,
+                        "total_call_oi": response["data"].get("callOi", 0),
+                        "total_put_oi": response["data"].get("putOi", 0),
+                        "india_vix": float(vix_data.get("ltp", 0)),
+                        "chain": contracts,
+                        "source": "fyers_live",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
-                ),
-            )
+                else:
+                    self._consecutive_rest_failures += 1
+                    logger.warning(f"Fyers option chain failed: {response}")
+                    return {}
 
-            if response and response.get("code") == 200 and response.get("data"):
-                raw_chain = response["data"].get("optionsChain", [])
-                expiry_data = response["data"].get("expiryData", [])
-                vix_data = response["data"].get("indiavixData", {})
-
-                step = STRIKE_STEPS.get(symbol.upper(), 50)
-                from core.symbol_master import get_lot_size
-                lot = get_lot_size(symbol)
-
-                # First entry (strike_price=-1) is the underlying spot
-                spot = 0
-                contracts = []
-                for opt in raw_chain:
-                    strike = opt.get("strike_price", 0)
-                    if strike == -1:
-                        # This is the spot/underlying entry
-                        spot = float(opt.get("ltp", 0))
-                        continue
-
-                    opt_type = opt.get("option_type", "")
-                    contracts.append({
-                        "strike": strike,
-                        "option_type": opt_type,
-                        "fyers_symbol": opt.get("symbol", ""),
-                        "ltp": float(opt.get("ltp", 0)),
-                        "bid": float(opt.get("bid", 0)),
-                        "ask": float(opt.get("ask", 0)),
-                        "volume": int(opt.get("volume", 0)),
-                        "oi": int(opt.get("oi", 0)),
-                        "prev_oi": int(opt.get("prev_oi", 0)),
-                        "oi_change": int(opt.get("oich", 0)),
-                        "oi_change_pct": float(opt.get("oichp", 0)),
-                        "change": float(opt.get("ltpch", 0)),
-                        "change_pct": float(opt.get("ltpchp", 0)),
-                    })
-
-                atm_strike = round(spot / step) * step if spot else 0
-
-                return {
-                    "symbol": symbol.upper(),
-                    "fyers_symbol": fyers_sym,
-                    "spot_price": spot,
-                    "atm_strike": atm_strike,
-                    "lot_size": lot,
-                    "expiry_data": expiry_data,
-                    "total_call_oi": response["data"].get("callOi", 0),
-                    "total_put_oi": response["data"].get("putOi", 0),
-                    "india_vix": float(vix_data.get("ltp", 0)),
-                    "chain": contracts,
-                    "source": "fyers_live",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            else:
-                logger.warning(f"Fyers option chain failed: {response}")
+            except Exception as e:
+                self._consecutive_rest_failures += 1
+                logger.error(f"Fyers option chain error: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
                 return {}
 
-        except Exception as e:
-            logger.error(f"Fyers option chain error: {e}")
-            return {}
+        return {}
 
     # ------------------------------------------------------------------
     # Historical / Candle Data
@@ -594,16 +626,32 @@ class FyersLiveFeed:
     # WebSocket Streaming
     # ------------------------------------------------------------------
 
+    def stop_websocket_stream(self) -> None:
+        """Stop WebSocket stream and clear SDK singleton for clean reconnect."""
+        if self._ws:
+            try:
+                self._ws.close_connection()
+            except Exception:
+                pass
+            self._ws = None
+        self._ws_connected = False
+        try:
+            from fyers_apiv3.FyersWebsocket import data_ws
+            data_ws.FyersDataSocket._instance = None
+        except Exception:
+            pass
+
     def start_websocket_stream(
         self,
         symbols: list[str] | None = None,
         on_tick: Callable[[dict], None] | None = None,
     ) -> None:
         """Start WebSocket streaming for live ticks (runs in background thread)."""
-        import threading
-
         if symbols is None:
             symbols = list(INDEX_SYMBOLS.values())
+
+        # Clean up old WS and clear SDK singleton to force a fresh instance
+        self.stop_websocket_stream()
 
         ws_access_token = f"{self.app_id}:{self.access_token}"
 
@@ -628,6 +676,7 @@ class FyersLiveFeed:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 self._last_ticks[internal] = tick
+                self._last_tick_time = time.monotonic()
                 if on_tick:
                     on_tick(tick)
 
@@ -637,6 +686,7 @@ class FyersLiveFeed:
             self._ws.subscribe(symbols=symbols, data_type="SymbolUpdate")
             self._ws.keep_running()
             self._ws_connected = True
+            self._last_tick_time = time.monotonic()
 
         def _on_error(msg):
             logger.error(f"Fyers WS error: {msg}")
@@ -653,7 +703,7 @@ class FyersLiveFeed:
                 log_path="",
                 litemode=False,
                 write_to_file=False,
-                reconnect=True,
+                reconnect=False,
                 on_connect=_on_open,
                 on_close=_on_close,
                 on_error=_on_error,
@@ -674,12 +724,6 @@ class FyersLiveFeed:
     async def disconnect(self) -> None:
         """Disconnect from Fyers API."""
         await self.stop_background_refresh()
-        if self._ws:
-            try:
-                self._ws.close_connection()
-            except Exception:
-                pass
-            self._ws = None
+        self.stop_websocket_stream()
         self._connected = False
-        self._ws_connected = False
         logger.info("Fyers feed disconnected")
