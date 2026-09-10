@@ -1937,6 +1937,9 @@ _mock = MockDataGenerator(seed=42)
 _fyers_chain_cache: dict[str, dict] = {}
 _fyers_chain_cache_time: dict[str, float] = {}  # symbol -> timestamp of last fetch
 _CHAIN_CACHE_TTL = 3.0  # seconds — option chain is the rate-limited Fyers call; 3s keeps us under ~200/min (do NOT lower)
+# Last-good candle cache — smooths over transient empty fetches so VWAP/ADX
+# don't flicker to "—" on the odd poll that gets a cache miss or timeout.
+_last_good_candles: dict[str, dict[str, list]] = {}  # symbol -> {"D1": [...], "M5": [...]}
 _fyers_indices_cache: dict | None = None
 _fyers_indices_cache_time: float = 0  # timestamp of last indices fetch
 _INDICES_CACHE_TTL = 2.0  # seconds — index tickers (shares Fyers budget with chain)
@@ -2513,14 +2516,29 @@ async def _scalper_fetch_market(symbol: str) -> tuple[dict, list, list]:
     if _live_feed:
         try:
             daily_candles = await asyncio.wait_for(
-                _live_feed.get_candles(symbol, "D1", count=5), timeout=3.0) or []
-        except Exception:
-            pass
+                _live_feed.get_candles(symbol, "D1", count=5), timeout=8.0) or []
+        except Exception as e:
+            logger.warning("Scalper daily candle fetch failed for %s: %s", symbol, e)
         try:
             intraday_candles = await asyncio.wait_for(
-                _live_feed.get_candles(symbol, "M5", count=75), timeout=3.0) or []
-        except Exception:
-            pass
+                _live_feed.get_candles(symbol, "M5", count=75), timeout=8.0) or []
+        except Exception as e:
+            logger.warning("Scalper intraday candle fetch failed for %s: %s", symbol, e)
+    else:
+        logger.warning("Scalper candle fetch skipped — _live_feed is None")
+
+    # Last-good fallback: a single poll that gets an empty/short fetch shouldn't
+    # collapse VWAP/ADX to zero in the UI. Serve the previous good series instead
+    # (seconds old — negligible for a 5-min strategy), and refresh it on success.
+    good = _last_good_candles.setdefault(symbol, {"D1": [], "M5": []})
+    if len(daily_candles) >= 2:
+        good["D1"] = daily_candles
+    elif good["D1"]:
+        daily_candles = good["D1"]
+    if len(intraday_candles) >= 15:
+        good["M5"] = intraday_candles
+    elif good["M5"]:
+        intraday_candles = good["M5"]
     return chain_data, daily_candles, intraday_candles
 
 
@@ -2980,15 +2998,32 @@ async def flyhigh_performance():
     n = len(closed)
     recent.sort(key=lambda r: r.get("exited_at", ""), reverse=True)
 
+    # Live (unrealized) P&L of currently RUNNING Fly-High trades
+    open_pnl = 0.0
+    open_positions = []
+    for s in running:
+        pnl = float(s.get("unrealized_pnl", s.get("pnl", 0)) or 0)
+        open_pnl += pnl
+        open_positions.append({
+            "name": s.get("name", ""),
+            "pnl": round(pnl, 2),
+            "underlying": s.get("underlying", ""),
+            "entered_at": s.get("entered_at", ""),
+        })
+
     return {
         "closed_count": n,
         "running_count": len(running),
         "wins": wins, "losses": losses,
         "win_rate": round(wins / n, 4) if n else 0.0,
         "total_pnl": round(total_pnl, 2),
+        "open_pnl": round(open_pnl, 2),
+        "net_pnl": round(total_pnl + open_pnl, 2),
         "avg_r": round(sum(r_multiples) / len(r_multiples), 3) if r_multiples else 0.0,
         "avg_hold_minutes": round(sum(durations) / len(durations), 1) if durations else 0.0,
         "recent": recent[:10],
+        "open_positions": open_positions,
+        "auto_deploy": bool(cfg.get("auto_deploy")),
     }
 
 
@@ -7798,6 +7833,65 @@ async def run_scalper_auto_cycle() -> dict:
                 logger.info(f"Scalper auto-deployed {sym} {sig.action} {sig.strike}{sig.option_type} ({sig.reason})")
         except Exception as e:
             logger.warning(f"Scalper auto cycle failed for {sym}: {e}")
+    return {"enabled": True, "deployed": len(deployed), "trades": deployed}
+
+
+async def run_flyhigh_auto_cycle() -> dict:
+    """Hands-free Fly-High: when the VWAP config ``auto_deploy`` is on, deploy a
+    Fly-High trade the moment a valid crossover signal forms. Called by the
+    background executor.
+
+    Guards: one RUNNING Fly-High trade per underlying (no stacking), respects
+    max_trades_per_day, and the kill-switch check inside deploy_strategy. Uses
+    the STRICT signal (all gates apply — ADX, entry window, crossover), so it
+    stays quiet in chop and outside the entry window.
+    """
+    from core import vwap_engine as ve
+    cfg = ve.get_config()
+    if not cfg.get("auto_deploy"):
+        return {"enabled": False, "deployed": 0}
+
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+
+    deployed = []
+    for sym in (cfg.get("auto_symbols") or ["NIFTY"]):
+        sym = str(sym).upper()
+        # Daily trade cap (per underlying, matches the signal endpoint's count)
+        trades_today = sum(
+            1 for s in _deployed_strategies.values()
+            if (s.get("risk_params") or {}).get("strategy_type") == "flyhigh_vwap"
+            and str(s.get("underlying", "")).upper() == sym
+            and s.get("deployed_at", "")[:10] == datetime.now(IST).strftime("%Y-%m-%d")
+        )
+        if trades_today >= int(cfg.get("max_trades_per_day", 2)):
+            continue
+        # Dedup: skip if a Fly-High trade on this underlying is already RUNNING
+        if any((s.get("risk_params") or {}).get("strategy_type") == "flyhigh_vwap"
+               and s.get("status") == "RUNNING"
+               and str(s.get("underlying", "")).upper() == sym
+               for s in _deployed_strategies.values()):
+            continue
+        try:
+            chain_data, _daily, intra = await _scalper_fetch_market(sym)
+            if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+                continue
+            spot = float(chain_data.get("spot_price", 0) or 0)
+            sig = ve.generate_signal(
+                symbol=sym, spot=spot, intraday_candles=intra, chain=chain_data,
+                strike_step=STRIKE_STEPS.get(sym, 50),
+                lot_size=symbol_master.get_lot_size(sym) or 1,
+                cfg=cfg, trades_today=trades_today,
+            )
+            if sig.has_signal and sig.deploy_payload.get("legs"):
+                res = await deploy_strategy(sig.deploy_payload)
+                if res.get("ok") is False:
+                    break  # kill switch active — stop the cycle
+                deployed.append({"underlying": sym, "strategy_id": res.get("strategy_id"),
+                                 "action": sig.action, "strike": sig.strike})
+                logger.info(f"Fly-High auto-deployed {sym} {sig.action} {sig.strike}{sig.option_type} ({sig.reason})")
+        except Exception as e:
+            logger.warning(f"Fly-High auto cycle failed for {sym}: {e}")
     return {"enabled": True, "deployed": len(deployed), "trades": deployed}
 
 

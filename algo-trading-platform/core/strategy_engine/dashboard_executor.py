@@ -64,6 +64,7 @@ EQUITY_SNAPSHOT_INTERVAL = 60.0  # seconds between equity snapshots (1 per minut
 RISK_CHECK_EVERY_N_TICKS = 1     # check risk every tick (5s)
 AUTO_DEPLOY_INTERVAL = 60.0      # seconds between AI auto-deploy cycles (when enabled)
 SCALPER_AUTO_INTERVAL = 25.0     # seconds between hands-free scalper auto-deploy cycles (when enabled)
+FLYHIGH_AUTO_INTERVAL = 25.0     # seconds between hands-free Fly-High auto-deploy cycles (when enabled)
 CHAIN_REFRESH_INTERVAL = 3.0     # min seconds between executor option-chain fetches (Fyers rate limit)
 
 # Fyers connection self-heal: retry a dropped feed without waiting for a
@@ -108,6 +109,7 @@ class DashboardStrategyExecutor:
         self._last_equity_snapshot_at: datetime | None = None
         self._last_auto_deploy_at: datetime | None = None
         self._last_scalper_auto_at: datetime | None = None
+        self._last_flyhigh_auto_at: datetime | None = None
         self._last_chain_refresh_at: datetime | None = None
         self._last_breach_alert_at: dict[str, datetime] = {}  # debounce per-limit
         self._auto_kill_armed = True   # set False to disable auto-kill (manual mode)
@@ -215,6 +217,12 @@ class DashboardStrategyExecutor:
             await self._maybe_scalper_auto()
         except Exception as e:
             logger.debug(f"Scalper auto cycle skipped: {e}")
+
+        # 7. Hands-free Fly-High auto-deploy (every ~25s, only if enabled)
+        try:
+            await self._maybe_flyhigh_auto()
+        except Exception as e:
+            logger.debug(f"Fly-High auto cycle skipped: {e}")
 
     async def _maybe_reconnect_fyers(self) -> None:
         """Retry a dropped Fyers connection automatically.
@@ -1070,6 +1078,27 @@ class DashboardStrategyExecutor:
             await api_mod.run_scalper_auto_cycle()
         except Exception as e:
             logger.debug(f"Scalper auto cycle error: {e}")
+
+    async def _maybe_flyhigh_auto(self) -> None:
+        """Run a hands-free Fly-High auto-deploy cycle every FLYHIGH_AUTO_INTERVAL
+        seconds when enabled. Only during market hours; the cycle is a no-op when
+        the VWAP config's auto_deploy is off, and the signal's own gates (entry
+        window, ADX, crossover, daily cap) still apply."""
+        now = datetime.now(IST)
+        if not (MARKET_OPEN <= now.time() < SQUARE_OFF_TIME):
+            return
+        if self._last_flyhigh_auto_at:
+            if (now - self._last_flyhigh_auto_at).total_seconds() < FLYHIGH_AUTO_INTERVAL:
+                return
+        try:
+            from core import api as api_mod
+            from core import vwap_engine as ve
+            if not ve.get_config().get("auto_deploy"):
+                return
+            self._last_flyhigh_auto_at = now
+            await api_mod.run_flyhigh_auto_cycle()
+        except Exception as e:
+            logger.debug(f"Fly-High auto cycle error: {e}")
 
     async def _maybe_snapshot_equity(self) -> None:
         """Persist an equity snapshot once every EQUITY_SNAPSHOT_INTERVAL seconds."""

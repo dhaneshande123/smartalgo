@@ -70,6 +70,49 @@ stop if VWAP recross, premium floor -40% backstop.
 
 **Wired into**: App.jsx route, Sidebar (Rocket icon after Scalper), client.js, useApi.js hooks
 
+### Live-data hardening + Fly-High auto-deploy (September 10, 2026)
+
+Triggered by a live session where the header showed "Connected" but Scalper/Fly-High showed
+"insufficient data", VWAP/ADX flickered, and no trades could form.
+
+**Root cause — expired token, misleading UI**: The Fyers access token had expired, so
+`_live_feed.is_connected` was False and everything silently fell back to **mock data**. The header
+badge read `!isError && health` (just "is the API server up?"), NOT the actual feed state — so it
+showed green "Connected" over mock data. Fixed: header now reads `health.components.market_data_feed`
+and shows three honest states — green **"Live Data"** (`fyers_live`), amber **"Mock Data"** (feed
+down, simulated), red **"Disconnected"** (API down). This is the key UX fix so a dead feed is obvious.
+
+**Silent candle-fetch failures**: `_scalper_fetch_market` wrapped `get_candles` in a 3s
+`asyncio.wait_for` with `except Exception: pass` — but the 429 retry inside `get_candles` sleeps
+2s/4s/6s, so any rate-limited candle fetch was killed by the 3s timeout before a retry could
+complete, and swallowed with zero logging. Fixed: timeout 3s → 8s, real `logger.warning` on every
+failure path, candle failures now increment `_consecutive_rest_failures` (feeds the watchdog),
+429 retry cadence tightened to 1.5s/3s/4s, and guard checks in `get_candles` now log why they bail.
+
+**VWAP/ADX flickering**: ~1 in 6 signal polls got an empty candle fetch → `vwap=0, adx=0` → UI
+reset to "—". Fixed with a **last-good candle cache** (`_last_good_candles` in api.py): when a poll
+gets an empty/short series, serve the previous good one (seconds old, fine for a 5-min strategy).
+Stabilizes both Fly-High and Scalper.
+
+**Fly-High auto-deploy**: New `run_flyhigh_auto_cycle()` (api.py) mirroring `run_scalper_auto_cycle`,
+driven by `DashboardExecutor._maybe_flyhigh_auto` every ~25s during market hours (`FLYHIGH_AUTO_INTERVAL`).
+Reads `vwap_engine` config `auto_deploy`/`auto_symbols`. Guards: one RUNNING Fly-High per underlying,
+max_trades_per_day cap, kill-switch aware, all signal gates still apply (force=False). Toggle on the
+Fly-High page header (Zap pill) + active banner. Default OFF — paper-validate first. Note: the manual
+Deploy button is correctly disabled when there's no valid signal; auto-deploy is the hands-free path.
+
+**Fly-High P&L display**: `/api/flyhigh/performance` now returns `open_pnl` (live, from RUNNING
+trades), `net_pnl` (open + closed), and `open_positions[]`. New live P&L strip on the Fly-High page
+shows net / open / realized P&L plus each running position.
+
+**Files modified**:
+- `core/api.py` — `_last_good_candles` cache, candle timeout 3→8s + logging, `run_flyhigh_auto_cycle`,
+  performance `open_pnl`/`net_pnl`/`open_positions`/`auto_deploy`
+- `core/fyers_live_feed.py` — candle-fetch logging, REST-failure tracking on candles, faster 429 retry
+- `core/strategy_engine/dashboard_executor.py` — `_maybe_flyhigh_auto` + `FLYHIGH_AUTO_INTERVAL`
+- `dashboard/src/components/Layout/Header.jsx` — honest 3-state feed badge (Live/Mock/Disconnected)
+- `dashboard/src/pages/FlyHigh.jsx` — auto-deploy toggle + banner, live P&L strip
+
 ## Previous Session (July 2026) — Multi-profile scalper + Fyers reliability
 
 ### Multi-Profile Scalper (July 6, 2026)

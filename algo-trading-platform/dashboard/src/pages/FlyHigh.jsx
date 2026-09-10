@@ -62,6 +62,20 @@ export default function FlyHigh() {
           <span className="text-xs text-slate-400 bg-slate-800/50 px-2 py-0.5 rounded-full">VWAP Crossover</span>
         </div>
         <div className="flex items-center gap-2 ml-auto flex-wrap">
+          {/* Auto-deploy toggle — hands-free deploy when a signal forms */}
+          <button
+            onClick={handleToggleAuto}
+            disabled={configMut.isPending}
+            title={cfg?.auto_deploy
+              ? 'Auto-deploy ON — Fly-High deploys automatically when a valid crossover forms (paper). Click to disable.'
+              : 'Auto-deploy OFF — signals are shown but you deploy manually. Click to enable hands-free deploy.'}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+              cfg?.auto_deploy ? 'bg-profit/20 text-profit ring-1 ring-profit/40' : 'bg-slate-700/40 text-slate-400'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            {cfg?.auto_deploy ? `AUTO-DEPLOY ON (${underlying})` : 'Auto-Deploy OFF'}
+          </button>
           <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
             adx >= 25 ? 'bg-profit/15 text-profit' : adx >= 20 ? 'bg-yellow-500/15 text-yellow-400' : 'bg-slate-700/40 text-slate-400'
           }`}>
@@ -76,6 +90,59 @@ export default function FlyHigh() {
           <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/15 text-accent">{underlying}</span>
         </div>
       </div>
+
+      {/* ── Auto-deploy active banner ── */}
+      {cfg?.auto_deploy && (
+        <div className="glass-card !rounded-xl !p-3 flex items-start gap-2 bg-profit/5 border border-profit/20">
+          <Zap className="w-4 h-4 text-profit flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-slate-300">
+            <span className="font-bold text-profit">Hands-free auto-deploy is ON</span> for {underlying}. Fly-High
+            will deploy automatically when a valid VWAP crossover forms — within {cfg?.entry_start ?? '09:20'}–{cfg?.entry_cutoff ?? '14:30'},
+            max {maxTrades} trades/day, one position per underlying. Paper mode.
+          </div>
+        </div>
+      )}
+
+      {/* ── Live P&L strip ── */}
+      {(perf?.running_count > 0 || perf?.closed_count > 0) && (
+        <div className="glass-card !rounded-2xl !p-4">
+          <div className="flex flex-wrap items-center gap-6">
+            <div>
+              <div className="text-xs text-slate-400 mb-0.5">Net P&L (open + closed)</div>
+              <div className={`text-2xl font-bold font-mono ${(perf?.net_pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                {(perf?.net_pnl ?? 0) >= 0 ? '+' : ''}₹{(perf?.net_pnl ?? 0).toLocaleString('en-IN')}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-400 mb-0.5">Open P&L ({perf?.running_count ?? 0} running)</div>
+              <div className={`text-lg font-bold font-mono ${(perf?.open_pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                {(perf?.open_pnl ?? 0) >= 0 ? '+' : ''}₹{(perf?.open_pnl ?? 0).toLocaleString('en-IN')}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-400 mb-0.5">Realized P&L ({perf?.closed_count ?? 0} closed)</div>
+              <div className={`text-lg font-bold font-mono ${(perf?.total_pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                {(perf?.total_pnl ?? 0) >= 0 ? '+' : ''}₹{(perf?.total_pnl ?? 0).toLocaleString('en-IN')}
+              </div>
+            </div>
+            {perf?.open_positions?.length > 0 && (
+              <div className="flex-1 min-w-[200px]">
+                <div className="text-xs text-slate-400 mb-1">Running positions</div>
+                <div className="space-y-1">
+                  {perf.open_positions.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs bg-slate-800/30 rounded-lg px-2.5 py-1">
+                      <span className="text-slate-300 truncate max-w-[160px]">{p.name}</span>
+                      <span className={`font-mono ${p.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        {p.pnl >= 0 ? '+' : ''}₹{p.pnl.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── VWAP Status Bar ── */}
       <div className="glass-card !rounded-2xl !p-4">

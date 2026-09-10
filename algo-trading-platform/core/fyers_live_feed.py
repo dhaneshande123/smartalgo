@@ -391,10 +391,13 @@ class FyersLiveFeed:
 
         # ── 2. Fetch from Fyers (with retry on 429) ────────────────
         if not self._connected or not self._fyers:
+            logger.warning("Candle fetch skipped — REST not connected (connected=%s, fyers=%s)",
+                           self._connected, bool(self._fyers))
             return []
 
         fyers_sym = INDEX_SYMBOLS.get(symbol.upper())
         if not fyers_sym:
+            logger.warning("Candle fetch skipped — symbol %s not in INDEX_SYMBOLS", symbol)
             return []
 
         now = datetime.now()
@@ -428,12 +431,13 @@ class FyersLiveFeed:
 
                 # Rate limited — wait and retry
                 if response and response.get("code") == 429:
-                    wait = (attempt + 1) * 2  # 2s, 4s, 6s
-                    logger.warning(f"Fyers rate limited (429), retry in {wait}s (attempt {attempt+1}/{max_retries})")
+                    wait = min((attempt + 1) * 1.5, 4)  # 1.5s, 3s, 4s
+                    logger.warning(f"Fyers candle 429 for {symbol}/{resolution}, retry in {wait}s (attempt {attempt+1}/{max_retries})")
                     await asyncio.sleep(wait)
                     continue
 
                 if response and response.get("s") == "ok" and response.get("candles"):
+                    self._consecutive_rest_failures = 0
                     raw = response["candles"]
                     raw = raw[-count:] if len(raw) > count else raw
 
@@ -476,10 +480,12 @@ class FyersLiveFeed:
                     return candles
                 else:
                     msg = response.get("message", "") if response else "no response"
+                    self._consecutive_rest_failures += 1
                     logger.warning(f"Fyers candles failed: code={response.get('code', '?')}, msg={msg}")
                     return []
 
             except Exception as e:
+                self._consecutive_rest_failures += 1
                 logger.error(f"Fyers candles error (attempt {attempt+1}): {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2)

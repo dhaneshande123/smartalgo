@@ -39,7 +39,13 @@ export default function Header({ onMobileMenuToggle }) {
   }
   const hours = istTime.getHours();
   const isMarketOpen = hours >= 9 && hours < 16 && istTime.getDay() > 0 && istTime.getDay() < 6;
-  const connected = !isError && health;
+  const apiUp = !isError && health;
+  const feedState = health?.components?.market_data_feed;
+  const liveFeed = feedState === 'fyers_live';
+  // Three states: live Fyers feed (green), API up but mock/no feed (amber), API down (red)
+  const connState = !apiUp ? 'down' : liveFeed ? 'live' : 'mock';
+  const connLabel = connState === 'live' ? 'Live Data' : connState === 'mock' ? 'Mock Data' : 'Disconnected';
+  const connected = liveFeed;
 
   return (
     <header
@@ -108,11 +114,24 @@ export default function Header({ onMobileMenuToggle }) {
           <span className="font-mono">{safeFormatTime(istTime)} IST</span>
         </div>
 
-        <div className={`flex items-center gap-1 md:gap-1.5 text-[10px] md:text-xs font-medium px-2 md:px-2.5 py-1 rounded-full ${
-          connected ? 'bg-profit/10 text-profit' : 'bg-loss/10 text-loss'
-        }`}>
-          {connected ? <Wifi className="w-3 md:w-3.5 h-3 md:h-3.5" /> : <WifiOff className="w-3 md:w-3.5 h-3 md:h-3.5" />}
-          <span className="hidden sm:inline">{connected ? 'Connected' : 'Disconnected'}</span>
+        <div
+          className={`flex items-center gap-1 md:gap-1.5 text-[10px] md:text-xs font-medium px-2 md:px-2.5 py-1 rounded-full ${
+            connState === 'live'
+              ? 'bg-profit/10 text-profit'
+              : connState === 'mock'
+              ? 'bg-amber-500/10 text-amber-500'
+              : 'bg-loss/10 text-loss'
+          }`}
+          title={
+            connState === 'live'
+              ? 'Fyers live feed connected — real market data'
+              : connState === 'mock'
+              ? 'Fyers feed NOT connected — showing simulated data. Reconnect in Settings → API Keys.'
+              : 'Backend unreachable'
+          }
+        >
+          {connState === 'live' ? <Wifi className="w-3 md:w-3.5 h-3 md:h-3.5" /> : <WifiOff className="w-3 md:w-3.5 h-3 md:h-3.5" />}
+          <span className="hidden sm:inline">{connLabel}</span>
         </div>
 
         {/* Notification Center */}
