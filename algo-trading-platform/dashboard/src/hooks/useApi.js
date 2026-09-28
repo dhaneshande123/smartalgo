@@ -7,11 +7,11 @@ export const useMarketStatus = () => useQuery({ queryKey: ['marketStatus'], quer
 export const useOptionChain = (symbol, expiry) =>
   useQuery({ queryKey: ['optionChain', symbol, expiry], queryFn: () => api.getOptionChain(symbol, expiry), refetchInterval: 3000 });
 export const useOISignals = (symbol, expiry) =>
-  useQuery({ queryKey: ['oiSignals', symbol, expiry], queryFn: () => api.getOISignals(symbol, expiry), refetchInterval: 2000 });
+  useQuery({ queryKey: ['oiSignals', symbol, expiry], queryFn: () => api.getOISignals(symbol, expiry), refetchInterval: 5000 });
 
 // Scalper (expiry / daily / momentum option buying)
 export const useScalperSignal = (symbol = 'NIFTY') =>
-  useQuery({ queryKey: ['scalperSignal', symbol], queryFn: () => api.getScalperSignal(symbol), refetchInterval: 2000 });
+  useQuery({ queryKey: ['scalperSignal', symbol], queryFn: () => api.getScalperSignal(symbol), refetchInterval: 5000 });
 export const useScalperConfig = () =>
   useQuery({ queryKey: ['scalperConfig'], queryFn: api.getScalperConfig });
 export const useScalperPerformance = () =>
@@ -65,6 +65,7 @@ export const useDeployFlyHigh = () => {
       qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
       qc.invalidateQueries({ queryKey: ['paperStrategies'] });
       qc.invalidateQueries({ queryKey: ['flyhighPerformance'] });
+      qc.invalidateQueries({ queryKey: ['flyhighSignal'] });
     },
   });
 };
@@ -73,9 +74,9 @@ export const useExpiries = (symbol) =>
   useQuery({ queryKey: ['expiries', symbol], queryFn: () => api.getExpiries(symbol) });
 export const useLotSizes = () =>
   useQuery({ queryKey: ['lotSizes'], queryFn: api.getLotSizes, staleTime: 60_000, refetchInterval: 60_000 });
-export const usePositions = () => useQuery({ queryKey: ['positions'], queryFn: api.getPositions, refetchInterval: 2000 });
+export const usePositions = () => useQuery({ queryKey: ['positions'], queryFn: api.getPositions, refetchInterval: 5000 });
 export const useGreeks = () => useQuery({ queryKey: ['greeks'], queryFn: api.getGreeks, refetchInterval: 5000 });
-export const usePnL = () => useQuery({ queryKey: ['pnl'], queryFn: api.getPnL, refetchInterval: 2000 });
+export const usePnL = () => useQuery({ queryKey: ['pnl'], queryFn: api.getPnL, refetchInterval: 5000 });
 export const useMarginUsage = () => useQuery({ queryKey: ['margin'], queryFn: api.getMarginUsage });
 export const useStrategies = () => useQuery({ queryKey: ['strategies'], queryFn: api.getStrategies });
 export const useRiskMetrics = () => useQuery({ queryKey: ['riskMetrics'], queryFn: api.getRiskMetrics, refetchInterval: 3000 });
@@ -251,7 +252,7 @@ export const useDeployedStrategies = () =>
   useQuery({
     queryKey: ['deployedStrategies'],
     queryFn: api.getDeployedStrategies,
-    refetchInterval: 1000,   // refresh P&L every second
+    refetchInterval: 3000,
   });
 
 export const useDeployedStrategyPnL = (id) =>
@@ -259,7 +260,7 @@ export const useDeployedStrategyPnL = (id) =>
     queryKey: ['deployedStrategyPnL', id],
     queryFn: () => api.getDeployedStrategyPnL(id),
     enabled: !!id,
-    refetchInterval: 1000,
+    refetchInterval: 3000,
   });
 
 export const useStopDeployedStrategy = () => {
@@ -309,7 +310,7 @@ export const useEvaluateConditions = () =>
 export const useFunds = () => useQuery({ queryKey: ['funds'], queryFn: api.getFunds, refetchInterval: 10000 });
 export const useHoldings = () => useQuery({ queryKey: ['holdings'], queryFn: api.getHoldings, refetchInterval: 30000 });
 export const useMarketDepth = (symbol) =>
-  useQuery({ queryKey: ['marketDepth', symbol], queryFn: () => api.getMarketDepth(symbol), enabled: !!symbol, refetchInterval: 2000 });
+  useQuery({ queryKey: ['marketDepth', symbol], queryFn: () => api.getMarketDepth(symbol), enabled: !!symbol, refetchInterval: 5000 });
 
 export const useRunBacktest = () => {
   const qc = useQueryClient();
@@ -372,16 +373,16 @@ export const useSetAutoDeployConfig = () => {
 
 // Paper Trading
 export const usePaperTradingStatus = () =>
-  useQuery({ queryKey: ['paperStatus'], queryFn: api.getPaperTradingStatus, refetchInterval: 2000 });
+  useQuery({ queryKey: ['paperStatus'], queryFn: api.getPaperTradingStatus, refetchInterval: 5000 });
 export const usePaperTradingStats = (enabled = true) =>
-  useQuery({ queryKey: ['paperStats'], queryFn: api.getPaperTradingStats, refetchInterval: 2000, retry: false, enabled });
+  useQuery({ queryKey: ['paperStats'], queryFn: api.getPaperTradingStats, refetchInterval: 5000, retry: false, enabled });
 export const usePaperTradingStrategies = (enabled = true) =>
-  useQuery({ queryKey: ['paperStrategies'], queryFn: api.getPaperTradingStrategies, refetchInterval: 2000, enabled });
+  useQuery({ queryKey: ['paperStrategies'], queryFn: api.getPaperTradingStrategies, refetchInterval: 5000, enabled });
 
 export const usePaperTradingPositions = (enabled = true) =>
-  useQuery({ queryKey: ['paperPositions'], queryFn: api.getPaperTradingPositions, refetchInterval: 2000, retry: 1, enabled });
+  useQuery({ queryKey: ['paperPositions'], queryFn: api.getPaperTradingPositions, refetchInterval: 5000, retry: 1, enabled });
 export const usePaperTradingOrders = (enabled = true) =>
-  useQuery({ queryKey: ['paperOrders'], queryFn: api.getPaperTradingOrders, refetchInterval: 2000, retry: 1, enabled });
+  useQuery({ queryKey: ['paperOrders'], queryFn: api.getPaperTradingOrders, refetchInterval: 5000, retry: 1, enabled });
 
 export const useStartPaperTrading = () => {
   const qc = useQueryClient();

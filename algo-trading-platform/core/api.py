@@ -2153,6 +2153,12 @@ async def root():
 )
 async def health_check():
     elapsed, human = _uptime()
+    rest_fails = getattr(_live_feed, "_consecutive_rest_failures", 0) if _live_feed else 0
+    feed_state = (
+        "fyers_live" if (_live_feed and _live_feed.is_connected and _live_feed.rest_healthy)
+        else "fyers_degraded" if (_live_feed and _live_feed.is_connected)
+        else "mock"
+    )
     return HealthResponse(
         status="ok",
         uptime_seconds=elapsed,
@@ -2162,7 +2168,8 @@ async def health_check():
         components={
             "api_server": "healthy",
             "event_bus": "healthy" if _event_bus and _event_bus._running else "degraded",
-            "market_data_feed": "fyers_live" if (_live_feed and _live_feed.is_connected) else "mock",
+            "market_data_feed": feed_state,
+            "fyers_rest_failures": str(rest_fails),
             "broker_gateway": "disconnected",
             "risk_engine": "healthy",
             "order_manager": "healthy",
@@ -2274,14 +2281,15 @@ async def market_indices():
     # Use cached ticks from the background refresh loop (instant, no API call)
     if _live_feed and _live_feed.is_connected:
         try:
-            # First try cached ticks (updated every 0.5s by background refresh)
+            tick_stale = _live_feed.last_tick_age_seconds > 60
             cached_indices = []
             for name in ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"):
                 tick = _live_feed.get_cached_tick(name)
                 if tick:
                     cached_indices.append(tick)
-            if len(cached_indices) >= 3:  # At least 3 indices cached = usable
-                result = {"indices": cached_indices, "source": "fyers_live"}
+            if len(cached_indices) >= 3:
+                source = "fyers_cached" if tick_stale else "fyers_live"
+                result = {"indices": cached_indices, "source": source}
                 _fyers_indices_cache = result
                 _fyers_indices_cache_time = time.time()
                 return result
@@ -2514,18 +2522,55 @@ async def _scalper_fetch_market(symbol: str) -> tuple[dict, list, list]:
 
     daily_candles, intraday_candles = [], []
     if _live_feed:
+        daily_result, intraday_result = await asyncio.gather(
+            asyncio.wait_for(
+                _live_feed.get_candles(symbol, "D1", count=5), timeout=8.0),
+            asyncio.wait_for(
+                _live_feed.get_candles(symbol, "M5", count=75), timeout=8.0),
+            return_exceptions=True,
+        )
+        if isinstance(daily_result, Exception):
+            logger.warning("Scalper daily candle fetch failed for %s: %s", symbol, daily_result)
+        else:
+            daily_candles = daily_result or []
+        if isinstance(intraday_result, Exception):
+            logger.warning("Scalper intraday candle fetch failed for %s: %s", symbol, intraday_result)
+        else:
+            intraday_candles = intraday_result or []
+
+    # SQLite cache fallback when Fyers is disconnected or returned nothing
+    if not intraday_candles:
         try:
-            daily_candles = await asyncio.wait_for(
-                _live_feed.get_candles(symbol, "D1", count=5), timeout=8.0) or []
-        except Exception as e:
-            logger.warning("Scalper daily candle fetch failed for %s: %s", symbol, e)
+            from core.state_store import get_store
+            store = get_store()
+            cached_m5 = store.get_candles(symbol.upper(), "5", limit=125)
+            if cached_m5 and len(cached_m5) >= 15:
+                newest_ts = max(c["ts"] for c in cached_m5)
+                if (time.time() - newest_ts) < 7200:
+                    from datetime import timezone as _tz
+                    intraday_candles = [
+                        {"timestamp": datetime.fromtimestamp(c["ts"], tz=_tz.utc).isoformat(),
+                         "open": c["open"], "high": c["high"], "low": c["low"],
+                         "close": c["close"], "volume": c["volume"]}
+                        for c in cached_m5[-75:]
+                    ]
+        except Exception:
+            pass
+    if not daily_candles:
         try:
-            intraday_candles = await asyncio.wait_for(
-                _live_feed.get_candles(symbol, "M5", count=75), timeout=8.0) or []
-        except Exception as e:
-            logger.warning("Scalper intraday candle fetch failed for %s: %s", symbol, e)
-    else:
-        logger.warning("Scalper candle fetch skipped — _live_feed is None")
+            from core.state_store import get_store
+            store = get_store()
+            cached_d1 = store.get_candles(symbol.upper(), "D", limit=10)
+            if cached_d1 and len(cached_d1) >= 2:
+                from datetime import timezone as _tz
+                daily_candles = [
+                    {"timestamp": datetime.fromtimestamp(c["ts"], tz=_tz.utc).isoformat(),
+                     "open": c["open"], "high": c["high"], "low": c["low"],
+                     "close": c["close"], "volume": c["volume"]}
+                    for c in cached_d1[-5:]
+                ]
+        except Exception:
+            pass
 
     # Last-good fallback: a single poll that gets an empty/short fetch shouldn't
     # collapse VWAP/ADX to zero in the UI. Serve the previous good series instead
@@ -2882,6 +2927,14 @@ async def flyhigh_signal(symbol: str = "NIFTY"):
         }
 
     spot = float(chain_data.get("spot_price", 0) or 0)
+    if _live_feed:
+        try:
+            tick = _live_feed.get_cached_tick(symbol)
+            live_ltp = float((tick or {}).get("ltp", 0) or 0)
+            if live_ltp > 0 and _live_feed.last_tick_age_seconds < 60:
+                spot = live_ltp
+        except Exception:
+            pass
 
     # Count today's flyhigh trades
     trades_today = sum(
@@ -3963,14 +4016,7 @@ async def list_deployed_strategies(status: str | None = None):
     """
     results = []
     for sid, strat in _deployed_strategies.items():
-        # Refresh per-position LTPs from Fyers cache and recompute leg P&L
         _refresh_strategy_pnl(strat)
-        # Persist updated P&L to SQLite
-        try:
-            from core.state_store import get_store
-            get_store().save_strategy(sid, strat)
-        except Exception:
-            pass
         results.append(strat)
 
     if status:
@@ -7888,8 +7934,8 @@ async def run_flyhigh_auto_cycle() -> dict:
                 if res.get("ok") is False:
                     break  # kill switch active — stop the cycle
                 deployed.append({"underlying": sym, "strategy_id": res.get("strategy_id"),
-                                 "action": sig.action, "strike": sig.strike})
-                logger.info(f"Fly-High auto-deployed {sym} {sig.action} {sig.strike}{sig.option_type} ({sig.reason})")
+                                 "direction": sig.direction, "strike": sig.strike})
+                logger.info(f"Fly-High auto-deployed {sym} {sig.direction} {sig.strike}{sig.option_type} ({sig.reason})")
         except Exception as e:
             logger.warning(f"Fly-High auto cycle failed for {sym}: {e}")
     return {"enabled": True, "deployed": len(deployed), "trades": deployed}
@@ -8130,7 +8176,7 @@ async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str,
         logger.info("Fyers OAuth: live feed reconnected successfully")
         _live_feed = new_feed
         set_live_feed(new_feed)
-        await new_feed.start_background_refresh(interval=0.5)
+        await new_feed.start_background_refresh(interval=3.0)
         new_feed.start_websocket_stream()
         if _paper_trading_manager is not None:
             _paper_trading_manager._live_feed = new_feed

@@ -57,6 +57,15 @@ RESOLUTION_MAP = {
     "H1": "60", "D1": "D",
 }
 
+# Intraday candle refresh throttle — how often we re-fetch fresh candles from
+# Fyers for a live (non-daily) resolution. The SQLite cache alone would serve
+# the same candles for hours (its staleness is measured from the newest candle,
+# which never advances until we re-fetch), freezing VWAP/ADX and the forming
+# candle. 30s picks up the current candle + any new bar at ~2 fetches/min per
+# symbol — negligible against the ~200/min budget.
+_INTRADAY_CANDLE_REFRESH = 30.0
+_last_candle_fetch: dict[str, float] = {}  # "SYMBOL:resolution" -> monotonic time of last fetch attempt
+
 
 class FyersLiveFeed:
     """Real-time market data feed using Fyers API v3."""
@@ -140,8 +149,8 @@ class FyersLiveFeed:
 
     @property
     def rest_healthy(self) -> bool:
-        """False after 3+ consecutive REST call failures."""
-        return self._consecutive_rest_failures < 3
+        """False after 8+ consecutive REST call failures."""
+        return self._consecutive_rest_failures < 8
 
     # ------------------------------------------------------------------
     # Quotes / LTP
@@ -195,12 +204,14 @@ class FyersLiveFeed:
                 return results
             else:
                 self._consecutive_rest_failures += 1
-                logger.warning(f"Fyers quotes failed: {response}")
+                msg = response.get("message", "") if response else "no response"
+                code = response.get("code", "?") if response else "?"
+                logger.warning(f"Fyers quotes failed (attempt {self._consecutive_rest_failures}): code={code}, msg={msg}")
                 return []
 
         except Exception as e:
             self._consecutive_rest_failures += 1
-            logger.error(f"Fyers quotes error: {e}")
+            logger.error(f"Fyers quotes error (attempt {self._consecutive_rest_failures}): {e}")
             return []
 
     async def get_all_indices(self) -> list[dict[str, Any]]:
@@ -360,6 +371,12 @@ class FyersLiveFeed:
             list of candle dicts with timestamp, open, high, low, close, volume.
         """
         resolution = RESOLUTION_MAP.get(timeframe, "D")
+        fetch_key = f"{symbol.upper()}:{resolution}"
+        is_intraday = resolution != "D"
+
+        # Cached candles in return format — used both as a fresh-enough result
+        # and as a fallback if a forced refresh fetch fails.
+        cached_fallback: list[dict[str, Any]] = []
 
         # ── 1. Try SQLite cache first (with staleness check) ─────────
         if use_cache:
@@ -370,22 +387,29 @@ class FyersLiveFeed:
                 if cached and len(cached) >= min(count, 3):
                     newest_ts = max(c["ts"] for c in cached)
                     age_seconds = datetime.now(timezone.utc).timestamp() - newest_ts
-                    max_age = 7200 if resolution != "D" else 172800  # 2h intraday, 2d daily
-                    if age_seconds <= max_age:
-                        result = cached[-count:] if len(cached) > count else cached
-                        return [
-                            {
-                                "timestamp": datetime.fromtimestamp(c["ts"], tz=timezone.utc).isoformat(),
-                                "open": c["open"],
-                                "high": c["high"],
-                                "low": c["low"],
-                                "close": c["close"],
-                                "volume": c["volume"],
-                            }
-                            for c in result
-                        ]
+                    max_age = 7200 if is_intraday else 172800  # 2h intraday, 2d daily
+                    result = cached[-count:] if len(cached) > count else cached
+                    cached_fallback = [
+                        {
+                            "timestamp": datetime.fromtimestamp(c["ts"], tz=timezone.utc).isoformat(),
+                            "open": c["open"],
+                            "high": c["high"],
+                            "low": c["low"],
+                            "close": c["close"],
+                            "volume": c["volume"],
+                        }
+                        for c in result
+                    ]
+                    # Intraday: also force a periodic refresh so the forming candle
+                    # (and VWAP/ADX derived from it) keeps moving. The newest-candle
+                    # age never crosses max_age during a session, so without this the
+                    # cache would serve frozen candles for hours.
+                    last_fetch = _last_candle_fetch.get(fetch_key, 0.0)
+                    refresh_due = is_intraday and (time.monotonic() - last_fetch) >= _INTRADAY_CANDLE_REFRESH
+                    if age_seconds <= max_age and not refresh_due:
+                        return cached_fallback
                     else:
-                        logger.debug(f"Candle cache stale for {symbol}/{resolution} (age={age_seconds:.0f}s), fetching fresh")
+                        logger.debug(f"Candle cache stale/refresh-due for {symbol}/{resolution} (age={age_seconds:.0f}s), fetching fresh")
             except Exception as e:
                 logger.debug(f"Candle cache read failed: {e}")
 
@@ -410,6 +434,10 @@ class FyersLiveFeed:
 
         range_from = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
         range_to = now.strftime("%Y-%m-%d")
+
+        # Throttle attempts (success OR failure) to one per refresh window so a
+        # down/slow API can't be hammered every poll.
+        _last_candle_fetch[fetch_key] = time.monotonic()
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -482,7 +510,7 @@ class FyersLiveFeed:
                     msg = response.get("message", "") if response else "no response"
                     self._consecutive_rest_failures += 1
                     logger.warning(f"Fyers candles failed: code={response.get('code', '?')}, msg={msg}")
-                    return []
+                    return cached_fallback
 
             except Exception as e:
                 self._consecutive_rest_failures += 1
@@ -490,9 +518,9 @@ class FyersLiveFeed:
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2)
                     continue
-                return []
+                return cached_fallback
 
-        return []
+        return cached_fallback
 
     async def fetch_history_range(
         self,

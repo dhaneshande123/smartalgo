@@ -31,7 +31,7 @@ STRIKE_STEPS = {
 DEFAULT_CONFIG = {
     "enabled": True,
     "risk_per_trade": 2000,
-    "adx_min": 20,
+    "adx_min": 0,
     "max_sl_points": 30,
     "max_trades_per_day": 2,
     "entry_start": "09:20",
@@ -339,20 +339,19 @@ def generate_signal(
 
     fyers_sym = _build_fyers_option_symbol(symbol, sig.strike, sig.option_type)
 
+    atm = round(spot / strike_step) * strike_step
     sig.deploy_payload = {
         "name": f"FlyHigh {direction[:4]} {symbol} {sig.strike}{sig.option_type}",
         "strategy_type": "flyhigh_vwap",
         "underlying": symbol,
         "mode": "paper",
+        "lot_size": lot_size,
         "legs": [{
-            "symbol": f"{symbol} {sig.strike} {sig.option_type}",
-            "fyers_symbol": fyers_sym,
-            "strike": sig.strike,
-            "option_type": sig.option_type,
-            "side": "BUY",
+            "type": sig.option_type,
+            "action": "BUY",
             "lots": sig.lots,
-            "qty": sig.qty,
-            "entry_price": sig.premium,
+            "offset": sig.strike - atm,
+            "premium": sig.premium,
         }],
         "risk_params": risk_params,
         "entry_conditions": [],

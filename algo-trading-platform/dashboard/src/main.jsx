@@ -12,10 +12,10 @@ import './styles/pro-theme.css';
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchInterval: 2000,
+      refetchInterval: 5000,
       refetchIntervalInBackground: false,
       retry: 2,
-      staleTime: 1000,
+      staleTime: 2000,
     },
   },
 });

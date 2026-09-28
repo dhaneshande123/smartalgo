@@ -42,10 +42,10 @@ export default function Header({ onMobileMenuToggle }) {
   const apiUp = !isError && health;
   const feedState = health?.components?.market_data_feed;
   const liveFeed = feedState === 'fyers_live';
-  // Three states: live Fyers feed (green), API up but mock/no feed (amber), API down (red)
-  const connState = !apiUp ? 'down' : liveFeed ? 'live' : 'mock';
-  const connLabel = connState === 'live' ? 'Live Data' : connState === 'mock' ? 'Mock Data' : 'Disconnected';
-  const connected = liveFeed;
+  const degraded = feedState === 'fyers_degraded';
+  const connState = !apiUp ? 'down' : liveFeed ? 'live' : degraded ? 'degraded' : 'mock';
+  const connLabel = connState === 'live' ? 'Live Data' : connState === 'degraded' ? 'Degraded' : connState === 'mock' ? 'Mock Data' : 'Disconnected';
+  const connected = liveFeed || degraded;
 
   return (
     <header
@@ -125,6 +125,8 @@ export default function Header({ onMobileMenuToggle }) {
           title={
             connState === 'live'
               ? 'Fyers live feed connected — real market data'
+              : connState === 'degraded'
+              ? 'Fyers connected but REST errors detected — data may be stale. Check Settings.'
               : connState === 'mock'
               ? 'Fyers feed NOT connected — showing simulated data. Reconnect in Settings → API Keys.'
               : 'Backend unreachable'

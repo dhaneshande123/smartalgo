@@ -9,7 +9,63 @@ Live market data via **Fyers API v3** (WebSocket + REST). Paper trading fully fu
 **GitHub**: https://github.com/dhaneshande123/smartalgo.git
 **Branch**: `main`
 
-## Latest Session (August 2026) — Critical fixes + Fly-High VWAP strategy
+## Latest Session (September 2026) — Fly-High deploy fix + performance overhaul
+
+### Critical Fly-High Deploy Fix (September 28, 2026)
+
+**Fly-High deploy payload field-name mismatch**: `vwap_engine.py` used `side/option_type/strike/
+entry_price` in `deploy_payload.legs[]`, but `deploy_strategy()` in `api.py` reads
+`action/type/offset/premium` (matching the scalper's convention). Every Fly-High trade was built as
+SELL/ATM/CE/zero-premium regardless of the actual signal. Fixed: `vwap_engine.py` now emits
+`action/type/offset/premium` matching `deploy_strategy()`. Also added `lot_size` to the payload.
+
+**Auto-deploy `sig.action` AttributeError**: `run_flyhigh_auto_cycle` referenced `sig.action` but
+`FlyHighSignal` has `direction`. The error fired after deploy succeeded, silently swallowing success
+tracking. Fixed: `sig.action` → `sig.direction`.
+
+**Reconnect interval regression**: `_reconnect_fyers_feed` called
+`start_background_refresh(interval=0.5)` instead of `3.0`, triggering a 429 rate-limit storm
+(~120/200 req/min for index refresh alone) after every reconnect. Fixed: `0.5` → `3.0`.
+
+### Performance Overhaul (September 28, 2026)
+
+**SQLite write removed from GET endpoint**: `list_deployed_strategies` called `save_strategy()`
+for every strategy on every 1-second poll, blocking the async event loop with synchronous SQLite
+I/O 5+ times/sec. Removed — persistence happens only on mutations.
+
+**Parallel candle fetches**: `_scalper_fetch_market` fetched daily + intraday candles sequentially
+(8s+8s worst case). Now uses `asyncio.gather` for parallel fetch (halves latency).
+
+**Frontend polling reduction**: Reduced aggregate polling load by ~60%:
+- Global default: 2s → 5s, staleTime 1s → 2s
+- Deployed strategies / P&L: 1s → 3s
+- Scalper signal / OI signals: 2s → 5s
+- Positions / PnL / market depth: 2s → 5s
+- Paper trading (5 hooks): 2s → 5s
+
+**Tick freshness check**: `get_cached_tick()` consumers now check `last_tick_age_seconds < 60`
+before using WS tick as "live". Market indices endpoint reports `source: "fyers_cached"` when
+ticks are stale. Fly-High signal falls back to chain spot when WS tick is >60s old.
+
+**Honest health badge**: `/api/health` now reports `fyers_degraded` when connected but REST is
+unhealthy (`rest_healthy=False`). Header badge shows amber "Degraded" state with tooltip.
+
+**Config debounce**: Fly-High config inputs now use local state + 600ms debounce instead of
+firing a mutation on every keystroke.
+
+**Signal invalidation after deploy**: `useDeployFlyHigh.onSuccess` now invalidates `flyhighSignal`,
+preventing stale deploy button for up to 3s after deploy.
+
+**Files modified**:
+- `core/vwap_engine.py` — deploy_payload field names (type/action/offset/premium/lot_size)
+- `core/api.py` — reconnect interval, parallel candle fetch, SQLite write removal, health badge,
+  tick freshness, auto-deploy logging fix
+- `dashboard/src/main.jsx` — global polling default 2s→5s
+- `dashboard/src/hooks/useApi.js` — per-hook polling reductions, signal invalidation after deploy
+- `dashboard/src/pages/FlyHigh.jsx` — config debounce
+- `dashboard/src/components/Layout/Header.jsx` — degraded feed state
+
+## Previous Session (August 2026) — Critical fixes + Fly-High VWAP strategy
 
 ### Bug Fixes (August 31, 2026)
 

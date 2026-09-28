@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Rocket, TrendingUp, TrendingDown, Gauge, Clock, AlertTriangle,
   Shield, Target, Activity, ChevronDown, ChevronUp, Zap, BarChart3,
@@ -30,6 +30,15 @@ export default function FlyHigh() {
   const deployMut = useDeployFlyHigh();
   const configMut = useSetFlyHighConfig();
   const [showConfig, setShowConfig] = useState(false);
+  const [localCfg, setLocalCfg] = useState({});
+  const debounceRef = useRef(null);
+  useEffect(() => { if (cfg) setLocalCfg(prev => Object.keys(prev).length ? prev : { ...cfg }); }, [cfg]);
+  const handleCfgChange = (key, value, type) => {
+    const parsed = type === 'number' ? Number(value) : value;
+    setLocalCfg(prev => ({ ...prev, [key]: parsed }));
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => configMut.mutate({ [key]: parsed }), 600);
+  };
 
   const hasSignal = sig?.has_signal;
   const direction = sig?.direction || '';
@@ -346,8 +355,8 @@ export default function FlyHigh() {
                 <label className="text-xs text-slate-500 block mb-1">{label}</label>
                 <input
                   type={type}
-                  value={cfg?.[key] ?? ''}
-                  onChange={(e) => configMut.mutate({ [key]: type === 'number' ? Number(e.target.value) : e.target.value })}
+                  value={localCfg[key] ?? cfg?.[key] ?? ''}
+                  onChange={(e) => handleCfgChange(key, e.target.value, type)}
                   className="w-full bg-slate-800/50 border border-slate-700 rounded-lg px-2.5 py-1.5 text-sm font-mono focus:border-accent focus:outline-none"
                 />
               </div>
