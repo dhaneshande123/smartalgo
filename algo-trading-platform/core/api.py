@@ -1811,7 +1811,8 @@ async def lifespan(application: FastAPI):
         secret_key=FYERS_SECRET_KEY,
         redirect_uri=FYERS_REDIRECT_URI,
     )
-    fyers_connected = await _live_feed.connect()
+    _connect_result = await _live_feed.connect()
+    fyers_connected = _connect_result[0] if isinstance(_connect_result, tuple) else bool(_connect_result)
     if fyers_connected:
         _logging.getLogger(__name__).info("Fyers live feed connected — serving real market data")
         set_live_feed(_live_feed)
@@ -8220,10 +8221,14 @@ async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str,
         redirect_uri=redirect_uri,
     )
     try:
-        connected = await asyncio.wait_for(new_feed.connect(), timeout=20.0)
+        result = await asyncio.wait_for(new_feed.connect(), timeout=20.0)
+        if isinstance(result, tuple):
+            connected, connect_msg = result
+        else:
+            connected, connect_msg = bool(result), ""
     except asyncio.TimeoutError:
         logger.error("Fyers OAuth: reconnect timed out after 20s")
-        return False
+        return False, "Reconnect timed out after 20s — check network/VPN"
     if connected:
         logger.info("Fyers OAuth: live feed reconnected successfully")
         _live_feed = new_feed
@@ -8234,10 +8239,10 @@ async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str,
             _paper_trading_manager._live_feed = new_feed
         if _dashboard_executor is not None:
             _dashboard_executor.live_feed = new_feed
-        return True
+        return True, connect_msg
     else:
-        logger.error("Fyers OAuth: reconnect failed after token exchange")
-        return False
+        logger.error(f"Fyers OAuth: reconnect failed — {connect_msg}")
+        return False, connect_msg
 
 
 class _FyersCallbackHandler(BaseHTTPRequestHandler):
@@ -8502,24 +8507,36 @@ async def fyers_reconnect():
     token = os.getenv("FYERS_ACCESS_TOKEN", "") or FYERS_ACCESS_TOKEN
     if not token:
         raise HTTPException(status_code=409, detail="No stored access token. Use Connect Fyers to authenticate.")
+    fail_msg = ""
     try:
-        ok = await _reconnect_fyers_feed(
+        result = await _reconnect_fyers_feed(
             app_id=os.getenv("FYERS_APP_ID", "") or FYERS_APP_ID,
             access_token=token,
             secret_key=os.getenv("FYERS_SECRET_KEY", "") or FYERS_SECRET_KEY,
             redirect_uri=FYERS_REDIRECT_URI,
         )
+        if isinstance(result, tuple):
+            ok, fail_msg = result
+        else:
+            ok = bool(result)
     except Exception as e:
         logger.warning(f"Fyers reconnect failed: {e}")
         ok = False
+        fail_msg = str(e)
     if ok:
         _fyers_oauth_state["status"] = "connected"
         _fyers_oauth_state["message"] = "Reconnected using stored token."
         return {"success": True, "live_feed_connected": True, "message": "Reconnected using stored token."}
+    detail = fail_msg or "Unknown error"
+    is_token_issue = any(kw in detail.lower() for kw in ["token", "expired", "unauthorized", "invalid", "auth"])
+    if is_token_issue:
+        msg = f"Reconnect failed — {detail}. Use Connect Fyers to re-authenticate."
+    else:
+        msg = f"Reconnect failed — {detail}. Try again or use Connect Fyers."
     return {
         "success": False,
         "live_feed_connected": False,
-        "message": "Reconnect failed — token likely expired. Use Connect Fyers to re-authenticate.",
+        "message": msg,
     }
 
 

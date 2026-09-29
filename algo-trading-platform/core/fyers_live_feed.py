@@ -91,8 +91,11 @@ class FyersLiveFeed:
         self._consecutive_rest_failures = 0
         self._last_tick_time: float = 0.0
 
-    async def connect(self) -> bool:
-        """Initialize Fyers API client and verify connectivity."""
+    async def connect(self) -> tuple[bool, str]:
+        """Initialize Fyers API client and verify connectivity.
+
+        Returns (success: bool, message: str).
+        """
         try:
             from fyers_apiv3 import fyersModel
 
@@ -119,18 +122,22 @@ class FyersLiveFeed:
                 self._connected = True
                 nifty_ltp = response["d"][0]["v"]["lp"]
                 logger.info(f"Fyers API connected! NIFTY LTP: {nifty_ltp}")
-                return True
+                return True, f"Connected — NIFTY LTP: {nifty_ltp}"
             else:
                 error_msg = response.get("message", str(response)) if response else "No response"
-                logger.error(f"Fyers connection failed: {error_msg}")
-                return False
+                error_code = response.get("code", "") if response else ""
+                logger.error(f"Fyers connection failed: code={error_code} msg={error_msg}")
+                is_token_error = any(kw in str(error_msg).lower() for kw in ["invalid", "expired", "token", "unauthorized", "auth"])
+                if is_token_error:
+                    return False, f"Token error: {error_msg}"
+                return False, f"Fyers API error: {error_msg}"
 
         except asyncio.TimeoutError:
             logger.error("Fyers connection timed out after 15s")
-            return False
+            return False, "Connection timed out after 15s — check network/VPN"
         except Exception as e:
             logger.error(f"Fyers connection error: {e}")
-            return False
+            return False, f"Connection error: {e}"
 
     @property
     def is_connected(self) -> bool:

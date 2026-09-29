@@ -281,12 +281,13 @@ class DashboardStrategyExecutor:
             return
 
         try:
-            ok = await _api_mod._reconnect_fyers_feed(
+            result = await _api_mod._reconnect_fyers_feed(
                 app_id=os.getenv("FYERS_APP_ID", "") or _api_mod.FYERS_APP_ID,
                 access_token=token,
                 secret_key=os.getenv("FYERS_SECRET_KEY", "") or _api_mod.FYERS_SECRET_KEY,
                 redirect_uri=_api_mod.FYERS_REDIRECT_URI,
             )
+            ok = result[0] if isinstance(result, tuple) else bool(result)
         except Exception as e:
             logger.warning(f"Fyers auto-reconnect attempt failed: {e}")
             ok = False
