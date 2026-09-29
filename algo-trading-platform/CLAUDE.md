@@ -335,12 +335,13 @@ AI Signal Engine / Strategy Builder / Manual
 
 ### Fyers Rate Limiting (IMPORTANT)
 - Total API budget: ~200 req/min from Fyers; option chain is the rate-limited call.
-- Current safe usage: option chain `_CHAIN_CACHE_TTL=3.0s`, indices `_INDICES_CACHE_TTL=2.0s`,
-  background refresh interval `3.0s` (was 0.5s pre-Aug 2026), frontend polling `3s` (was 1s),
-  executor chain refresh shares `_fyers_chain_cache` instead of independent calls.
+- Current safe usage: option chain `_CHAIN_CACHE_TTL=10.0s`, indices `_INDICES_CACHE_TTL=5.0s`,
+  candle cache `_CANDLE_CACHE_TTL=30.0s`, background refresh interval `10.0s`,
+  signal-level cache `_FLYHIGH_SIGNAL_CACHE_TTL=15.0s`, frontend signal poll `15s`.
+  Executor chain refresh shares `_fyers_chain_cache` instead of independent calls.
   429 retry with exponential backoff (3 retries, 2s/4s/6s waits) on `get_option_chain`.
-- **Do NOT reduce these TTLs/intervals** — June 2026 a 1.5s chain TTL + per-tick executor refresh
-  caused persistent `429 request limit reached` → empty chains (0 strikes) for ALL symbols.
+- **Do NOT reduce these TTLs/intervals** — previous lower values caused persistent
+  `429 request limit reached` → empty chains (0 strikes) for ALL symbols.
 - Bursty testing (many curls + restarts) can trip Fyers' limit into a cooldown; wait ~30s.
 - Historical candle API is a separate bucket but shares the same limit.
 - Access tokens expire daily — use Settings → **Reconnect** (stored token) or **Connect Fyers** (re-auth).

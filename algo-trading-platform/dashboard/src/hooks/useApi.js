@@ -15,7 +15,7 @@ export const useScalperSignal = (symbol = 'NIFTY') =>
 export const useScalperConfig = () =>
   useQuery({ queryKey: ['scalperConfig'], queryFn: api.getScalperConfig });
 export const useScalperPerformance = () =>
-  useQuery({ queryKey: ['scalperPerformance'], queryFn: api.getScalperPerformance, refetchInterval: 5000 });
+  useQuery({ queryKey: ['scalperPerformance'], queryFn: () => api.getScalperPerformance(), refetchInterval: 5000 });
 export const useSetScalperConfig = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -45,7 +45,7 @@ export const useDeployScalp = () => {
 };
 // Fly-High (VWAP crossover strategy)
 export const useFlyHighSignal = (symbol = 'NIFTY') =>
-  useQuery({ queryKey: ['flyhighSignal', symbol], queryFn: () => api.getFlyHighSignal(symbol), refetchInterval: 3000 });
+  useQuery({ queryKey: ['flyhighSignal', symbol], queryFn: () => api.getFlyHighSignal(symbol), refetchInterval: 15000 });
 export const useFlyHighConfig = () =>
   useQuery({ queryKey: ['flyhighConfig'], queryFn: api.getFlyHighConfig });
 export const useFlyHighPerformance = () =>
@@ -253,7 +253,7 @@ export const useSetTradingMode = () => {
 export const useDeployedStrategies = () =>
   useQuery({
     queryKey: ['deployedStrategies'],
-    queryFn: api.getDeployedStrategies,
+    queryFn: () => api.getDeployedStrategies(),
     refetchInterval: 3000,
   });
 

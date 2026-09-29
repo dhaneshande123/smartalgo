@@ -1816,7 +1816,7 @@ async def lifespan(application: FastAPI):
     if fyers_connected:
         _logging.getLogger(__name__).info("Fyers live feed connected — serving real market data")
         set_live_feed(_live_feed)
-        await _live_feed.start_background_refresh(interval=3.0)
+        await _live_feed.start_background_refresh(interval=10.0)
         # Start true real-time WebSocket stream from Fyers (updates _last_ticks instantly)
         _live_feed.start_websocket_stream()
         # Give paper trading manager access to live feed
@@ -1937,13 +1937,19 @@ _mock = MockDataGenerator(seed=42)
 # Cache for last successful Fyers responses — prevents flicker to mock on temporary failures
 _fyers_chain_cache: dict[str, dict] = {}
 _fyers_chain_cache_time: dict[str, float] = {}  # symbol -> timestamp of last fetch
-_CHAIN_CACHE_TTL = 3.0  # seconds — option chain is the rate-limited Fyers call; 3s keeps us under ~200/min (do NOT lower)
+_CHAIN_CACHE_TTL = 10.0  # seconds — option chain cache (raised from 3s to save API budget)
 # Last-good candle cache — smooths over transient empty fetches so VWAP/ADX
 # don't flicker to "—" on the odd poll that gets a cache miss or timeout.
 _last_good_candles: dict[str, dict[str, list]] = {}  # symbol -> {"D1": [...], "M5": [...]}
+_candle_cache_time: dict[str, float] = {}  # symbol -> timestamp of last candle fetch
+_CANDLE_CACHE_TTL = 30.0  # seconds — M5 candles only produce a new bar every 5 min
 _fyers_indices_cache: dict | None = None
 _fyers_indices_cache_time: float = 0  # timestamp of last indices fetch
-_INDICES_CACHE_TTL = 2.0  # seconds — index tickers (shares Fyers budget with chain)
+_INDICES_CACHE_TTL = 5.0  # seconds — index tickers (raised from 2s)
+# Signal-level cache for flyhigh — no point re-computing on 5-min candle data every 3s
+_flyhigh_signal_cache: dict[str, dict] = {}  # symbol -> signal dict
+_flyhigh_signal_cache_time: dict[str, float] = {}  # symbol -> timestamp
+_FLYHIGH_SIGNAL_CACHE_TTL = 15.0  # seconds
 
 # In-memory stores for strategy management
 _deployed_strategies: dict[str, dict] = {}
@@ -2522,7 +2528,12 @@ async def _scalper_fetch_market(symbol: str) -> tuple[dict, list, list]:
             chain_data = chain_data or {}
 
     daily_candles, intraday_candles = [], []
-    if _live_feed:
+    good = _last_good_candles.setdefault(symbol, {"D1": [], "M5": []})
+    candle_age = time.time() - _candle_cache_time.get(symbol, 0)
+    if candle_age < _CANDLE_CACHE_TTL and good["M5"] and good["D1"]:
+        daily_candles = good["D1"]
+        intraday_candles = good["M5"]
+    elif _live_feed:
         daily_result, intraday_result = await asyncio.gather(
             asyncio.wait_for(
                 _live_feed.get_candles(symbol, "D1", count=5), timeout=8.0),
@@ -2538,6 +2549,8 @@ async def _scalper_fetch_market(symbol: str) -> tuple[dict, list, list]:
             logger.warning("Scalper intraday candle fetch failed for %s: %s", symbol, intraday_result)
         else:
             intraday_candles = intraday_result or []
+        if daily_candles or intraday_candles:
+            _candle_cache_time[symbol] = time.time()
 
     # SQLite cache fallback when Fyers is disconnected or returned nothing
     if not intraday_candles:
@@ -2576,7 +2589,6 @@ async def _scalper_fetch_market(symbol: str) -> tuple[dict, list, list]:
     # Last-good fallback: a single poll that gets an empty/short fetch shouldn't
     # collapse VWAP/ADX to zero in the UI. Serve the previous good series instead
     # (seconds old — negligible for a 5-min strategy), and refresh it on success.
-    good = _last_good_candles.setdefault(symbol, {"D1": [], "M5": []})
     if len(daily_candles) >= 2:
         good["D1"] = daily_candles
     elif good["D1"]:
@@ -2916,6 +2928,13 @@ async def flyhigh_signal(symbol: str = "NIFTY"):
 
     symbol = symbol.upper()
     cfg = ve.get_config()
+
+    cached = _flyhigh_signal_cache.get(symbol)
+    cache_age = time.time() - _flyhigh_signal_cache_time.get(symbol, 0)
+    if cached and cache_age < _FLYHIGH_SIGNAL_CACHE_TTL:
+        cached["config"] = cfg
+        return cached
+
     strike_step = STRIKE_STEPS.get(symbol, 50)
     lot_size = symbol_master.get_lot_size(symbol) or 1
 
@@ -2953,6 +2972,8 @@ async def flyhigh_signal(symbol: str = "NIFTY"):
     result = sig.to_dict()
     result["config"] = cfg
     result["trades_today"] = trades_today
+    _flyhigh_signal_cache[symbol] = result
+    _flyhigh_signal_cache_time[symbol] = time.time()
     return result
 
 
@@ -8233,7 +8254,7 @@ async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str,
         logger.info("Fyers OAuth: live feed reconnected successfully")
         _live_feed = new_feed
         set_live_feed(new_feed)
-        await new_feed.start_background_refresh(interval=3.0)
+        await new_feed.start_background_refresh(interval=10.0)
         new_feed.start_websocket_stream()
         if _paper_trading_manager is not None:
             _paper_trading_manager._live_feed = new_feed
