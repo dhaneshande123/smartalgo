@@ -173,7 +173,8 @@ export const getFyersStatus = () => api.get('/settings/fyers');
 export const initFyersConnect = (creds) => api.post('/fyers/init-connect', creds);
 export const getFyersConnectionStatus = () => api.get('/fyers/connection-status');
 export const disconnectFyers = () => api.post('/fyers/disconnect');
-export const reconnectFyers = () => api.post('/fyers/reconnect');
+export const reconnectFyers = () => api.post('/fyers/reconnect', {}, { timeout: 30000 });
+export const getFlyHighTicker = (symbol = 'NIFTY') => api.get(`/flyhigh/ticker/${symbol}`);
 
 // Account / Fyers live data
 export const getFunds = () => api.get('/account/funds');

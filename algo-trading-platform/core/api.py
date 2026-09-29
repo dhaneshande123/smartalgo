@@ -3041,11 +3041,20 @@ async def flyhigh_performance():
             durations.append((ex - ent).total_seconds() / 60.0)
         except (KeyError, ValueError, TypeError):
             pass
+        legs = s.get("legs") or []
+        leg0 = legs[0] if legs else {}
         recent.append({
             "name": s.get("name", ""), "pnl": round(pnl, 2),
             "r": round(pnl / risk_per_trade, 2),
             "exit_reason": s.get("exit_reason", ""),
             "exited_at": s.get("exited_at", ""),
+            "entered_at": s.get("entered_at", ""),
+            "entry_price": float(leg0.get("entry_price", leg0.get("premium", 0)) or 0),
+            "exit_price": float(s.get("exit_price", 0) or 0),
+            "side": leg0.get("action", "BUY"),
+            "option_type": leg0.get("type", ""),
+            "strike": int(leg0.get("strike", 0) or 0),
+            "underlying": s.get("underlying", ""),
         })
 
     n = len(closed)
@@ -3057,11 +3066,20 @@ async def flyhigh_performance():
     for s in running:
         pnl = float(s.get("unrealized_pnl", s.get("pnl", 0)) or 0)
         open_pnl += pnl
+        legs = s.get("legs") or []
+        leg0 = legs[0] if legs else {}
+        entry_price = float(leg0.get("entry_price", leg0.get("premium", 0)) or 0)
+        ltp = float(s.get("current_ltp", 0) or 0)
         open_positions.append({
             "name": s.get("name", ""),
             "pnl": round(pnl, 2),
             "underlying": s.get("underlying", ""),
             "entered_at": s.get("entered_at", ""),
+            "entry_price": entry_price,
+            "ltp": ltp,
+            "side": leg0.get("action", "BUY"),
+            "option_type": leg0.get("type", ""),
+            "strike": int(leg0.get("strike", 0) or 0),
         })
 
     return {
@@ -3078,6 +3096,36 @@ async def flyhigh_performance():
         "open_positions": open_positions,
         "auto_deploy": bool(cfg.get("auto_deploy")),
     }
+
+
+@app.get("/api/flyhigh/ticker/{symbol}", tags=["Fly-High"], summary="Lightweight spot+VWAP ticker (cache only)")
+async def flyhigh_ticker(symbol: str = "NIFTY"):
+    """Returns spot and VWAP from cache — no candle fetches. Safe for 1s polling."""
+    from core import vwap_engine as ve
+    symbol = symbol.upper()
+    spot = 0.0
+    if _live_feed:
+        try:
+            tick = _live_feed.get_cached_tick(symbol)
+            ltp = float((tick or {}).get("ltp", 0) or 0)
+            if ltp > 0 and _live_feed.last_tick_age_seconds < 60:
+                spot = ltp
+        except Exception:
+            pass
+    if spot == 0:
+        cached = _fyers_chain_cache.get(symbol)
+        if cached and isinstance(cached, dict):
+            spot = float(cached.get("spot_price", 0) or 0)
+
+    vwap = 0.0
+    good = _last_good_candles.get(symbol, {})
+    m5 = good.get("M5", [])
+    if len(m5) >= 3:
+        vwap_series = ve.compute_vwap_series(m5)
+        if vwap_series:
+            vwap = round(vwap_series[-1], 2)
+
+    return {"spot": round(spot, 2), "vwap": vwap, "symbol": symbol}
 
 
 @app.get(
@@ -8171,7 +8219,11 @@ async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str,
         secret_key=secret_key,
         redirect_uri=redirect_uri,
     )
-    connected = await new_feed.connect()
+    try:
+        connected = await asyncio.wait_for(new_feed.connect(), timeout=20.0)
+    except asyncio.TimeoutError:
+        logger.error("Fyers OAuth: reconnect timed out after 20s")
+        return False
     if connected:
         logger.info("Fyers OAuth: live feed reconnected successfully")
         _live_feed = new_feed

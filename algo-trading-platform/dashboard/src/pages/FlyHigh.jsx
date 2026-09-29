@@ -6,7 +6,7 @@ import {
 import { useUnderlying } from '../context/UnderlyingContext';
 import {
   useFlyHighSignal, useFlyHighConfig, useFlyHighPerformance,
-  useSetFlyHighConfig, useDeployFlyHigh,
+  useSetFlyHighConfig, useDeployFlyHigh, useFlyHighTicker,
 } from '../hooks/useApi';
 
 function StatCard({ label, value, sub, icon: Icon, color = 'text-slate-300' }) {
@@ -27,6 +27,7 @@ export default function FlyHigh() {
   const { data: sig } = useFlyHighSignal(underlying);
   const { data: cfg } = useFlyHighConfig();
   const { data: perf } = useFlyHighPerformance();
+  const { data: ticker } = useFlyHighTicker(underlying);
   const deployMut = useDeployFlyHigh();
   const configMut = useSetFlyHighConfig();
   const [showConfig, setShowConfig] = useState(false);
@@ -44,8 +45,8 @@ export default function FlyHigh() {
   const direction = sig?.direction || '';
   const isBullish = direction === 'BULLISH';
   const adx = sig?.adx ?? 0;
-  const vwap = sig?.vwap ?? 0;
-  const spot = sig?.spot ?? 0;
+  const vwap = ticker?.vwap || sig?.vwap || 0;
+  const spot = ticker?.spot || sig?.spot || 0;
   const spotVsVwap = spot && vwap ? ((spot - vwap) / vwap * 100).toFixed(2) : '0.00';
   const blockers = sig?.blockers || [];
   const tradesToday = sig?.trades_today ?? 0;
@@ -139,9 +140,12 @@ export default function FlyHigh() {
                 <div className="text-xs text-slate-400 mb-1">Running positions</div>
                 <div className="space-y-1">
                   {perf.open_positions.map((p, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs bg-slate-800/30 rounded-lg px-2.5 py-1">
-                      <span className="text-slate-300 truncate max-w-[160px]">{p.name}</span>
-                      <span className={`font-mono ${p.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
+                    <div key={i} className="flex items-center justify-between gap-2 text-xs bg-slate-800/30 rounded-lg px-2.5 py-1.5">
+                      <span className={`font-bold ${p.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{p.side || 'BUY'}</span>
+                      <span className="text-slate-300 truncate max-w-[120px]">{p.strike}{p.option_type}</span>
+                      <span className="text-slate-500 font-mono">@{p.entry_price?.toFixed(1) || '—'}</span>
+                      <span className="text-slate-400 font-mono">→ {p.ltp?.toFixed(1) || '—'}</span>
+                      <span className={`font-mono font-bold ${p.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                         {p.pnl >= 0 ? '+' : ''}₹{p.pnl.toLocaleString('en-IN')}
                       </span>
                     </div>
@@ -371,11 +375,15 @@ export default function FlyHigh() {
           <h3 className="text-sm font-semibold text-slate-300 mb-3">Recent Trades</h3>
           <div className="space-y-1.5">
             {perf.recent.map((t, i) => (
-              <div key={i} className="flex items-center justify-between text-xs bg-slate-800/30 rounded-lg px-3 py-2">
-                <span className="text-slate-300 truncate max-w-[200px]">{t.name}</span>
-                <span className="text-slate-500">{t.exit_reason}</span>
-                <span className="font-mono text-profit">₹{t.pnl?.toLocaleString('en-IN')}</span>
-                <span className={`font-mono ${t.r >= 0 ? 'text-profit' : 'text-loss'}`}>{t.r > 0 ? '+' : ''}{t.r}R</span>
+              <div key={i} className="flex items-center justify-between gap-2 text-xs bg-slate-800/30 rounded-lg px-3 py-2">
+                <span className={`font-bold flex-shrink-0 ${t.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{t.side || 'BUY'}</span>
+                <span className="text-slate-300 truncate max-w-[100px]">{t.strike}{t.option_type}</span>
+                <span className="text-slate-500 font-mono flex-shrink-0">@{t.entry_price?.toFixed(1) || '—'} → {t.exit_price?.toFixed(1) || '—'}</span>
+                <span className="text-slate-500 flex-shrink-0">{t.exit_reason}</span>
+                <span className={`font-mono font-bold flex-shrink-0 ${(t.pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                  {(t.pnl ?? 0) >= 0 ? '+' : ''}₹{t.pnl?.toLocaleString('en-IN')}
+                </span>
+                <span className={`font-mono flex-shrink-0 ${t.r >= 0 ? 'text-profit' : 'text-loss'}`}>{t.r > 0 ? '+' : ''}{t.r}R</span>
               </div>
             ))}
           </div>

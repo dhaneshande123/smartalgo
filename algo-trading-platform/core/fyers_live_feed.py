@@ -104,13 +104,15 @@ class FyersLiveFeed:
                 log_path="",
             )
 
-            # Verify connection by fetching a profile or a simple quote
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self._fyers.quotes(
-                    data={"symbols": "NSE:NIFTY50-INDEX"}
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self._fyers.quotes(
+                        data={"symbols": "NSE:NIFTY50-INDEX"}
+                    ),
                 ),
+                timeout=15.0,
             )
 
             if response and response.get("s") == "ok" and response.get("d"):
@@ -123,6 +125,9 @@ class FyersLiveFeed:
                 logger.error(f"Fyers connection failed: {error_msg}")
                 return False
 
+        except asyncio.TimeoutError:
+            logger.error("Fyers connection timed out after 15s")
+            return False
         except Exception as e:
             logger.error(f"Fyers connection error: {e}")
             return False

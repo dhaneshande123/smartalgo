@@ -50,6 +50,8 @@ export const useFlyHighConfig = () =>
   useQuery({ queryKey: ['flyhighConfig'], queryFn: api.getFlyHighConfig });
 export const useFlyHighPerformance = () =>
   useQuery({ queryKey: ['flyhighPerformance'], queryFn: api.getFlyHighPerformance, refetchInterval: 5000 });
+export const useFlyHighTicker = (symbol = 'NIFTY') =>
+  useQuery({ queryKey: ['flyhighTicker', symbol], queryFn: () => api.getFlyHighTicker(symbol), refetchInterval: 1000 });
 export const useSetFlyHighConfig = () => {
   const qc = useQueryClient();
   return useMutation({
