@@ -8138,9 +8138,9 @@ async def update_fyers_credentials(creds: FyersCredentials):
 )
 async def get_fyers_status():
     """Return masked status of configured Fyers credentials."""
-    app_id = os.getenv("FYERS_APP_ID", "")
-    token = os.getenv("FYERS_ACCESS_TOKEN", "")
-    secret = os.getenv("FYERS_SECRET_KEY", "")
+    app_id = os.getenv("FYERS_APP_ID", "") or FYERS_APP_ID
+    token = os.getenv("FYERS_ACCESS_TOKEN", "") or FYERS_ACCESS_TOKEN
+    secret = os.getenv("FYERS_SECRET_KEY", "") or FYERS_SECRET_KEY
     return {
         "app_id": app_id[:8] + "..." if len(app_id) > 8 else app_id,
         "app_id_set": bool(app_id),
@@ -8203,7 +8203,7 @@ def _exchange_auth_code(app_id: str, secret_key: str, redirect_uri: str, auth_co
 
 
 def _save_token_to_env(token: str):
-    """Persist the access_token to the .env file."""
+    """Persist the access_token to the .env file and os.environ."""
     import re as _re
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     try:
@@ -8221,6 +8221,7 @@ def _save_token_to_env(token: str):
 
     with open(env_path, "w", encoding="utf-8") as f:
         f.write(content)
+    os.environ["FYERS_ACCESS_TOKEN"] = token
 
 
 async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str, redirect_uri: str):
