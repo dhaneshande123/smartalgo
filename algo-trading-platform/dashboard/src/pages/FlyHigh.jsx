@@ -93,10 +93,12 @@ export default function FlyHigh() {
             <Gauge className="w-3.5 h-3.5" />
             ADX {adx.toFixed(0)} {adx >= 25 ? '— Strong' : adx >= 20 ? '— Trending' : '— Weak'}
           </span>
-          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
+          <span
+            title={`SuperTrend direction: ${stDir || 'N/A'}. For a BULLISH trade, ST must be UP. For BEARISH, ST must be DOWN. This is the confluence filter.`}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold cursor-help ${
             stDir === 'UP' ? 'bg-profit/15 text-profit' : stDir === 'DOWN' ? 'bg-loss/15 text-loss' : 'bg-slate-700/40 text-slate-400'
           }`}>
-            ST {stDir || '—'}
+            SuperTrend {stDir === 'UP' ? '▲ UP' : stDir === 'DOWN' ? '▼ DOWN' : '—'}
           </span>
           <span className={`px-3 py-1.5 rounded-full text-xs font-bold ${
             tradesToday >= maxTrades ? 'bg-red-500/15 text-red-400' : 'bg-slate-700/40 text-slate-400'
@@ -382,19 +384,42 @@ export default function FlyHigh() {
       {perf?.recent?.length > 0 && (
         <div className="glass-card !rounded-2xl !p-4">
           <h3 className="text-sm font-semibold text-slate-300 mb-3">Recent Trades</h3>
-          <div className="space-y-1.5">
-            {perf.recent.map((t, i) => (
-              <div key={i} className="flex items-center justify-between gap-2 text-xs bg-slate-800/30 rounded-lg px-3 py-2">
-                <span className={`font-bold flex-shrink-0 ${t.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{t.side || 'BUY'}</span>
-                <span className="text-slate-300 truncate max-w-[100px]">{t.strike}{t.option_type}</span>
-                <span className="text-slate-500 font-mono flex-shrink-0">@{t.entry_price?.toFixed(1) || '—'} → {t.exit_price?.toFixed(1) || '—'}</span>
-                <span className="text-slate-500 flex-shrink-0">{t.exit_reason}</span>
-                <span className={`font-mono font-bold flex-shrink-0 ${(t.pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
-                  {(t.pnl ?? 0) >= 0 ? '+' : ''}₹{t.pnl?.toLocaleString('en-IN')}
-                </span>
-                <span className={`font-mono flex-shrink-0 ${t.r >= 0 ? 'text-profit' : 'text-loss'}`}>{t.r > 0 ? '+' : ''}{t.r}R</span>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-slate-500 border-b border-slate-700/50">
+                  <th className="text-left py-1.5 px-2 font-medium">Side</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Instrument</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Buy Price</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Sell Price</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Exit Reason</th>
+                  <th className="text-right py-1.5 px-2 font-medium">P&L</th>
+                  <th className="text-right py-1.5 px-2 font-medium">R</th>
+                </tr>
+              </thead>
+              <tbody>
+                {perf.recent.map((t, i) => {
+                  const instrument = t.symbol || (t.strike ? `${t.underlying || 'NIFTY'} ${t.strike} ${t.option_type}` : `${t.option_type || '—'}`);
+                  const entryP = t.entry_price > 0 ? `₹${t.entry_price.toFixed(2)}` : '—';
+                  const exitP = t.exit_price > 0 ? `₹${t.exit_price.toFixed(2)}` : '—';
+                  return (
+                    <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20">
+                      <td className={`py-1.5 px-2 font-bold ${t.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{t.side || 'BUY'}</td>
+                      <td className="py-1.5 px-2 text-slate-300 font-mono">{instrument}</td>
+                      <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{entryP}</td>
+                      <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{exitP}</td>
+                      <td className="py-1.5 px-2 text-slate-500">{t.exit_reason}</td>
+                      <td className={`py-1.5 px-2 text-right font-mono font-bold ${(t.pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        {(t.pnl ?? 0) >= 0 ? '+' : ''}₹{t.pnl?.toLocaleString('en-IN')}
+                      </td>
+                      <td className={`py-1.5 px-2 text-right font-mono ${(t.r ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
+                        {t.r > 0 ? '+' : ''}{t.r}R
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

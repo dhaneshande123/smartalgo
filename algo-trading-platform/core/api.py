@@ -3063,20 +3063,30 @@ async def flyhigh_performance():
             durations.append((ex - ent).total_seconds() / 60.0)
         except (KeyError, ValueError, TypeError):
             pass
+        positions = s.get("positions") or []
+        pos0 = positions[0] if positions else {}
         legs = s.get("legs") or []
         leg0 = legs[0] if legs else {}
+        entry_price = float(pos0.get("entry_price", 0) or 0) or float(leg0.get("premium", 0) or 0)
+        exit_price = float(s.get("exit_price", 0) or 0)
+        sym = pos0.get("symbol", "")
+        strike = int(pos0.get("strike", 0) or 0) or int(leg0.get("strike", 0) or 0)
+        opt_type = leg0.get("type", "")
+        if not opt_type and sym:
+            opt_type = "CE" if sym.upper().endswith("CE") else "PE" if sym.upper().endswith("PE") else ""
         recent.append({
             "name": s.get("name", ""), "pnl": round(pnl, 2),
             "r": round(pnl / risk_per_trade, 2),
             "exit_reason": s.get("exit_reason", ""),
             "exited_at": s.get("exited_at", ""),
             "entered_at": s.get("entered_at", ""),
-            "entry_price": float(leg0.get("entry_price", leg0.get("premium", 0)) or 0),
-            "exit_price": float(s.get("exit_price", 0) or 0),
-            "side": leg0.get("action", "BUY"),
-            "option_type": leg0.get("type", ""),
-            "strike": int(leg0.get("strike", 0) or 0),
+            "entry_price": round(entry_price, 2),
+            "exit_price": round(exit_price, 2),
+            "side": pos0.get("side", leg0.get("action", "BUY")),
+            "option_type": opt_type,
+            "strike": strike,
             "underlying": s.get("underlying", ""),
+            "symbol": sym,
         })
 
     n = len(closed)

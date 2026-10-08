@@ -905,6 +905,10 @@ class DashboardStrategyExecutor:
         strat["exit_orders"] = exit_orders
         strat["exited_at"] = datetime.now(IST).isoformat()
 
+        # Capture exit price (LTP at exit) for trade history display
+        if positions:
+            strat["exit_price"] = float(positions[0].get("ltp", 0) or 0)
+
         logger.info(
             f"Strategy {sid} EXITED ({execution_mode}) — reason={reason}, "
             f"final_pnl=₹{final_pnl:.2f}"
