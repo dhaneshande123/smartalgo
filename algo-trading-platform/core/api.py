@@ -8225,16 +8225,38 @@ def _save_token_to_env(token: str):
 
 
 async def _reconnect_fyers_feed(app_id: str, access_token: str, secret_key: str, redirect_uri: str):
-    """Create a new FyersLiveFeed, connect it, and replace the global _live_feed."""
+    """Fully tear down the old feed and create a fresh FyersLiveFeed."""
     global _live_feed, FYERS_ACCESS_TOKEN
     FYERS_ACCESS_TOKEN = access_token
 
+    # ── Full teardown of old feed ──
     if _live_feed is not None:
         try:
             _live_feed.stop_websocket_stream()
+        except Exception as e:
+            logger.warning(f"Error stopping old WS: {e}")
+        try:
             await _live_feed.stop_background_refresh()
         except Exception as e:
-            logger.warning(f"Error stopping old feed: {e}")
+            logger.warning(f"Error stopping old refresh: {e}")
+        # Kill the SDK REST session so no stale state leaks into the new feed
+        try:
+            if hasattr(_live_feed, '_fyers') and _live_feed._fyers is not None:
+                _live_feed._fyers = None
+        except Exception:
+            pass
+        _live_feed._connected = False
+        _live_feed = None
+
+    # Force-clear any lingering SDK singleton state
+    try:
+        from fyers_apiv3.FyersWebsocket import data_ws
+        data_ws.FyersDataSocket._instance = None
+    except Exception:
+        pass
+
+    # Small delay to let OS release sockets
+    await asyncio.sleep(0.3)
 
     new_feed = FyersLiveFeed(
         app_id=app_id,

@@ -73,6 +73,7 @@ CHAIN_REFRESH_INTERVAL = 3.0     # min seconds between executor option-chain fet
 FYERS_RECONNECT_INTERVAL = 30.0        # seconds between retries while disconnected
 FYERS_RECONNECT_BACKOFF_AFTER = 5      # consecutive failures before backing off
 FYERS_RECONNECT_BACKOFF_INTERVAL = 300.0  # seconds between retries once backed off
+FYERS_KEEPALIVE_INTERVAL = 60.0        # REST ping every 60s to detect dead connections early
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +117,7 @@ class DashboardStrategyExecutor:
         # Fyers connection watchdog state
         self._last_fyers_reconnect_at: datetime | None = None
         self._last_fyers_ws_restart_at: datetime | None = None
+        self._last_fyers_keepalive_at: datetime | None = None
         self._fyers_reconnect_failures = 0
 
     @property
@@ -227,10 +229,11 @@ class DashboardStrategyExecutor:
     async def _maybe_reconnect_fyers(self) -> None:
         """Retry a dropped Fyers connection automatically.
 
-        Three failure modes are handled:
-        1. REST session down (``is_connected`` False) — full reconnect.
-        2. WS flag shows disconnected — restart just the WS stream.
-        3. Stale ticks — WS flag may lie (SDK singleton bug); if no tick
+        Four failure modes are handled:
+        1. REST keepalive ping fails — proactive detection before data goes stale.
+        2. REST session down (``is_connected`` False) — full reconnect.
+        3. WS flag shows disconnected — restart just the WS stream.
+        4. Stale ticks — WS flag may lie (SDK singleton bug); if no tick
            for 60s during market hours, force a WS restart.
         """
         now = datetime.now(IST)
@@ -243,25 +246,56 @@ class DashboardStrategyExecutor:
                 self._live_feed._connected = False
                 # Fall through to full reconnect below
             else:
-                self._fyers_reconnect_failures = 0
-                ws_alive = getattr(self._live_feed, "ws_connected", True)
-                tick_age = getattr(self._live_feed, "last_tick_age_seconds", 0.0)
-                stale = in_market_hours and tick_age > 60
+                # Proactive REST keepalive ping during market hours
+                if in_market_hours and (
+                    not self._last_fyers_keepalive_at
+                    or (now - self._last_fyers_keepalive_at).total_seconds() >= FYERS_KEEPALIVE_INTERVAL
+                ):
+                    self._last_fyers_keepalive_at = now
+                    try:
+                        loop = asyncio.get_event_loop()
+                        fyers = self._live_feed._fyers
+                        if fyers:
+                            resp = await asyncio.wait_for(
+                                loop.run_in_executor(None, lambda: fyers.quotes(data={"symbols": "NSE:NIFTY50-INDEX"})),
+                                timeout=8.0,
+                            )
+                            if not resp or resp.get("s") != "ok":
+                                code = resp.get("code", "") if resp else ""
+                                if str(code) in ("403", "401"):
+                                    logger.warning(f"Fyers keepalive: token rejected (code={code}), forcing full reconnect")
+                                    self._live_feed._connected = False
+                                else:
+                                    logger.warning(f"Fyers keepalive: unexpected response {resp}")
+                    except asyncio.TimeoutError:
+                        logger.warning("Fyers keepalive ping timed out (8s), forcing full reconnect")
+                        self._live_feed._connected = False
+                    except Exception as e:
+                        logger.warning(f"Fyers keepalive ping failed: {e}")
 
-                if ws_alive and not stale:
-                    return
+                # If keepalive just marked feed as disconnected, fall through
+                if not self._live_feed.is_connected:
+                    pass  # fall through to full reconnect below
+                else:
+                    self._fyers_reconnect_failures = 0
+                    ws_alive = getattr(self._live_feed, "ws_connected", True)
+                    tick_age = getattr(self._live_feed, "last_tick_age_seconds", 0.0)
+                    stale = in_market_hours and tick_age > 60
 
-                reason = "stale ticks" if stale else "ws_connected=False"
-                if (self._last_fyers_ws_restart_at
-                        and (now - self._last_fyers_ws_restart_at).total_seconds() < FYERS_RECONNECT_INTERVAL):
+                    if ws_alive and not stale:
+                        return
+
+                    reason = "stale ticks" if stale else "ws_connected=False"
+                    if (self._last_fyers_ws_restart_at
+                            and (now - self._last_fyers_ws_restart_at).total_seconds() < FYERS_RECONNECT_INTERVAL):
+                        return
+                    self._last_fyers_ws_restart_at = now
+                    try:
+                        self._live_feed.start_websocket_stream()
+                        logger.info(f"Fyers WebSocket restarted ({reason})")
+                    except Exception as e:
+                        logger.warning(f"Fyers WebSocket restart failed: {e}")
                     return
-                self._last_fyers_ws_restart_at = now
-                try:
-                    self._live_feed.start_websocket_stream()
-                    logger.info(f"Fyers WebSocket restarted ({reason})")
-                except Exception as e:
-                    logger.warning(f"Fyers WebSocket restart failed: {e}")
-                return
 
         # Full reconnect path
         interval = (

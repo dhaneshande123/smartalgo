@@ -52,6 +52,7 @@ export default function FlyHigh() {
   const tradesToday = sig?.trades_today ?? 0;
   const maxTrades = cfg?.max_trades_per_day ?? 2;
   const crossInfo = sig?.candle_info || {};
+  const stDir = crossInfo?.supertrend_dir || '';
 
   const handleDeploy = () => {
     if (!hasSignal) return;
@@ -69,7 +70,7 @@ export default function FlyHigh() {
         <div className="flex items-center gap-2">
           <Rocket className="w-6 h-6 text-accent" />
           <h1 className="text-xl font-bold">Fly-High Strategy</h1>
-          <span className="text-xs text-slate-400 bg-slate-800/50 px-2 py-0.5 rounded-full">VWAP Crossover</span>
+          <span className="text-xs text-slate-400 bg-slate-800/50 px-2 py-0.5 rounded-full">VWAP + SuperTrend</span>
         </div>
         <div className="flex items-center gap-2 ml-auto flex-wrap">
           {/* Auto-deploy toggle — hands-free deploy when a signal forms */}
@@ -92,6 +93,11 @@ export default function FlyHigh() {
             <Gauge className="w-3.5 h-3.5" />
             ADX {adx.toFixed(0)} {adx >= 25 ? '— Strong' : adx >= 20 ? '— Trending' : '— Weak'}
           </span>
+          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
+            stDir === 'UP' ? 'bg-profit/15 text-profit' : stDir === 'DOWN' ? 'bg-loss/15 text-loss' : 'bg-slate-700/40 text-slate-400'
+          }`}>
+            ST {stDir || '—'}
+          </span>
           <span className={`px-3 py-1.5 rounded-full text-xs font-bold ${
             tradesToday >= maxTrades ? 'bg-red-500/15 text-red-400' : 'bg-slate-700/40 text-slate-400'
           }`}>
@@ -107,7 +113,7 @@ export default function FlyHigh() {
           <Zap className="w-4 h-4 text-profit flex-shrink-0 mt-0.5" />
           <div className="text-xs text-slate-300">
             <span className="font-bold text-profit">Hands-free auto-deploy is ON</span> for {underlying}. Fly-High
-            will deploy automatically when a valid VWAP crossover forms — within {cfg?.entry_start ?? '09:20'}–{cfg?.entry_cutoff ?? '14:30'},
+            will deploy automatically when a valid VWAP + SuperTrend confluence signal forms — within {cfg?.entry_start ?? '09:20'}–{cfg?.entry_cutoff ?? '14:30'},
             max {maxTrades} trades/day, one position per underlying. Paper mode.
           </div>
         </div>
@@ -311,11 +317,11 @@ export default function FlyHigh() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Entry</div>
-            <div className="font-medium">5-min close crosses VWAP</div>
+            <div className="font-medium">VWAP cross + SuperTrend</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Gate</div>
-            <div className="font-medium">ADX ≥ {cfg?.adx_min ?? 20}</div>
+            <div className="font-medium">ADX ≥ {cfg?.adx_min ?? 10}</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Strike</div>
@@ -348,8 +354,11 @@ export default function FlyHigh() {
             {[
               { key: 'risk_per_trade', label: 'Risk/Trade (₹)', type: 'number' },
               { key: 'adx_min', label: 'Min ADX', type: 'number' },
+              { key: 'max_lots', label: 'Max Lots', type: 'number' },
               { key: 'max_sl_points', label: 'Max SL Points', type: 'number' },
               { key: 'max_trades_per_day', label: 'Max Trades/Day', type: 'number' },
+              { key: 'supertrend_period', label: 'SuperTrend Period', type: 'number' },
+              { key: 'supertrend_multiplier', label: 'SuperTrend Mult', type: 'number' },
               { key: 'book_partial_pct', label: 'Book Partial %', type: 'number' },
               { key: 'trail_giveback_pct', label: 'Trail Give-back %', type: 'number' },
               { key: 'max_hold_minutes', label: 'Max Hold (min)', type: 'number' },

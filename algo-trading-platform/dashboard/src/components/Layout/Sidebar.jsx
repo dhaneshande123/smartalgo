@@ -24,6 +24,7 @@ import {
   ClipboardList,
   Briefcase,
   Rocket,
+  Wifi,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -33,6 +34,8 @@ const mainNav = [
   { to: '/ai-signals', icon: Brain, label: 'AI Signals' },
   { to: '/scalper', icon: Zap, label: 'Scalper' },
   { to: '/flyhigh', icon: Rocket, label: 'Fly-High' },
+  { to: '/broker', icon: Wifi, label: 'Broker Connection' },
+  { to: '/settings', icon: Settings, label: 'Settings' },
   { to: '/market', icon: BarChart3, label: 'Market Data' },
   { to: '/charts', icon: CandlestickChart, label: 'Charts' },
   { to: '/strategies', icon: Bot, label: 'Strategies' },
@@ -50,7 +53,6 @@ const moreNav = [
   { to: '/iv-surface', icon: Flame, label: 'IV Surface' },
   { to: '/trade-analytics', icon: ClipboardList, label: 'Trade Analytics' },
   { to: '/monitoring', icon: Activity, label: 'Monitoring' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
 ];
 
 export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }) {

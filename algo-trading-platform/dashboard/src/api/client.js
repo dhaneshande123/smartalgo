@@ -170,7 +170,7 @@ export const getSystemInfo = () => api.get('/system/info');
 export const getSystemConfig = () => api.get('/system/config');
 export const saveFyersSettings = (creds) => api.post('/settings/fyers', creds);
 export const getFyersStatus = () => api.get('/settings/fyers');
-export const initFyersConnect = (creds) => api.post('/fyers/init-connect', creds);
+export const initFyersConnect = (creds) => api.post('/fyers/init-connect', creds, { timeout: 30000 });
 export const getFyersConnectionStatus = () => api.get('/fyers/connection-status');
 export const disconnectFyers = () => api.post('/fyers/disconnect');
 export const reconnectFyers = () => api.post('/fyers/reconnect', {}, { timeout: 30000 });

@@ -1,8 +1,8 @@
 """
-Fly-High Strategy Engine — VWAP Crossover on 5-minute candles.
+Fly-High Strategy Engine — VWAP Crossover + SuperTrend Confluence on 5-minute candles.
 
-Entry: 5-min candle closes above VWAP (BUY CE) or below VWAP (SELL PE)
-Gate:  ADX > 20, skip first candle (9:15-9:20), max 2 trades/day, no entry after 14:30
+Entry: 5-min candle crosses VWAP AND SuperTrend direction confirms (confluence filter)
+Gate:  ADX >= 10, skip first candle (9:15-9:20), max 2 trades/day, no entry after 14:30
 Strike: 1-ITM (higher delta, lower theta drag than ATM)
 SL:    Previous candle low (BUY) / high (SELL), capped at max_sl_points
 Exit:  Book 50% at 1:1 R:R, trail rest, max hold 45 min, EOD 15:15
@@ -31,12 +31,15 @@ STRIKE_STEPS = {
 DEFAULT_CONFIG = {
     "enabled": True,
     "risk_per_trade": 2000,
-    "adx_min": 0,
+    "adx_min": 10,
     "max_sl_points": 30,
+    "max_lots": 10,
     "max_trades_per_day": 2,
     "entry_start": "09:20",
     "entry_cutoff": "14:30",
     "max_hold_minutes": 45,
+    "supertrend_period": 10,
+    "supertrend_multiplier": 3.0,
     "book_partial_pct": 50,
     "trail_giveback_pct": 30,
     "premium_floor_pct": -35,
@@ -256,7 +259,7 @@ def generate_signal(
     adx_val = adx_result.get("adx", 0) if adx_result else 0
     sig.adx = round(adx_val, 1)
 
-    adx_min = cfg.get("adx_min", 20)
+    adx_min = cfg.get("adx_min", 10)
     if adx_val < adx_min:
         blockers.append(f"ADX {adx_val:.0f} < {adx_min} (ranging market)")
 
@@ -266,6 +269,28 @@ def generate_signal(
 
     if not cross.get("crossed"):
         blockers.append("no VWAP crossover on last candle")
+
+    # SuperTrend confluence check
+    st_period = cfg.get("supertrend_period", 10)
+    st_mult = cfg.get("supertrend_multiplier", 3.0)
+    st_result = ind.supertrend(
+        highs,
+        lows,
+        closes,
+        period=st_period,
+        multiplier=st_mult,
+    )
+    st_dir = st_result.get("direction", "") if st_result else ""
+    sig.candle_info["supertrend_dir"] = st_dir
+
+    if cross.get("crossed") and st_result:
+        vwap_dir = cross["direction"]
+        if vwap_dir == "BULLISH" and st_dir != "UP":
+            blockers.append(f"SuperTrend DOWN — no confluence with BULLISH VWAP cross")
+        elif vwap_dir == "BEARISH" and st_dir != "DOWN":
+            blockers.append(f"SuperTrend UP — no confluence with BEARISH VWAP cross")
+    elif not st_result:
+        blockers.append("SuperTrend computation failed (insufficient data)")
 
     if blockers:
         sig.blockers = blockers
@@ -308,12 +333,13 @@ def generate_signal(
     sig.option_type = strike_info["option_type"]
     sig.premium = strike_info["premium"]
 
-    # Position sizing (risk-based)
+    # Position sizing (risk-based, capped at max_lots)
     risk_per_trade = cfg.get("risk_per_trade", 2000)
+    max_lots = cfg.get("max_lots", 10)
     premium_sl_estimate = sig.premium * (sl_points / spot) * 2
     if premium_sl_estimate <= 0:
         premium_sl_estimate = sig.premium * 0.20
-    lots = max(1, int(risk_per_trade / (premium_sl_estimate * lot_size)))
+    lots = max(1, min(max_lots, int(risk_per_trade / (premium_sl_estimate * lot_size))))
     sig.lots = lots
     sig.qty = lots * lot_size
 
@@ -324,7 +350,7 @@ def generate_signal(
         sig.target_price = round(spot - sl_points, 2)
 
     sig.has_signal = True
-    sig.reason = f"VWAP crossover {direction} — candle closed {'above' if direction == 'BULLISH' else 'below'} VWAP"
+    sig.reason = f"VWAP + SuperTrend confluence {direction} — candle closed {'above' if direction == 'BULLISH' else 'below'} VWAP, SuperTrend confirms"
 
     # Build deploy payload
     risk_params = {
