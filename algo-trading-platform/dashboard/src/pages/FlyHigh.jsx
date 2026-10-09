@@ -265,7 +265,7 @@ export default function FlyHigh() {
               </thead>
               <tbody>
                 {missedData.signals.map((ms, i) => (
-                  <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20">
+                  <tr key={i} className={`border-b border-slate-800/30 hover:bg-slate-800/20 ${ms.blocked ? 'opacity-60' : ''}`}>
                     <td className="py-2 px-2 font-mono text-slate-300">{ms.time}</td>
                     <td className={`py-2 px-2 font-bold ${ms.direction === 'BULLISH' ? 'text-profit' : 'text-loss'}`}>
                       {ms.direction === 'BULLISH' ? '▲ BULL' : '▼ BEAR'}
@@ -273,14 +273,15 @@ export default function FlyHigh() {
                     <td className="py-2 px-2 text-slate-300 font-mono">{ms.strike} {ms.option_type}</td>
                     <td className="py-2 px-2 text-right text-slate-400 font-mono">{ms.spot_at_signal?.toLocaleString('en-IN')}</td>
                     <td className="py-2 px-2 text-right text-slate-300 font-mono">{ms.current_spot?.toLocaleString('en-IN')}</td>
-                    <td className={`py-2 px-2 text-right font-mono ${ms.spot_drift_pct < 0.5 ? 'text-profit' : ms.spot_drift_pct < 1.5 ? 'text-yellow-400' : 'text-loss'}`}>
-                      {ms.spot_drift_pct?.toFixed(1)}%
+                    <td className={`py-2 px-2 text-right font-mono ${ms.blocked ? 'text-slate-500' : ms.spot_drift_pct < 0.5 ? 'text-profit' : ms.spot_drift_pct < 1.5 ? 'text-yellow-400' : 'text-loss'}`}>
+                      {ms.blocked ? '—' : `${ms.spot_drift_pct?.toFixed(1)}%`}
                     </td>
                     <td className="py-2 px-2 text-right text-slate-300 font-mono">
-                      {ms.current_premium > 0 ? `₹${ms.current_premium.toFixed(2)}` : '—'}
+                      {ms.blocked ? '—' : ms.current_premium > 0 ? `₹${ms.current_premium.toFixed(2)}` : '—'}
                     </td>
                     <td className="py-2 px-2">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        ms.blocked ? 'bg-red-500/15 text-red-400' :
                         ms.is_valid ? 'bg-profit/15 text-profit' :
                         ms.already_deployed ? 'bg-blue-500/15 text-blue-400' :
                         'bg-slate-700/40 text-slate-400'
@@ -289,7 +290,7 @@ export default function FlyHigh() {
                       </span>
                     </td>
                     <td className="py-2 px-2 text-center">
-                      {ms.is_valid && (
+                      {ms.is_valid && !ms.blocked && (
                         <button
                           onClick={() => lateEntryMut.mutate({
                             symbol: underlying,
@@ -305,6 +306,9 @@ export default function FlyHigh() {
                       )}
                       {ms.already_deployed && (
                         <span className="text-[10px] text-blue-400">Deployed</span>
+                      )}
+                      {ms.blocked && (
+                        <span className="text-[10px] text-red-400/60">Filtered</span>
                       )}
                     </td>
                   </tr>

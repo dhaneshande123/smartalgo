@@ -387,6 +387,20 @@ def generate_signal(
     return sig
 
 
+def _parse_candle_ist(candle: dict) -> Optional[datetime]:
+    """Parse a candle's timestamp and return it in IST."""
+    ts_str = candle.get("timestamp") or candle.get("ts") or candle.get("date", "")
+    try:
+        if isinstance(ts_str, (int, float)):
+            return datetime.fromtimestamp(ts_str, tz=IST)
+        elif isinstance(ts_str, str) and ts_str:
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            return dt.astimezone(IST) if dt.tzinfo else dt.replace(tzinfo=IST)
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 def scan_missed_signals(
     symbol: str,
     intraday_candles: list[dict],
@@ -397,7 +411,7 @@ def scan_missed_signals(
     Returns a list of missed signals with their timestamps and details.
     Does NOT need chain data — just identifies signal times and directions.
     """
-    if len(intraday_candles) < 15:
+    if len(intraday_candles) < 3:
         return []
 
     entry_start = dtime.fromisoformat(cfg.get("entry_start", "09:20"))
@@ -406,61 +420,78 @@ def scan_missed_signals(
     st_period = cfg.get("supertrend_period", 10)
     st_mult = cfg.get("supertrend_multiplier", 3.0)
 
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+
+    # Filter to today's candles only, but keep yesterday's for indicator warmup
+    today_start_idx = 0
+    for idx, c in enumerate(intraday_candles):
+        dt = _parse_candle_ist(c)
+        if dt and dt.strftime("%Y-%m-%d") == today_str:
+            today_start_idx = idx
+            break
+
+    # Need at least 3 today candles for crossover detection
+    today_count = len(intraday_candles) - today_start_idx
+    if today_count < 3:
+        return []
+
     signals = []
 
-    for i in range(15, len(intraday_candles)):
-        window = intraday_candles[:i + 1]
-        candle = window[-2]
-        ts_str = candle.get("timestamp") or candle.get("ts") or candle.get("date", "")
-        try:
-            if isinstance(ts_str, (int, float)):
-                from datetime import timezone
-                candle_dt = datetime.fromtimestamp(ts_str, tz=IST)
-            elif isinstance(ts_str, str) and ts_str:
-                candle_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                if candle_dt.tzinfo is None:
-                    candle_dt = candle_dt.replace(tzinfo=IST)
-            else:
-                continue
-        except (ValueError, TypeError):
+    # Iterate over today's candles; use ALL prior candles as indicator warmup
+    for i in range(max(today_start_idx + 2, 3), len(intraday_candles)):
+        candle = intraday_candles[i - 1]  # the "just closed" candle ([-2] in the window)
+        candle_dt = _parse_candle_ist(candle)
+        if not candle_dt or candle_dt.strftime("%Y-%m-%d") != today_str:
             continue
 
         candle_t = candle_dt.time()
         if candle_t < entry_start or candle_t > entry_cutoff:
             continue
 
-        vwap_series = compute_vwap_series(window)
+        # Use all candles up to index i as the window (includes yesterday for warmup)
+        window = intraday_candles[:i + 1]
+
+        # Compute VWAP only on today's candles (VWAP resets daily)
+        today_window = [c for c in window if _parse_candle_ist(c) and _parse_candle_ist(c).strftime("%Y-%m-%d") == today_str]
+        if len(today_window) < 3:
+            continue
+
+        vwap_series = compute_vwap_series(today_window)
         if len(vwap_series) < 3:
             continue
 
-        cross = detect_crossover(window, vwap_series)
+        cross = detect_crossover(today_window, vwap_series)
         if not cross.get("crossed"):
             continue
 
+        # ADX and SuperTrend use the full window (need history for accuracy)
         highs = [float(c.get("high", 0)) for c in window]
         lows = [float(c.get("low", 0)) for c in window]
         closes = [float(c.get("close", 0)) for c in window]
 
         adx_result = ind.adx(highs, lows, closes, period=14)
         adx_val = adx_result.get("adx", 0) if adx_result else 0
-        if adx_val < adx_min:
-            continue
 
         st_result = ind.supertrend(highs, lows, closes, period=st_period, multiplier=st_mult)
         st_dir = st_result.get("direction", "") if st_result else ""
 
         vwap_dir = cross["direction"]
-        if vwap_dir == "BULLISH" and st_dir != "UP":
-            continue
-        if vwap_dir == "BEARISH" and st_dir != "DOWN":
-            continue
-
         spot_at_signal = float(candle.get("close", 0))
         sl_price = cross["curr_candle_low"] if vwap_dir == "BULLISH" else cross["curr_candle_high"]
         sl_points = abs(spot_at_signal - sl_price)
         max_sl = cfg.get("max_sl_points", 30)
-        if sl_points > max_sl or sl_points <= 0:
-            continue
+
+        blocked_reason = None
+        if adx_val < adx_min:
+            blocked_reason = f"ADX {adx_val:.1f} < {adx_min}"
+        elif vwap_dir == "BULLISH" and st_dir != "UP":
+            blocked_reason = f"SuperTrend {st_dir} ≠ UP (no confluence)"
+        elif vwap_dir == "BEARISH" and st_dir != "DOWN":
+            blocked_reason = f"SuperTrend {st_dir} ≠ DOWN (no confluence)"
+        elif sl_points > max_sl:
+            blocked_reason = f"SL {sl_points:.1f}pts > {max_sl}pt cap"
+        elif sl_points <= 0:
+            blocked_reason = "SL width zero"
 
         signals.append({
             "time": candle_dt.strftime("%H:%M"),
@@ -473,6 +504,8 @@ def scan_missed_signals(
             "sl_price": round(sl_price, 2),
             "sl_points": round(sl_points, 2),
             "option_type": "CE" if vwap_dir == "BULLISH" else "PE",
+            "blocked": blocked_reason is not None,
+            "blocked_reason": blocked_reason,
         })
 
     return signals

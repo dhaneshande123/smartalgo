@@ -3110,7 +3110,14 @@ async def flyhigh_missed_signals(symbol: str = "NIFTY"):
         )
         within_window = now_t <= entry_cutoff
 
-        is_valid = st_still_valid and drift_pct < 1.5 and within_window and not already_deployed
+        # Blocked signals (failed a gate) are shown for info but not actionable
+        is_blocked = sig.get("blocked", False)
+        blocked_reason = sig.get("blocked_reason", "")
+
+        is_valid = (
+            not is_blocked and st_still_valid and drift_pct < 1.5
+            and within_window and not already_deployed
+        )
 
         # Try to get current premium from chain
         current_premium = 0.0
@@ -3133,6 +3140,7 @@ async def flyhigh_missed_signals(symbol: str = "NIFTY"):
             "already_deployed": already_deployed,
             "is_valid": is_valid,
             "validity_reason": (
+                f"blocked: {blocked_reason}" if is_blocked else
                 "already deployed" if already_deployed else
                 "SuperTrend flipped" if not st_still_valid else
                 f"spot drifted {drift_pct:.1f}%" if drift_pct >= 1.5 else
