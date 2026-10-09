@@ -2,7 +2,7 @@
 Fly-High Strategy Engine — VWAP Crossover + SuperTrend Confluence on 5-minute candles.
 
 Entry: 5-min candle crosses VWAP AND SuperTrend direction confirms (confluence filter)
-Gate:  ADX >= 10, skip first candle (9:15-9:20), max 2 trades/day, no entry after 14:30
+Gate:  ADX >= 10, skip first candle (9:15-9:20), max 2 trades/day, no entry after 15:15
 Strike: 1-ITM (higher delta, lower theta drag than ATM)
 SL:    Previous candle low (BUY) / high (SELL), capped at max_sl_points
 Exit:  Book 50% at 1:1 R:R, trail rest, max hold 45 min, EOD 15:15
@@ -36,7 +36,7 @@ DEFAULT_CONFIG = {
     "max_lots": 10,
     "max_trades_per_day": 2,
     "entry_start": "09:20",
-    "entry_cutoff": "14:30",
+    "entry_cutoff": "15:15",
     "max_hold_minutes": 45,
     "supertrend_period": 10,
     "supertrend_multiplier": 3.0,
@@ -385,6 +385,97 @@ def generate_signal(
     }
 
     return sig
+
+
+def scan_missed_signals(
+    symbol: str,
+    intraday_candles: list[dict],
+    cfg: dict,
+) -> list[dict]:
+    """Replay today's candles and find all VWAP+SuperTrend crossover signals.
+
+    Returns a list of missed signals with their timestamps and details.
+    Does NOT need chain data — just identifies signal times and directions.
+    """
+    if len(intraday_candles) < 15:
+        return []
+
+    entry_start = dtime.fromisoformat(cfg.get("entry_start", "09:20"))
+    entry_cutoff = dtime.fromisoformat(cfg.get("entry_cutoff", "15:15"))
+    adx_min = cfg.get("adx_min", 10)
+    st_period = cfg.get("supertrend_period", 10)
+    st_mult = cfg.get("supertrend_multiplier", 3.0)
+
+    signals = []
+
+    for i in range(15, len(intraday_candles)):
+        window = intraday_candles[:i + 1]
+        candle = window[-2]
+        ts_str = candle.get("timestamp") or candle.get("ts") or candle.get("date", "")
+        try:
+            if isinstance(ts_str, (int, float)):
+                from datetime import timezone
+                candle_dt = datetime.fromtimestamp(ts_str, tz=IST)
+            elif isinstance(ts_str, str) and ts_str:
+                candle_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if candle_dt.tzinfo is None:
+                    candle_dt = candle_dt.replace(tzinfo=IST)
+            else:
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        candle_t = candle_dt.time()
+        if candle_t < entry_start or candle_t > entry_cutoff:
+            continue
+
+        vwap_series = compute_vwap_series(window)
+        if len(vwap_series) < 3:
+            continue
+
+        cross = detect_crossover(window, vwap_series)
+        if not cross.get("crossed"):
+            continue
+
+        highs = [float(c.get("high", 0)) for c in window]
+        lows = [float(c.get("low", 0)) for c in window]
+        closes = [float(c.get("close", 0)) for c in window]
+
+        adx_result = ind.adx(highs, lows, closes, period=14)
+        adx_val = adx_result.get("adx", 0) if adx_result else 0
+        if adx_val < adx_min:
+            continue
+
+        st_result = ind.supertrend(highs, lows, closes, period=st_period, multiplier=st_mult)
+        st_dir = st_result.get("direction", "") if st_result else ""
+
+        vwap_dir = cross["direction"]
+        if vwap_dir == "BULLISH" and st_dir != "UP":
+            continue
+        if vwap_dir == "BEARISH" and st_dir != "DOWN":
+            continue
+
+        spot_at_signal = float(candle.get("close", 0))
+        sl_price = cross["curr_candle_low"] if vwap_dir == "BULLISH" else cross["curr_candle_high"]
+        sl_points = abs(spot_at_signal - sl_price)
+        max_sl = cfg.get("max_sl_points", 30)
+        if sl_points > max_sl or sl_points <= 0:
+            continue
+
+        signals.append({
+            "time": candle_dt.strftime("%H:%M"),
+            "timestamp": candle_dt.isoformat(),
+            "direction": vwap_dir,
+            "spot_at_signal": round(spot_at_signal, 2),
+            "vwap_at_signal": round(vwap_series[-2], 2),
+            "adx": round(adx_val, 1),
+            "supertrend_dir": st_dir,
+            "sl_price": round(sl_price, 2),
+            "sl_points": round(sl_points, 2),
+            "option_type": "CE" if vwap_dir == "BULLISH" else "PE",
+        })
+
+    return signals
 
 
 def _build_fyers_option_symbol(symbol: str, strike: int, opt_type: str) -> str:

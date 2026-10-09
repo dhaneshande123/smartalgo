@@ -50,6 +50,9 @@ export const setFlyHighConfig = (patch) => api.post('/flyhigh/config', patch);
 export const deployFlyHigh = (symbol = 'NIFTY') =>
   api.post('/flyhigh/deploy', { symbol });
 export const getFlyHighPerformance = () => api.get('/flyhigh/performance');
+export const getFlyHighMissedSignals = (symbol = 'NIFTY') =>
+  api.get(`/flyhigh/missed-signals/${symbol}`);
+export const flyHighLateEntry = (payload) => api.post('/flyhigh/late-entry', payload);
 
 // Greeks & IV
 export const getIVSurface = (symbol = 'NIFTY') =>

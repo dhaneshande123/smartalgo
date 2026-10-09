@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Rocket, TrendingUp, TrendingDown, Gauge, Clock, AlertTriangle,
   Shield, Target, Activity, ChevronDown, ChevronUp, Zap, BarChart3,
+  History, Play,
 } from 'lucide-react';
 import { useUnderlying } from '../context/UnderlyingContext';
 import {
   useFlyHighSignal, useFlyHighConfig, useFlyHighPerformance,
   useSetFlyHighConfig, useDeployFlyHigh, useFlyHighTicker,
+  useFlyHighMissedSignals, useFlyHighLateEntry,
 } from '../hooks/useApi';
 
 function StatCard({ label, value, sub, icon: Icon, color = 'text-slate-300' }) {
@@ -30,6 +32,8 @@ export default function FlyHigh() {
   const { data: ticker } = useFlyHighTicker(underlying);
   const deployMut = useDeployFlyHigh();
   const configMut = useSetFlyHighConfig();
+  const { data: missedData } = useFlyHighMissedSignals(underlying);
+  const lateEntryMut = useFlyHighLateEntry();
   const [showConfig, setShowConfig] = useState(false);
   const [localCfg, setLocalCfg] = useState({});
   const debounceRef = useRef(null);
@@ -115,7 +119,7 @@ export default function FlyHigh() {
           <Zap className="w-4 h-4 text-profit flex-shrink-0 mt-0.5" />
           <div className="text-xs text-slate-300">
             <span className="font-bold text-profit">Hands-free auto-deploy is ON</span> for {underlying}. Fly-High
-            will deploy automatically when a valid VWAP + SuperTrend confluence signal forms — within {cfg?.entry_start ?? '09:20'}–{cfg?.entry_cutoff ?? '14:30'},
+            will deploy automatically when a valid VWAP + SuperTrend confluence signal forms — within {cfg?.entry_start ?? '09:20'}–{cfg?.entry_cutoff ?? '15:15'},
             max {maxTrades} trades/day, one position per underlying. Paper mode.
           </div>
         </div>
@@ -236,6 +240,87 @@ export default function FlyHigh() {
         </div>
       )}
 
+      {/* ── Missed Signals (Late Entry) ── */}
+      {missedData?.signals?.length > 0 && (
+        <div className="glass-card !rounded-2xl !p-4 border border-yellow-500/30">
+          <h3 className="text-sm font-semibold text-yellow-400 mb-3 flex items-center gap-2">
+            <History className="w-4 h-4" />
+            Missed Signals Today
+            <span className="text-xs text-slate-500 font-normal ml-auto">Signals that fired while you were offline</span>
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-slate-500 border-b border-slate-700/50">
+                  <th className="text-left py-1.5 px-2 font-medium">Time</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Direction</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Strike</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Spot Then</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Spot Now</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Drift</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Premium Now</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Status</th>
+                  <th className="text-center py-1.5 px-2 font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {missedData.signals.map((ms, i) => (
+                  <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20">
+                    <td className="py-2 px-2 font-mono text-slate-300">{ms.time}</td>
+                    <td className={`py-2 px-2 font-bold ${ms.direction === 'BULLISH' ? 'text-profit' : 'text-loss'}`}>
+                      {ms.direction === 'BULLISH' ? '▲ BULL' : '▼ BEAR'}
+                    </td>
+                    <td className="py-2 px-2 text-slate-300 font-mono">{ms.strike} {ms.option_type}</td>
+                    <td className="py-2 px-2 text-right text-slate-400 font-mono">{ms.spot_at_signal?.toLocaleString('en-IN')}</td>
+                    <td className="py-2 px-2 text-right text-slate-300 font-mono">{ms.current_spot?.toLocaleString('en-IN')}</td>
+                    <td className={`py-2 px-2 text-right font-mono ${ms.spot_drift_pct < 0.5 ? 'text-profit' : ms.spot_drift_pct < 1.5 ? 'text-yellow-400' : 'text-loss'}`}>
+                      {ms.spot_drift_pct?.toFixed(1)}%
+                    </td>
+                    <td className="py-2 px-2 text-right text-slate-300 font-mono">
+                      {ms.current_premium > 0 ? `₹${ms.current_premium.toFixed(2)}` : '—'}
+                    </td>
+                    <td className="py-2 px-2">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        ms.is_valid ? 'bg-profit/15 text-profit' :
+                        ms.already_deployed ? 'bg-blue-500/15 text-blue-400' :
+                        'bg-slate-700/40 text-slate-400'
+                      }`}>
+                        {ms.validity_reason}
+                      </span>
+                    </td>
+                    <td className="py-2 px-2 text-center">
+                      {ms.is_valid && (
+                        <button
+                          onClick={() => lateEntryMut.mutate({
+                            symbol: underlying,
+                            direction: ms.direction,
+                            strike: ms.strike,
+                          })}
+                          disabled={lateEntryMut.isLoading}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-accent/20 text-accent hover:bg-accent/30 text-[11px] font-bold transition-colors disabled:opacity-50"
+                        >
+                          <Play className="w-3 h-3" />
+                          Enter Now
+                        </button>
+                      )}
+                      {ms.already_deployed && (
+                        <span className="text-[10px] text-blue-400">Deployed</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {lateEntryMut.isSuccess && (
+            <div className="mt-2 text-xs text-profit font-bold">Late entry deployed successfully!</div>
+          )}
+          {lateEntryMut.isError && (
+            <div className="mt-2 text-xs text-loss">{lateEntryMut.error?.response?.data?.detail || 'Late entry failed'}</div>
+          )}
+        </div>
+      )}
+
       {/* ── Crossover Detail + Stats ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Crossover info */}
@@ -347,7 +432,7 @@ export default function FlyHigh() {
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Window</div>
-            <div className="font-medium">{cfg?.entry_start ?? '09:20'} – {cfg?.entry_cutoff ?? '14:30'}</div>
+            <div className="font-medium">{cfg?.entry_start ?? '09:20'} – {cfg?.entry_cutoff ?? '15:15'}</div>
           </div>
         </div>
 

@@ -68,6 +68,22 @@ export const useDeployFlyHigh = () => {
       qc.invalidateQueries({ queryKey: ['paperStrategies'] });
       qc.invalidateQueries({ queryKey: ['flyhighPerformance'] });
       qc.invalidateQueries({ queryKey: ['flyhighSignal'] });
+      qc.invalidateQueries({ queryKey: ['flyhighMissed'] });
+    },
+  });
+};
+export const useFlyHighMissedSignals = (symbol = 'NIFTY') =>
+  useQuery({ queryKey: ['flyhighMissed', symbol], queryFn: () => api.getFlyHighMissedSignals(symbol), refetchInterval: 30000 });
+export const useFlyHighLateEntry = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload) => api.flyHighLateEntry(payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
+      qc.invalidateQueries({ queryKey: ['paperStrategies'] });
+      qc.invalidateQueries({ queryKey: ['flyhighPerformance'] });
+      qc.invalidateQueries({ queryKey: ['flyhighSignal'] });
+      qc.invalidateQueries({ queryKey: ['flyhighMissed'] });
     },
   });
 };

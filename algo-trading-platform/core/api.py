@@ -3032,6 +3032,238 @@ async def flyhigh_deploy(body: dict = Body(...)):
     return {"ok": True, "signal": sig.to_dict(), "deploy": result}
 
 
+@app.get(
+    "/api/flyhigh/missed-signals/{symbol}",
+    tags=["Fly-High"],
+    summary="Scan today's candles for missed Fly-High signals",
+)
+async def flyhigh_missed_signals(symbol: str = "NIFTY"):
+    from core import vwap_engine as ve
+    from core import indicators as ind
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+    from datetime import time as dtime
+
+    symbol = symbol.upper()
+    cfg = ve.get_config()
+    strike_step = STRIKE_STEPS.get(symbol, 50)
+
+    chain_data, _daily, intraday_candles = await _scalper_fetch_market(symbol)
+    if not intraday_candles or len(intraday_candles) < 15:
+        return {"signals": [], "reason": "insufficient candle data"}
+
+    raw_signals = ve.scan_missed_signals(symbol, intraday_candles, cfg)
+    if not raw_signals:
+        return {"signals": [], "reason": "no missed signals today"}
+
+    spot = float((chain_data or {}).get("spot_price", 0) or 0)
+    if _live_feed:
+        try:
+            tick = _live_feed.get_cached_tick(symbol)
+            live_ltp = float((tick or {}).get("ltp", 0) or 0)
+            if live_ltp > 0 and _live_feed.last_tick_age_seconds < 60:
+                spot = live_ltp
+        except Exception:
+            pass
+
+    # Current SuperTrend direction for validity check
+    highs = [float(c.get("high", 0)) for c in intraday_candles]
+    lows = [float(c.get("low", 0)) for c in intraday_candles]
+    closes = [float(c.get("close", 0)) for c in intraday_candles]
+    st_result = ind.supertrend(
+        highs, lows, closes,
+        period=cfg.get("supertrend_period", 10),
+        multiplier=cfg.get("supertrend_multiplier", 3.0),
+    )
+    current_st_dir = st_result.get("direction", "") if st_result else ""
+
+    # Check which signals were already deployed today
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    deployed_times = set()
+    for s in _deployed_strategies.values():
+        rp = s.get("risk_params") or {}
+        if rp.get("strategy_type") == "flyhigh_vwap" and s.get("deployed_at", "")[:10] == today_str:
+            deployed_times.add(s.get("deployed_at", "")[:16])
+
+    now_t = datetime.now(IST).time()
+    entry_cutoff = dtime.fromisoformat(cfg.get("entry_cutoff", "15:15"))
+
+    enriched = []
+    for sig in raw_signals:
+        opt_type = sig["option_type"]
+        direction = sig["direction"]
+        sig_spot = sig["spot_at_signal"]
+        atm = round(sig_spot / strike_step) * strike_step
+        itm_strike = (atm - strike_step) if direction == "BULLISH" else (atm + strike_step)
+
+        # Check if this signal was already deployed
+        already_deployed = any(
+            sig["timestamp"][:16] in dt_str or sig["time"] in dt_str
+            for dt_str in deployed_times
+        )
+
+        # Validity: ST must still agree, spot drift < 1%, within entry window
+        drift_pct = abs(spot - sig_spot) / sig_spot * 100 if sig_spot > 0 else 999
+        st_still_valid = (
+            (direction == "BULLISH" and current_st_dir == "UP") or
+            (direction == "BEARISH" and current_st_dir == "DOWN")
+        )
+        within_window = now_t <= entry_cutoff
+
+        is_valid = st_still_valid and drift_pct < 1.5 and within_window and not already_deployed
+
+        # Try to get current premium from chain
+        current_premium = 0.0
+        if chain_data and chain_data.get("chain"):
+            rows = ve.normalize_chain_rows(chain_data["chain"])
+            row = rows.get(itm_strike) or rows.get(atm)
+            if row:
+                side = "call" if opt_type == "CE" else "put"
+                current_premium = float(row.get(f"{side}_ltp", 0) or 0)
+
+        enriched.append({
+            **sig,
+            "strike": itm_strike,
+            "current_spot": round(spot, 2),
+            "current_premium": round(current_premium, 2),
+            "spot_drift_pct": round(drift_pct, 2),
+            "current_st_dir": current_st_dir,
+            "st_still_valid": st_still_valid,
+            "within_window": within_window,
+            "already_deployed": already_deployed,
+            "is_valid": is_valid,
+            "validity_reason": (
+                "already deployed" if already_deployed else
+                "SuperTrend flipped" if not st_still_valid else
+                f"spot drifted {drift_pct:.1f}%" if drift_pct >= 1.5 else
+                "past entry cutoff" if not within_window else
+                "valid for late entry"
+            ),
+        })
+
+    return {"signals": enriched, "current_spot": round(spot, 2), "current_st_dir": current_st_dir}
+
+
+@app.post(
+    "/api/flyhigh/late-entry",
+    tags=["Fly-High"],
+    summary="Enter a missed Fly-High trade at current market price",
+)
+async def flyhigh_late_entry(body: dict = Body(...)):
+    from core import vwap_engine as ve
+    from core import symbol_master
+    from core.fyers_live_feed import STRIKE_STEPS
+
+    symbol = (body.get("symbol") or "NIFTY").upper()
+    direction = body.get("direction", "").upper()
+    strike = int(body.get("strike", 0))
+
+    if direction not in ("BULLISH", "BEARISH"):
+        raise HTTPException(status_code=400, detail="direction must be BULLISH or BEARISH")
+    if strike <= 0:
+        raise HTTPException(status_code=400, detail="invalid strike")
+
+    cfg = ve.get_config()
+    strike_step = STRIKE_STEPS.get(symbol, 50)
+    lot_size = symbol_master.get_lot_size(symbol) or 1
+
+    chain_data, _daily, intraday_candles = await _scalper_fetch_market(symbol)
+    if not chain_data or not (chain_data.get("chain") or chain_data.get("contracts")):
+        raise HTTPException(status_code=409, detail="No option chain data available")
+
+    spot = float(chain_data.get("spot_price", 0) or 0)
+    if _live_feed:
+        try:
+            tick = _live_feed.get_cached_tick(symbol)
+            live_ltp = float((tick or {}).get("ltp", 0) or 0)
+            if live_ltp > 0 and _live_feed.last_tick_age_seconds < 60:
+                spot = live_ltp
+        except Exception:
+            pass
+
+    opt_type = "CE" if direction == "BULLISH" else "PE"
+    rows = ve.normalize_chain_rows(chain_data.get("chain", []))
+    row = rows.get(strike)
+    if not row:
+        raise HTTPException(status_code=409, detail=f"Strike {strike} not in chain")
+
+    side = "call" if opt_type == "CE" else "put"
+    premium = float(row.get(f"{side}_ltp", 0) or 0)
+    if premium <= 0:
+        raise HTTPException(status_code=409, detail=f"No premium available for {strike}{opt_type}")
+
+    # Fresh SL from most recent candle
+    if len(intraday_candles) >= 2:
+        last_candle = intraday_candles[-2]
+        if direction == "BULLISH":
+            sl_price = float(last_candle.get("low", 0))
+            sl_points = spot - sl_price
+        else:
+            sl_price = float(last_candle.get("high", 0))
+            sl_points = sl_price - spot
+    else:
+        max_sl = cfg.get("max_sl_points", 30)
+        sl_points = max_sl
+        sl_price = (spot - max_sl) if direction == "BULLISH" else (spot + max_sl)
+
+    max_sl = cfg.get("max_sl_points", 30)
+    sl_points = min(sl_points, max_sl)
+    if sl_points <= 0:
+        sl_points = max_sl
+        sl_price = (spot - max_sl) if direction == "BULLISH" else (spot + max_sl)
+
+    risk_per_trade = cfg.get("risk_per_trade", 2000)
+    max_lots = cfg.get("max_lots", 10)
+    premium_sl_estimate = premium * (sl_points / spot) * 2
+    if premium_sl_estimate <= 0:
+        premium_sl_estimate = premium * 0.20
+    lots = max(1, min(max_lots, int(risk_per_trade / (premium_sl_estimate * lot_size))))
+
+    atm = round(spot / strike_step) * strike_step
+    deploy_payload = {
+        "name": f"FlyHigh Late {direction[:4]} {symbol} {strike}{opt_type}",
+        "strategy_type": "flyhigh_vwap",
+        "underlying": symbol,
+        "mode": "paper",
+        "lot_size": lot_size,
+        "legs": [{
+            "type": opt_type,
+            "action": "BUY",
+            "lots": lots,
+            "offset": strike - atm,
+            "premium": premium,
+        }],
+        "risk_params": {
+            "stop_loss_price": round(sl_price, 2),
+            "stop_loss_points": round(sl_points, 2),
+            "book_partial_pct": cfg.get("book_partial_pct", 50),
+            "trail_giveback_pct": cfg.get("trail_giveback_pct", 30),
+            "premium_floor_pct": cfg.get("premium_floor_pct", -35),
+            "max_hold_minutes": cfg.get("max_hold_minutes", 45),
+            "strategy_type": "flyhigh_vwap",
+        },
+        "entry_conditions": [],
+        "ai_deployed": True,
+        "spot_price": spot,
+    }
+
+    result = await deploy_strategy(deploy_payload)
+    return {
+        "ok": True,
+        "deploy": result,
+        "entry_details": {
+            "direction": direction,
+            "strike": strike,
+            "option_type": opt_type,
+            "premium": round(premium, 2),
+            "sl_price": round(sl_price, 2),
+            "sl_points": round(sl_points, 2),
+            "lots": lots,
+            "spot": round(spot, 2),
+        },
+    }
+
+
 @app.get("/api/flyhigh/performance", tags=["Fly-High"], summary="Fly-High performance stats")
 async def flyhigh_performance():
     from core import vwap_engine as ve
