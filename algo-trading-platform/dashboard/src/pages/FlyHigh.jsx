@@ -201,7 +201,7 @@ export default function FlyHigh() {
                     {direction} — {sig?.option_type} {sig?.strike}
                   </div>
                   <div className="text-xs text-slate-400">
-                    SL: {sig?.sl_points?.toFixed(1)} pts | Target: 1:1 R:R | Premium: ₹{sig?.premium?.toFixed(1)}
+                    SL: ₹{sig?.sl_premium?.toFixed(1) || '—'} ({sig?.option_type}) | Target: 1:1 R:R | Entry: ₹{sig?.premium?.toFixed(1)}
                   </div>
                 </div>
               </div>
@@ -354,11 +354,17 @@ export default function FlyHigh() {
                 <span className="font-mono">{crossInfo.prev_close?.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">SL Level (prev candle {crossInfo.direction === 'BULLISH' ? 'low' : 'high'})</span>
-                <span className="font-mono text-loss">
+                <span className="text-slate-400">Spot SL (prev candle {crossInfo.direction === 'BULLISH' ? 'low' : 'high'})</span>
+                <span className="font-mono text-slate-400">
                   {crossInfo.direction === 'BULLISH' ? crossInfo.curr_candle_low?.toFixed(2) : crossInfo.curr_candle_high?.toFixed(2)}
                 </span>
               </div>
+              {sig?.sl_premium > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Option SL ({sig?.option_type})</span>
+                  <span className="font-mono text-loss font-bold">₹{sig?.sl_premium?.toFixed(2)}</span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-slate-500 text-center py-6">
@@ -420,7 +426,7 @@ export default function FlyHigh() {
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">SL</div>
-            <div className="font-medium">Prev candle low/high (max {cfg?.max_sl_points ?? 30}pts)</div>
+            <div className="font-medium">Option premium at prev candle low/high</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Target</div>
@@ -446,7 +452,6 @@ export default function FlyHigh() {
               { key: 'risk_per_trade', label: 'Risk/Trade (₹)', type: 'number' },
               { key: 'adx_min', label: 'Min ADX', type: 'number' },
               { key: 'max_lots', label: 'Max Lots', type: 'number' },
-              { key: 'max_sl_points', label: 'Max SL Points', type: 'number' },
               { key: 'max_trades_per_day', label: 'Max Trades/Day', type: 'number' },
               { key: 'supertrend_period', label: 'SuperTrend Period', type: 'number' },
               { key: 'supertrend_multiplier', label: 'SuperTrend Mult', type: 'number' },

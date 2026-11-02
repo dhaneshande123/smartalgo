@@ -3200,7 +3200,7 @@ async def flyhigh_late_entry(body: dict = Body(...)):
     if premium <= 0:
         raise HTTPException(status_code=409, detail=f"No premium available for {strike}{opt_type}")
 
-    # Fresh SL from most recent candle
+    # Fresh SL from most recent candle (no cap — always use prev candle low/high)
     if len(intraday_candles) >= 2:
         last_candle = intraday_candles[-2]
         if direction == "BULLISH":
@@ -3210,22 +3210,23 @@ async def flyhigh_late_entry(body: dict = Body(...)):
             sl_price = float(last_candle.get("high", 0))
             sl_points = sl_price - spot
     else:
-        max_sl = cfg.get("max_sl_points", 30)
-        sl_points = max_sl
-        sl_price = (spot - max_sl) if direction == "BULLISH" else (spot + max_sl)
+        sl_points = spot * 0.005
+        sl_price = (spot - sl_points) if direction == "BULLISH" else (spot + sl_points)
 
-    max_sl = cfg.get("max_sl_points", 30)
-    sl_points = min(sl_points, max_sl)
     if sl_points <= 0:
-        sl_points = max_sl
-        sl_price = (spot - max_sl) if direction == "BULLISH" else (spot + max_sl)
+        sl_points = spot * 0.005
+        sl_price = (spot - sl_points) if direction == "BULLISH" else (spot + sl_points)
+
+    # Premium-based SL using delta ~0.65 for 1-ITM
+    delta_est = 0.65
+    premium_sl = max(1.0, premium - delta_est * sl_points)
 
     risk_per_trade = cfg.get("risk_per_trade", 2000)
     max_lots = cfg.get("max_lots", 10)
-    premium_sl_estimate = premium * (sl_points / spot) * 2
-    if premium_sl_estimate <= 0:
-        premium_sl_estimate = premium * 0.20
-    lots = max(1, min(max_lots, int(risk_per_trade / (premium_sl_estimate * lot_size))))
+    premium_risk = premium - premium_sl
+    if premium_risk <= 0:
+        premium_risk = premium * 0.20
+    lots = max(1, min(max_lots, int(risk_per_trade / (premium_risk * lot_size))))
 
     atm = round(spot / strike_step) * strike_step
     deploy_payload = {
@@ -3242,8 +3243,8 @@ async def flyhigh_late_entry(body: dict = Body(...)):
             "premium": premium,
         }],
         "risk_params": {
-            "stop_loss_price": round(sl_price, 2),
-            "stop_loss_points": round(sl_points, 2),
+            "premium_sl": round(premium_sl, 2),
+            "sl_spot_ref": round(sl_price, 2),
             "book_partial_pct": cfg.get("book_partial_pct", 50),
             "trail_giveback_pct": cfg.get("trail_giveback_pct", 30),
             "premium_floor_pct": cfg.get("premium_floor_pct", -35),
@@ -3264,8 +3265,8 @@ async def flyhigh_late_entry(body: dict = Body(...)):
             "strike": strike,
             "option_type": opt_type,
             "premium": round(premium, 2),
-            "sl_price": round(sl_price, 2),
-            "sl_points": round(sl_points, 2),
+            "premium_sl": round(premium_sl, 2),
+            "sl_spot_ref": round(sl_price, 2),
             "lots": lots,
             "spot": round(spot, 2),
         },

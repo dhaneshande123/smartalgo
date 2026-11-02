@@ -637,6 +637,11 @@ class DashboardStrategyExecutor:
         if now_t >= SQUARE_OFF_TIME:
             return "eod_square_off"
 
+        # ── Premium SL: option premium hit the SL level (Fly-High) ──
+        premium_sl = float(risk.get("premium_sl", 0) or 0)
+        if premium_sl > 0 and ltp <= premium_sl:
+            return f"premium_sl_stop (₹{ltp:.1f} <= SL ₹{premium_sl:.1f})"
+
         # ── Structural stop: spot reclaims the broken level ──
         if stop_level > 0 and spot > 0:
             if direction == "BULLISH" and spot < stop_level:

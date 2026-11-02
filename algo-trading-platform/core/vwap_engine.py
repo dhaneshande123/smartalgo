@@ -4,7 +4,7 @@ Fly-High Strategy Engine — VWAP Crossover + SuperTrend Confluence on 5-minute 
 Entry: 5-min candle crosses VWAP AND SuperTrend direction confirms (confluence filter)
 Gate:  ADX >= 10, skip first candle (9:15-9:20), max 2 trades/day, no entry after 15:15
 Strike: 1-ITM (higher delta, lower theta drag than ATM)
-SL:    Previous candle low (BUY) / high (SELL), capped at max_sl_points
+SL:    Previous candle low (BUY) / high (SELL), converted to option premium level
 Exit:  Book 50% at 1:1 R:R, trail rest, max hold 45 min, EOD 15:15
 """
 
@@ -32,7 +32,6 @@ DEFAULT_CONFIG = {
     "enabled": True,
     "risk_per_trade": 2000,
     "adx_min": 10,
-    "max_sl_points": 30,
     "max_lots": 10,
     "max_trades_per_day": 2,
     "entry_start": "09:20",
@@ -80,6 +79,7 @@ class FlyHighSignal:
     qty: int = 0
     sl_price: float = 0.0
     sl_points: float = 0.0
+    sl_premium: float = 0.0
     target_price: float = 0.0
     blockers: list = field(default_factory=list)
     deploy_payload: dict = field(default_factory=dict)
@@ -300,19 +300,13 @@ def generate_signal(
     direction = cross["direction"]
     sig.direction = direction
 
-    # Compute stop loss
+    # Compute stop loss from previous candle low/high (always, no cap)
     if direction == "BULLISH":
         sl_level = cross["curr_candle_low"]
         sl_points = spot - sl_level
     else:
         sl_level = cross["curr_candle_high"]
         sl_points = sl_level - spot
-
-    max_sl = cfg.get("max_sl_points", 30)
-    if sl_points > max_sl:
-        sig.reason = f"SL too wide ({sl_points:.0f} pts > {max_sl} cap)"
-        sig.blockers = [sig.reason]
-        return sig
 
     if sl_points <= 0:
         sig.reason = "invalid SL (zero or negative distance)"
@@ -333,13 +327,18 @@ def generate_signal(
     sig.option_type = strike_info["option_type"]
     sig.premium = strike_info["premium"]
 
-    # Position sizing (risk-based, capped at max_lots)
+    # SL on option premium: estimate premium at the SL spot level using delta ~0.65 for 1-ITM
+    delta_est = 0.65
+    premium_sl_drop = delta_est * sl_points
+    sig.sl_premium = round(max(1.0, sig.premium - premium_sl_drop), 2)
+
+    # Position sizing (risk-based on premium SL distance)
     risk_per_trade = cfg.get("risk_per_trade", 2000)
     max_lots = cfg.get("max_lots", 10)
-    premium_sl_estimate = sig.premium * (sl_points / spot) * 2
-    if premium_sl_estimate <= 0:
-        premium_sl_estimate = sig.premium * 0.20
-    lots = max(1, min(max_lots, int(risk_per_trade / (premium_sl_estimate * lot_size))))
+    premium_risk = sig.premium - sig.sl_premium
+    if premium_risk <= 0:
+        premium_risk = sig.premium * 0.20
+    lots = max(1, min(max_lots, int(risk_per_trade / (premium_risk * lot_size))))
     sig.lots = lots
     sig.qty = lots * lot_size
 
@@ -352,10 +351,10 @@ def generate_signal(
     sig.has_signal = True
     sig.reason = f"VWAP + SuperTrend confluence {direction} — candle closed {'above' if direction == 'BULLISH' else 'below'} VWAP, SuperTrend confirms"
 
-    # Build deploy payload
+    # Build deploy payload — SL is on the option premium, not NIFTY spot
     risk_params = {
-        "stop_loss_price": sig.sl_price,
-        "stop_loss_points": sig.sl_points,
+        "premium_sl": sig.sl_premium,
+        "sl_spot_ref": sig.sl_price,
         "book_partial_pct": cfg.get("book_partial_pct", 50),
         "trail_giveback_pct": cfg.get("trail_giveback_pct", 30),
         "premium_floor_pct": cfg.get("premium_floor_pct", -35),
@@ -479,7 +478,6 @@ def scan_missed_signals(
         spot_at_signal = float(candle.get("close", 0))
         sl_price = cross["curr_candle_low"] if vwap_dir == "BULLISH" else cross["curr_candle_high"]
         sl_points = abs(spot_at_signal - sl_price)
-        max_sl = cfg.get("max_sl_points", 30)
 
         blocked_reason = None
         if adx_val < adx_min:
@@ -488,8 +486,6 @@ def scan_missed_signals(
             blocked_reason = f"SuperTrend {st_dir} ≠ UP (no confluence)"
         elif vwap_dir == "BEARISH" and st_dir != "DOWN":
             blocked_reason = f"SuperTrend {st_dir} ≠ DOWN (no confluence)"
-        elif sl_points > max_sl:
-            blocked_reason = f"SL {sl_points:.1f}pts > {max_sl}pt cap"
         elif sl_points <= 0:
             blocked_reason = "SL width zero"
 
