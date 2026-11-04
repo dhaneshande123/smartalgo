@@ -270,7 +270,12 @@ export default function FlyHigh() {
                     <td className={`py-2 px-2 font-bold ${ms.direction === 'BULLISH' ? 'text-profit' : 'text-loss'}`}>
                       {ms.direction === 'BULLISH' ? '▲ BULL' : '▼ BEAR'}
                     </td>
-                    <td className="py-2 px-2 text-slate-300 font-mono">{ms.strike} {ms.option_type}</td>
+                    <td className="py-2 px-2 text-slate-300 font-mono" title={ms.original_strike && ms.original_strike !== ms.strike ? `Original: ${ms.original_strike} ${ms.option_type}` : ''}>
+                      {ms.strike} {ms.option_type}
+                      {ms.original_strike && ms.original_strike !== ms.strike && (
+                        <span className="text-[9px] text-slate-500 ml-1">(was {ms.original_strike})</span>
+                      )}
+                    </td>
                     <td className="py-2 px-2 text-right text-slate-400 font-mono">{ms.spot_at_signal?.toLocaleString('en-IN')}</td>
                     <td className="py-2 px-2 text-right text-slate-300 font-mono">{ms.current_spot?.toLocaleString('en-IN')}</td>
                     <td className={`py-2 px-2 text-right font-mono ${ms.blocked ? 'text-slate-500' : ms.spot_drift_pct < 0.5 ? 'text-profit' : ms.spot_drift_pct < 1.5 ? 'text-yellow-400' : 'text-loss'}`}>

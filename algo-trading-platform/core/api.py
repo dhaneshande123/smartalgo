@@ -3089,12 +3089,28 @@ async def flyhigh_missed_signals(symbol: str = "NIFTY"):
     entry_cutoff = dtime.fromisoformat(cfg.get("entry_cutoff", "15:15"))
 
     enriched = []
+    # Compute current 1-ITM strike from current spot (for late entry)
+    current_atm = round(spot / strike_step) * strike_step
+    chain_rows = ve.normalize_chain_rows(chain_data["chain"]) if chain_data and chain_data.get("chain") else {}
+
     for sig in raw_signals:
         opt_type = sig["option_type"]
         direction = sig["direction"]
         sig_spot = sig["spot_at_signal"]
-        atm = round(sig_spot / strike_step) * strike_step
-        itm_strike = (atm - strike_step) if direction == "BULLISH" else (atm + strike_step)
+
+        # Original strike from signal time
+        orig_atm = round(sig_spot / strike_step) * strike_step
+        orig_strike = (orig_atm - strike_step) if direction == "BULLISH" else (orig_atm + strike_step)
+
+        # Current 1-ITM strike for late entry (what will actually be traded)
+        if direction == "BULLISH":
+            entry_strike = current_atm - strike_step
+        else:
+            entry_strike = current_atm + strike_step
+
+        # Fall back to ATM if 1-ITM not in chain
+        if entry_strike not in chain_rows:
+            entry_strike = current_atm
 
         # Check if this signal was already deployed
         already_deployed = any(
@@ -3102,7 +3118,7 @@ async def flyhigh_missed_signals(symbol: str = "NIFTY"):
             for dt_str in deployed_times
         )
 
-        # Validity: ST must still agree, spot drift < 1%, within entry window
+        # Validity: ST must still agree, spot drift < 1.5%, within entry window
         drift_pct = abs(spot - sig_spot) / sig_spot * 100 if sig_spot > 0 else 999
         st_still_valid = (
             (direction == "BULLISH" and current_st_dir == "UP") or
@@ -3119,18 +3135,18 @@ async def flyhigh_missed_signals(symbol: str = "NIFTY"):
             and within_window and not already_deployed
         )
 
-        # Try to get current premium from chain
+        # Get premium for the entry strike (current 1-ITM)
         current_premium = 0.0
-        if chain_data and chain_data.get("chain"):
-            rows = ve.normalize_chain_rows(chain_data["chain"])
-            row = rows.get(itm_strike) or rows.get(atm)
+        if chain_rows:
+            row = chain_rows.get(entry_strike) or chain_rows.get(current_atm)
             if row:
                 side = "call" if opt_type == "CE" else "put"
                 current_premium = float(row.get(f"{side}_ltp", 0) or 0)
 
         enriched.append({
             **sig,
-            "strike": itm_strike,
+            "strike": entry_strike,
+            "original_strike": orig_strike,
             "current_spot": round(spot, 2),
             "current_premium": round(current_premium, 2),
             "spot_drift_pct": round(drift_pct, 2),
@@ -3191,11 +3207,23 @@ async def flyhigh_late_entry(body: dict = Body(...)):
 
     opt_type = "CE" if direction == "BULLISH" else "PE"
     rows = ve.normalize_chain_rows(chain_data.get("chain", []))
-    row = rows.get(strike)
-    if not row:
-        raise HTTPException(status_code=409, detail=f"Strike {strike} not in chain")
-
     side = "call" if opt_type == "CE" else "put"
+
+    # If original strike not in chain, recalculate 1-ITM from current spot
+    row = rows.get(strike)
+    if not row or float(row.get(f"{side}_ltp", 0) or 0) <= 0:
+        atm_now = round(spot / strike_step) * strike_step
+        if direction == "BULLISH":
+            strike = atm_now - strike_step
+        else:
+            strike = atm_now + strike_step
+        row = rows.get(strike)
+        if not row:
+            row = rows.get(atm_now)
+            strike = atm_now
+        if not row:
+            raise HTTPException(status_code=409, detail=f"No valid strike in chain near spot {spot:.0f}")
+
     premium = float(row.get(f"{side}_ltp", 0) or 0)
     if premium <= 0:
         raise HTTPException(status_code=409, detail=f"No premium available for {strike}{opt_type}")
