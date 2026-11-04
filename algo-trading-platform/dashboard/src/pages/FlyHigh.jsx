@@ -487,6 +487,7 @@ export default function FlyHigh() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-slate-500 border-b border-slate-700/50">
+                  <th className="text-left py-1.5 px-2 font-medium">Date</th>
                   <th className="text-left py-1.5 px-2 font-medium">Side</th>
                   <th className="text-left py-1.5 px-2 font-medium">Instrument</th>
                   <th className="text-right py-1.5 px-2 font-medium">Buy Price</th>
@@ -501,8 +502,10 @@ export default function FlyHigh() {
                   const instrument = t.symbol || (t.strike ? `${t.underlying || 'NIFTY'} ${t.strike} ${t.option_type}` : `${t.option_type || '—'}`);
                   const entryP = t.entry_price > 0 ? `₹${t.entry_price.toFixed(2)}` : '—';
                   const exitP = t.exit_price > 0 ? `₹${t.exit_price.toFixed(2)}` : '—';
+                  const tradeDate = t.entered_at ? new Date(t.entered_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—';
                   return (
                     <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20">
+                      <td className="py-1.5 px-2 text-slate-500 font-mono text-[10px]">{tradeDate}</td>
                       <td className={`py-1.5 px-2 font-bold ${t.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{t.side || 'BUY'}</td>
                       <td className="py-1.5 px-2 text-slate-300 font-mono">{instrument}</td>
                       <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{entryP}</td>
