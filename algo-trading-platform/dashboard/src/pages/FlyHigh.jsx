@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Rocket, TrendingUp, TrendingDown, Gauge, Clock, AlertTriangle,
   Shield, Target, Activity, ChevronDown, ChevronUp, Zap, BarChart3,
-  History, Play,
+  History, Play, LogOut,
 } from 'lucide-react';
 import { useUnderlying } from '../context/UnderlyingContext';
 import {
   useFlyHighSignal, useFlyHighConfig, useFlyHighPerformance,
   useSetFlyHighConfig, useDeployFlyHigh, useFlyHighTicker,
   useFlyHighMissedSignals, useFlyHighLateEntry,
+  useRiskMetrics, useDeactivateKillSwitch, useStopDeployedStrategy,
 } from '../hooks/useApi';
 
 function StatCard({ label, value, sub, icon: Icon, color = 'text-slate-300' }) {
@@ -34,6 +35,10 @@ export default function FlyHigh() {
   const configMut = useSetFlyHighConfig();
   const { data: missedData } = useFlyHighMissedSignals(underlying);
   const lateEntryMut = useFlyHighLateEntry();
+  const { data: riskData } = useRiskMetrics();
+  const deactivateKill = useDeactivateKillSwitch();
+  const stopStrategy = useStopDeployedStrategy();
+  const isKillActive = !!riskData?.kill_switch_active;
   const [showConfig, setShowConfig] = useState(false);
   const [localCfg, setLocalCfg] = useState({});
   const debounceRef = useRef(null);
@@ -110,6 +115,20 @@ export default function FlyHigh() {
             {tradesToday}/{maxTrades} trades today
           </span>
           <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/15 text-accent">{underlying}</span>
+          {/* Kill switch status pill — always visible */}
+          <button
+            onClick={isKillActive ? () => deactivateKill.mutate('manual reset via Fly-High') : undefined}
+            disabled={!isKillActive || deactivateKill.isPending}
+            title={isKillActive ? 'Kill switch is ON — all deploys blocked. Click to reset.' : 'Kill switch is OFF — deploys allowed.'}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+              isKillActive
+                ? 'bg-red-500/20 text-red-400 ring-1 ring-red-500/40 cursor-pointer hover:bg-red-500/30'
+                : 'bg-slate-700/40 text-slate-400 cursor-default'
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            {deactivateKill.isPending ? 'Resetting…' : isKillActive ? 'KILL SWITCH ON — Click to Reset' : 'Kill Switch OFF'}
+          </button>
         </div>
       </div>
 
@@ -125,12 +144,32 @@ export default function FlyHigh() {
         </div>
       )}
 
+      {/* ── Kill switch banner (always visible) ── */}
+      {isKillActive && (
+        <div className="glass-card !rounded-xl !p-3 flex items-center gap-3 bg-red-500/10 border border-red-500/30">
+          <Shield className="w-5 h-5 text-red-400 flex-shrink-0" />
+          <div className="flex-1 text-xs text-slate-300">
+            <span className="font-bold text-red-400">Kill Switch is ACTIVE</span> — all strategy deploys are blocked.
+            {riskData?.kill_switch_meta?.reason && (
+              <span className="text-slate-500 ml-1">Reason: {riskData.kill_switch_meta.reason}</span>
+            )}
+          </div>
+          <button
+            onClick={() => deactivateKill.mutate('manual reset via Fly-High')}
+            disabled={deactivateKill.isPending}
+            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30 transition-all disabled:opacity-50"
+          >
+            {deactivateKill.isPending ? 'Resetting…' : 'Reset Kill Switch'}
+          </button>
+        </div>
+      )}
+
       {/* ── Live P&L strip ── */}
       {(perf?.running_count > 0 || perf?.closed_count > 0) && (
         <div className="glass-card !rounded-2xl !p-4">
           <div className="flex flex-wrap items-center gap-6">
             <div>
-              <div className="text-xs text-slate-400 mb-0.5">Net P&L (open + closed)</div>
+              <div className="text-xs text-slate-400 mb-0.5">Today's Net P&L</div>
               <div className={`text-2xl font-bold font-mono ${(perf?.net_pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
                 {(perf?.net_pnl ?? 0) >= 0 ? '+' : ''}₹{(perf?.net_pnl ?? 0).toLocaleString('en-IN')}
               </div>
@@ -155,11 +194,23 @@ export default function FlyHigh() {
                     <div key={i} className="flex items-center justify-between gap-2 text-xs bg-slate-800/30 rounded-lg px-2.5 py-1.5">
                       <span className={`font-bold ${p.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{p.side || 'BUY'}</span>
                       <span className="text-slate-300 truncate max-w-[120px]">{p.strike}{p.option_type}</span>
+                      <span className="text-accent font-mono">{p.lots || 1}L{p.lot_size ? ` (${p.qty})` : ''}</span>
                       <span className="text-slate-500 font-mono">@{p.entry_price?.toFixed(1) || '—'}</span>
                       <span className="text-slate-400 font-mono">→ {p.ltp?.toFixed(1) || '—'}</span>
                       <span className={`font-mono font-bold ${p.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                         {p.pnl >= 0 ? '+' : ''}₹{p.pnl.toLocaleString('en-IN')}
                       </span>
+                      {p.strategy_id && (
+                        <button
+                          onClick={() => stopStrategy.mutate(p.strategy_id)}
+                          disabled={stopStrategy.isPending}
+                          title="Exit this position manually (square off)"
+                          className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-all disabled:opacity-50"
+                        >
+                          <LogOut className="w-3 h-3" />
+                          {stopStrategy.isPending ? 'Exiting…' : 'Exit'}
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -482,7 +533,7 @@ export default function FlyHigh() {
       {/* ── Recent Trades ── */}
       {perf?.recent?.length > 0 && (
         <div className="glass-card !rounded-2xl !p-4">
-          <h3 className="text-sm font-semibold text-slate-300 mb-3">Recent Trades</h3>
+          <h3 className="text-sm font-semibold text-slate-300 mb-3">Today's Trades</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -490,6 +541,7 @@ export default function FlyHigh() {
                   <th className="text-left py-1.5 px-2 font-medium">Date</th>
                   <th className="text-left py-1.5 px-2 font-medium">Side</th>
                   <th className="text-left py-1.5 px-2 font-medium">Instrument</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Qty</th>
                   <th className="text-right py-1.5 px-2 font-medium">Buy Price</th>
                   <th className="text-right py-1.5 px-2 font-medium">Sell Price</th>
                   <th className="text-left py-1.5 px-2 font-medium">Exit Reason</th>
@@ -508,6 +560,7 @@ export default function FlyHigh() {
                       <td className="py-1.5 px-2 text-slate-500 font-mono text-[10px]">{tradeDate}</td>
                       <td className={`py-1.5 px-2 font-bold ${t.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{t.side || 'BUY'}</td>
                       <td className="py-1.5 px-2 text-slate-300 font-mono">{instrument}</td>
+                      <td className="py-1.5 px-2 text-right text-accent font-mono">{t.lots || 1}L ({t.qty || '—'})</td>
                       <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{entryP}</td>
                       <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{exitP}</td>
                       <td className="py-1.5 px-2 text-slate-500">{t.exit_reason}</td>

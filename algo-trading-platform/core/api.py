@@ -2037,28 +2037,46 @@ def _refresh_strategy_pnl(strat: dict) -> None:
         strat["pnl"] = strat.get("realized_pnl", 0.0)
         return
 
-    # Exited / Stopped strategies have locked-in realized P&L.
-    # Do NOT recalculate from positions — the chain cache may be empty
-    # after a restart, which would corrupt their P&L to near-zero.
+    # Exited / Stopped: recalculate P&L from raw position data so charge
+    # rate changes take effect immediately (the old frozen realized_pnl
+    # may have been computed with different slippage/charge rates).
     status = (strat.get("status") or "").upper()
     if status in ("EXITED", "STOPPED"):
-        # Preserve the realized P&L as-is; charges were already factored
-        # at exit time or will be computed from the frozen position data.
-        strat["pnl"] = float(strat.get("realized_pnl", 0.0))
         strat["unrealized_pnl"] = 0.0
-        # Still compute charges for display purposes (positions are frozen)
+        # Gross P&L from remaining positions at exit
+        gross = 0.0
+        for pos in positions:
+            entry = float(pos.get("entry_price", 0))
+            ltp = float(pos.get("ltp", 0) or pos.get("exit_price", 0) or entry)
+            qty = int(pos.get("qty", 0))
+            side = (pos.get("side") or "BUY").upper()
+            if side == "SELL":
+                gross += (entry - ltp) * qty
+            else:
+                gross += (ltp - entry) * qty
+        # Add gross P&L from any partial exits (qty was reduced earlier)
+        gross += float(strat.get("_partial_gross", 0.0))
+        gross = round(gross, 2)
+        # Compute charges on full original qty for accurate deduction
+        charge_positions = []
+        for pos in positions:
+            cp = dict(pos)
+            cp["qty"] = int(pos.get("_original_qty", pos.get("qty", 0)))
+            charge_positions.append(cp)
         try:
             from core.charges import compute_strategy_charges
-
-            charges = compute_strategy_charges(positions)
+            charges = compute_strategy_charges(charge_positions)
             strat["charges"] = charges["breakdown"]
             strat["total_charges"] = charges["total_all"]
-            strat["gross_pnl"] = strat["pnl"]
-            strat["pnl"] = round(strat["pnl"] - charges["total_all"], 2)
+            strat["gross_pnl"] = gross
+            net = round(gross - charges["total_all"], 2)
         except Exception:
             strat["charges"] = {}
             strat["total_charges"] = 0.0
-            strat["gross_pnl"] = strat["pnl"]
+            strat["gross_pnl"] = gross
+            net = gross
+        strat["pnl"] = net
+        strat["realized_pnl"] = net
         return
 
     underlying = (strat.get("underlying") or "").upper()
@@ -3307,12 +3325,22 @@ async def flyhigh_performance():
     cfg = ve.get_config()
     risk_per_trade = float(cfg.get("risk_per_trade", 2000) or 2000) or 2000.0
 
-    trades = [
-        s for s in _deployed_strategies.values()
-        if (s.get("risk_params") or {}).get("strategy_type") == "flyhigh_vwap"
-    ]
-    closed = [s for s in trades if (s.get("status") or "").upper() in ("EXITED", "STOPPED")]
-    running = [s for s in trades if (s.get("status") or "").upper() == "RUNNING"]
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+
+    def _is_today(s):
+        for key in ("entered_at", "deployed_at"):
+            ts = s.get(key, "")
+            if ts and isinstance(ts, str) and ts[:10] == today_str:
+                return True
+        return False
+
+    trades = []
+    for sid, s in _deployed_strategies.items():
+        if (s.get("risk_params") or {}).get("strategy_type") == "flyhigh_vwap" and _is_today(s):
+            _refresh_strategy_pnl(s)
+            trades.append((sid, s))
+    closed = [(sid, s) for sid, s in trades if (s.get("status") or "").upper() in ("EXITED", "STOPPED")]
+    running = [(sid, s) for sid, s in trades if (s.get("status") or "").upper() == "RUNNING"]
 
     wins = losses = 0
     total_pnl = 0.0
@@ -3320,7 +3348,7 @@ async def flyhigh_performance():
     durations = []
     recent = []
 
-    for s in closed:
+    for _sid, s in closed:
         pnl = float(s.get("realized_pnl", s.get("pnl", 0)) or 0)
         total_pnl += pnl
         if pnl > 0: wins += 1
@@ -3343,6 +3371,9 @@ async def flyhigh_performance():
         opt_type = leg0.get("type", "")
         if not opt_type and sym:
             opt_type = "CE" if sym.upper().endswith("CE") else "PE" if sym.upper().endswith("PE") else ""
+        t_lots = int(pos0.get("lots", 0) or 0) or int(leg0.get("lots", 1) or 1)
+        t_lot_size = int(s.get("lot_size", 0) or 0)
+        t_qty = int(pos0.get("qty", 0) or 0) or (t_lots * t_lot_size if t_lot_size else t_lots)
         recent.append({
             "name": s.get("name", ""), "pnl": round(pnl, 2),
             "r": round(pnl / risk_per_trade, 2),
@@ -3356,6 +3387,8 @@ async def flyhigh_performance():
             "strike": strike,
             "underlying": s.get("underlying", ""),
             "symbol": sym,
+            "lots": t_lots,
+            "qty": t_qty,
         })
 
     n = len(closed)
@@ -3364,14 +3397,17 @@ async def flyhigh_performance():
     # Live (unrealized) P&L of currently RUNNING Fly-High trades
     open_pnl = 0.0
     open_positions = []
-    for s in running:
+    for sid, s in running:
         pnl = float(s.get("unrealized_pnl", s.get("pnl", 0)) or 0)
         open_pnl += pnl
         legs = s.get("legs") or []
         leg0 = legs[0] if legs else {}
         entry_price = float(leg0.get("entry_price", leg0.get("premium", 0)) or 0)
         ltp = float(s.get("current_ltp", 0) or 0)
+        lots = int(leg0.get("lots", 1) or 1)
+        lot_size = int(s.get("lot_size", 0) or 0) or int(leg0.get("lot_size", 0) or 0)
         open_positions.append({
+            "strategy_id": sid,
             "name": s.get("name", ""),
             "pnl": round(pnl, 2),
             "underlying": s.get("underlying", ""),
@@ -3381,6 +3417,9 @@ async def flyhigh_performance():
             "side": leg0.get("action", "BUY"),
             "option_type": leg0.get("type", ""),
             "strike": int(leg0.get("strike", 0) or 0),
+            "lots": lots,
+            "lot_size": lot_size,
+            "qty": lots * lot_size if lot_size else lots,
         })
 
     return {
@@ -6067,23 +6106,32 @@ async def pnl_summary():
                     }
     except Exception as e:
         logger.warning(f"Fyers P&L summary derivation failed: {e}")
-    # Compute from deployed strategies (no mock)
+    # Compute from deployed strategies — today only
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
     realized = 0.0
     unrealized = 0.0
     total_charges = 0.0
     for strat in _deployed_strategies.values():
+        # Filter to today's strategies only
+        ts = strat.get("entered_at", "") or strat.get("deployed_at", "")
+        if not (ts and isinstance(ts, str) and ts[:10] == today_str):
+            continue
         status = str(strat.get("status", "")).upper()
         if status in ("EXITED", "STOPPED"):
+            # realized_pnl already includes charges (deducted at exit time)
             realized += float(strat.get("realized_pnl", strat.get("pnl", 0)) or 0)
             total_charges += float(strat.get("total_charges", 0) or 0)
         elif status in ("RUNNING", "ENTERED") and strat.get("entered"):
+            # strat["pnl"] already includes charges (deducted in _refresh_strategy_pnl)
             unrealized += float(strat.get("pnl", 0) or 0)
             total_charges += float(strat.get("total_charges", 0) or 0)
+    # realized_pnl and pnl already have charges baked in — do NOT subtract again
+    net = realized + unrealized
     return {
         "realized_pnl": round(realized, 2),
         "unrealized_pnl": round(unrealized, 2),
-        "total_pnl": round(realized + unrealized, 2),
-        "net_pnl": round(realized + unrealized - total_charges, 2),
+        "total_pnl": round(net, 2),
+        "net_pnl": round(net, 2),
         "charges": {"total": round(total_charges, 2)},
         "source": "deployed_strategies",
         "timestamp": datetime.now(IST).isoformat(),

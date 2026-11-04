@@ -77,11 +77,14 @@ export default function Dashboard() {
   const { data: deployedData } = useDeployedStrategies();
   const { data: riskData } = useRiskMetrics();
 
-  // ── Strategy aggregates ──
+  // ── Strategy aggregates (today only) ──
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const isToday = (s) => (s.entered_at || s.deployed_at || '').slice(0, 10) === todayStr;
   const strategies = deployedData?.strategies || [];
-  const running = strategies.filter((s) => s.status === 'RUNNING');
+  const todayStrats = strategies.filter(isToday);
+  const running = todayStrats.filter((s) => s.status === 'RUNNING');
   const entered = running.filter((s) => s.entered);
-  const exited = strategies.filter((s) => s.status === 'EXITED');
+  const exited = todayStrats.filter((s) => s.status === 'EXITED');
   const winners = exited.filter((s) => Number(s.realized_pnl ?? s.pnl ?? 0) > 0).length;
   const winRate = exited.length > 0 ? Math.round((winners / exited.length) * 100) : null;
 

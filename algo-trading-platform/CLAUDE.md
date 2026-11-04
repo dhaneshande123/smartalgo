@@ -9,7 +9,67 @@ Live market data via **Fyers API v3** (WebSocket + REST). Paper trading fully fu
 **GitHub**: https://github.com/dhaneshande123/smartalgo.git
 **Branch**: `main`
 
-## Latest Session (September 2026) — Fly-High deploy fix + performance overhaul
+## Latest Session (November 2026) — Fly-High UX + P&L accuracy overhaul
+
+### Kill Switch UI (Fly-High page)
+
+Added always-visible kill switch pill in the Fly-High header row. Shows green "Kill Switch OFF"
+when inactive, red "KILL SWITCH ON — Click to Reset" when active (clickable to reset). When active,
+an expanded banner also shows the trigger reason and a large Reset button. Uses `useRiskMetrics` +
+`useDeactivateKillSwitch` hooks. Calls `DELETE /api/risk/kill-switch` on reset.
+
+### Daily P&L Reset
+
+Both backend and frontend now filter strategies to **today only** (IST date comparison):
+- `/api/flyhigh/performance` — `_is_today()` filter checks `entered_at` or `deployed_at` against
+  `datetime.now(IST).strftime("%Y-%m-%d")`. Only today's trades appear in open positions, recent
+  trades, and P&L totals. Renamed "Recent Trades" → "Today's Trades", "Net P&L" → "Today's Net P&L".
+- `/api/pnl/summary` — same `_is_today()` filter so the Dashboard hero P&L resets daily.
+- `Dashboard.jsx` — client-side `isToday()` filter on strategy aggregates (running/entered/exited/winRate).
+
+### Manual Exit Button
+
+Each running Fly-High position now has an Exit button (LogOut icon) that calls
+`POST /api/strategies/{strategy_id}/stop`. `useStopDeployedStrategy` hook now invalidates
+`flyhighPerformance` and `flyhighSignal` queries on success.
+
+### Lots/Qty Display
+
+Running positions show `{lots}L ({qty})` format. Today's Trades table has a Qty column showing
+`{lots}L ({qty})`. Both sourced from `lot_size`, `qty`, and `lots` fields added to the
+`/api/flyhigh/performance` response.
+
+### P&L Calculation Fixes (Critical)
+
+**Double-charge deduction bug**: `_place_exit_orders` froze `strat["pnl"]` (already includes charges)
+as `realized_pnl`. Then `_refresh_strategy_pnl` EXITED branch subtracted charges again from
+`realized_pnl`. Same bug in `/api/pnl/summary` which did `net = realized + unrealized - charges`
+where `realized` already had charges baked in.
+
+**Fix — always recalculate from raw data**: `_refresh_strategy_pnl` EXITED branch now recomputes
+gross P&L from raw position data (`entry_price`, `ltp`, `qty`, `side`) with current charge rates
+via `compute_strategy_charges()`, instead of trusting frozen `realized_pnl`. `_place_exit_orders`
+now stores gross P&L only (no charges), since `_refresh_strategy_pnl` handles charge deduction.
+
+**Partial exit tracking**: When positions are partially booked, `pos["qty"]` is reduced but the
+booked portion's P&L would be lost. Now tracks `_original_qty` and `_partial_gross` on partial exits
+so `_refresh_strategy_pnl` can reconstruct the full picture.
+
+**Slippage reduction**: `DEFAULT_SLIPPAGE_PCT` reduced from 0.5% to 0.1% — 0.5% was unrealistic
+for liquid NIFTY/BANKNIFTY ATM options, producing ~₹1,000+ phantom slippage per trade.
+
+**Files modified**:
+- `core/api.py` — `_refresh_strategy_pnl` EXITED branch rewrite, `flyhigh_performance` today filter
+  + strategy_id/lots/qty fields, `pnl_summary` today filter + double-charge fix
+- `core/charges.py` — `DEFAULT_SLIPPAGE_PCT` 0.5% → 0.1%
+- `core/strategy_engine/dashboard_executor.py` — `_place_exit_orders` stores gross P&L,
+  partial exit tracks `_original_qty` and `_partial_gross`
+- `dashboard/src/hooks/useApi.js` — `useStopDeployedStrategy` invalidates flyhigh queries
+- `dashboard/src/pages/Dashboard.jsx` — today-only strategy filtering
+- `dashboard/src/pages/FlyHigh.jsx` — kill switch pill/banner, exit button, lots/qty display,
+  "Today's Trades" rename
+
+## Previous Session (September 2026) — Fly-High deploy fix + performance overhaul
 
 ### Critical Fly-High Deploy Fix (September 28, 2026)
 
@@ -65,7 +125,7 @@ preventing stale deploy button for up to 3s after deploy.
 - `dashboard/src/pages/FlyHigh.jsx` — config debounce
 - `dashboard/src/components/Layout/Header.jsx` — degraded feed state
 
-## Previous Session (August 2026) — Critical fixes + Fly-High VWAP strategy
+## Earlier Session (August 2026) — Critical fixes + Fly-High VWAP strategy
 
 ### Bug Fixes (August 31, 2026)
 
@@ -169,7 +229,7 @@ shows net / open / realized P&L plus each running position.
 - `dashboard/src/components/Layout/Header.jsx` — honest 3-state feed badge (Live/Mock/Disconnected)
 - `dashboard/src/pages/FlyHigh.jsx` — auto-deploy toggle + banner, live P&L strip
 
-## Previous Session (July 2026) — Multi-profile scalper + Fyers reliability
+## Earlier Session (July 2026) — Multi-profile scalper + Fyers reliability
 
 ### Multi-Profile Scalper (July 6, 2026)
 
@@ -252,7 +312,7 @@ paper session was left untouched mid-fix to avoid disrupting it). Frontend fixes
 Vite HMR. Next session: confirm the watchdog actually self-heals a real drop, and confirm the
 extended scalp window fires on the next NIFTY Tuesday expiry.
 
-## Previous Session (June 2026) — "simple but powerful" refactor
+## Earlier Session (June 2026) — "simple but powerful" refactor
 
 Direction: simplify to a focused cockpit, add an expiry-day scalper, validate paper-first.
 Honest framing agreed with user: you can't beat HFT desks (Jane Street/Citadel) on speed —

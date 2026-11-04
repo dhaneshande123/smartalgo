@@ -285,7 +285,11 @@ export const useStopDeployedStrategy = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.stopDeployedStrategy,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['deployedStrategies'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
+      qc.invalidateQueries({ queryKey: ['flyhighPerformance'] });
+      qc.invalidateQueries({ queryKey: ['flyhighSignal'] });
+    },
   });
 };
 

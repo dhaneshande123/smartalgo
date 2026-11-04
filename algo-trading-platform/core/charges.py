@@ -43,7 +43,7 @@ STAMP_DUTY_FUTURES_PCT = 0.00002    # 0.002% — BUY side only
 # ── Slippage model ───────────────────────────────────────────────
 # Realistic bid-ask spread for NIFTY/BANKNIFTY options.
 # Deep ITM options have tighter spreads; far OTM have wider.
-DEFAULT_SLIPPAGE_PCT = 0.005        # 0.5% of premium as slippage
+DEFAULT_SLIPPAGE_PCT = 0.001        # 0.1% of premium as slippage (realistic for liquid NIFTY/BANKNIFTY ATM options)
 MIN_SLIPPAGE_ABS = 0.10             # At least Rs 0.10 per contract
 
 

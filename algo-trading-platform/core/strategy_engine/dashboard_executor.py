@@ -665,8 +665,10 @@ class DashboardStrategyExecutor:
             book_qty = max(lot_size, round((qty / 2) / lot_size) * lot_size)
             book_qty = min(book_qty, qty - lot_size)  # always leave >= 1 lot running
             realized_add = (ltp - entry) * book_qty
+            pos["_original_qty"] = pos.get("_original_qty") or qty
             pos["qty"] = qty - book_qty
             pos["lots"] = max(1, int(pos["qty"] / lot_size))
+            strat["_partial_gross"] = float(strat.get("_partial_gross", 0.0)) + realized_add
             strat["realized_pnl"] = float(strat.get("realized_pnl", 0.0)) + realized_add
             strat["_scalp_booked"] = True
             logger.info(
@@ -900,23 +902,31 @@ class DashboardStrategyExecutor:
             for pos in positions:
                 exit_orders.append(f"paper-exit-{uuid.uuid4().hex[:10]}")
 
-        # Lock in the realized P&L at exit
-        final_pnl = float(strat.get("pnl", 0.0))
-        strat["realized_pnl"] = final_pnl
-        strat["unrealized_pnl"] = 0.0
-        strat["pnl"] = final_pnl
+        # Mark as exited — P&L will be recomputed from positions by _refresh_strategy_pnl
         strat["status"] = "EXITED"
         strat["exit_reason"] = reason
         strat["exit_orders"] = exit_orders
         strat["exited_at"] = datetime.now(IST).isoformat()
+        strat["unrealized_pnl"] = 0.0
 
         # Capture exit price (LTP at exit) for trade history display
         if positions:
             strat["exit_price"] = float(positions[0].get("ltp", 0) or 0)
 
+        # Compute gross P&L from positions for logging
+        gross = 0.0
+        for pos in positions:
+            e = float(pos.get("entry_price", 0))
+            l = float(pos.get("ltp", 0) or e)
+            q = int(pos.get("qty", 0))
+            s = (pos.get("side") or "BUY").upper()
+            gross += (l - e) * q if s == "BUY" else (e - l) * q
+        strat["realized_pnl"] = round(gross, 2)
+        strat["pnl"] = round(gross, 2)
+
         logger.info(
             f"Strategy {sid} EXITED ({execution_mode}) — reason={reason}, "
-            f"final_pnl=₹{final_pnl:.2f}"
+            f"gross_pnl=₹{gross:.2f}"
         )
 
         # Persist exit trades and updated strategy to SQLite
