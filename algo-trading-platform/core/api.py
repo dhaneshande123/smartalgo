@@ -3091,7 +3091,7 @@ async def flyhigh_missed_signals(symbol: str = "NIFTY"):
     enriched = []
     # Compute current 1-ITM strike from current spot (for late entry)
     current_atm = round(spot / strike_step) * strike_step
-    chain_rows = ve.normalize_chain_rows(chain_data["chain"]) if chain_data and chain_data.get("chain") else {}
+    chain_rows = ve.normalize_chain_rows(chain_data) if chain_data else {}
 
     for sig in raw_signals:
         opt_type = sig["option_type"]
@@ -3206,7 +3206,7 @@ async def flyhigh_late_entry(body: dict = Body(...)):
             pass
 
     opt_type = "CE" if direction == "BULLISH" else "PE"
-    rows = ve.normalize_chain_rows(chain_data.get("chain", []))
+    rows = ve.normalize_chain_rows(chain_data)
     side = "call" if opt_type == "CE" else "put"
 
     # If original strike not in chain, recalculate 1-ITM from current spot
