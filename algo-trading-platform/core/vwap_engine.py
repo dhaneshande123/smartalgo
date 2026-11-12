@@ -108,6 +108,11 @@ def compute_vwap_series(candles: list[dict]) -> list[float]:
 def detect_crossover(candles: list[dict], vwap_series: list[float]) -> dict:
     """Detect VWAP crossover on the last closed candle.
 
+    Two detection modes (either triggers a signal):
+    1. Inter-candle: previous candle closed on one side, current candle closed on the other.
+    2. Intra-candle: current candle's body crosses VWAP (open on one side, close on the other).
+       This catches early-session signals where VWAP has too little history for inter-candle detection.
+
     Returns dict with: crossed (bool), direction (BULLISH/BEARISH),
     close, prev_close, vwap, prev_vwap, prev_candle_low, prev_candle_high.
     """
@@ -118,6 +123,7 @@ def detect_crossover(candles: list[dict], vwap_series: list[float]) -> dict:
     curr = candles[-2]
     prev = candles[-3]
     curr_close = float(curr.get("close", 0))
+    curr_open = float(curr.get("open", 0))
     prev_close = float(prev.get("close", 0))
     curr_vwap = vwap_series[-2]
     prev_vwap = vwap_series[-3]
@@ -125,6 +131,7 @@ def detect_crossover(candles: list[dict], vwap_series: list[float]) -> dict:
     result = {
         "crossed": False,
         "direction": "",
+        "cross_type": "",
         "close": curr_close,
         "prev_close": prev_close,
         "vwap": curr_vwap,
@@ -135,12 +142,26 @@ def detect_crossover(candles: list[dict], vwap_series: list[float]) -> dict:
         "curr_candle_high": float(curr.get("high", 0)),
     }
 
+    # 1. Inter-candle crossover (classic: prev close on one side, curr close on the other)
     if prev_close <= prev_vwap and curr_close > curr_vwap:
         result["crossed"] = True
         result["direction"] = "BULLISH"
+        result["cross_type"] = "inter_candle"
     elif prev_close >= prev_vwap and curr_close < curr_vwap:
         result["crossed"] = True
         result["direction"] = "BEARISH"
+        result["cross_type"] = "inter_candle"
+
+    # 2. Intra-candle crossover (candle body crosses VWAP: open on one side, close on the other)
+    if not result["crossed"] and curr_open > 0:
+        if curr_open <= curr_vwap and curr_close > curr_vwap:
+            result["crossed"] = True
+            result["direction"] = "BULLISH"
+            result["cross_type"] = "intra_candle"
+        elif curr_open >= curr_vwap and curr_close < curr_vwap:
+            result["crossed"] = True
+            result["direction"] = "BEARISH"
+            result["cross_type"] = "intra_candle"
 
     return result
 
