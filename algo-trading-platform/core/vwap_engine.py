@@ -510,6 +510,58 @@ def scan_missed_signals(
         elif sl_points <= 0:
             blocked_reason = "SL width zero"
 
+        # Simulate outcome using subsequent candles
+        target_price = spot_at_signal + sl_points if vwap_dir == "BULLISH" else spot_at_signal - sl_points
+        delta_est = 0.65
+        est_entry_premium = round(spot_at_signal * 0.008, 2)  # rough ~0.8% of spot for ATM-ish
+        est_sl_premium = round(max(1.0, est_entry_premium - delta_est * sl_points), 2)
+        est_target_premium = round(est_entry_premium + delta_est * sl_points, 2)
+
+        outcome = "open"
+        exit_price_spot = 0.0
+        exit_time = ""
+        est_exit_premium = 0.0
+        est_pnl = 0.0
+        for j in range(i + 1, len(intraday_candles)):
+            fc = intraday_candles[j]
+            fc_high = float(fc.get("high", 0))
+            fc_low = float(fc.get("low", 0))
+            fc_close = float(fc.get("close", 0))
+            fc_dt = _parse_candle_ist(fc)
+            if not fc_dt or fc_dt.strftime("%Y-%m-%d") != today_str:
+                continue
+            if vwap_dir == "BULLISH":
+                if fc_low <= sl_price:
+                    outcome = "SL Hit"
+                    exit_price_spot = sl_price
+                    est_exit_premium = est_sl_premium
+                    exit_time = fc_dt.strftime("%H:%M") if fc_dt else ""
+                    break
+                if fc_high >= target_price:
+                    outcome = "Target Hit"
+                    exit_price_spot = target_price
+                    est_exit_premium = est_target_premium
+                    exit_time = fc_dt.strftime("%H:%M") if fc_dt else ""
+                    break
+            else:
+                if fc_high >= sl_price:
+                    outcome = "SL Hit"
+                    exit_price_spot = sl_price
+                    est_exit_premium = est_sl_premium
+                    exit_time = fc_dt.strftime("%H:%M") if fc_dt else ""
+                    break
+                if fc_low <= target_price:
+                    outcome = "Target Hit"
+                    exit_price_spot = target_price
+                    est_exit_premium = est_target_premium
+                    exit_time = fc_dt.strftime("%H:%M") if fc_dt else ""
+                    break
+        if outcome == "open":
+            last_close = float(intraday_candles[-1].get("close", 0))
+            est_exit_premium = round(est_entry_premium + delta_est * (last_close - spot_at_signal) * (1 if vwap_dir == "BULLISH" else -1), 2)
+            exit_price_spot = last_close
+        est_pnl = round(est_exit_premium - est_entry_premium, 2) if est_exit_premium else 0.0
+
         signals.append({
             "time": candle_dt.strftime("%H:%M"),
             "timestamp": candle_dt.isoformat(),
@@ -520,9 +572,18 @@ def scan_missed_signals(
             "supertrend_dir": st_dir,
             "sl_price": round(sl_price, 2),
             "sl_points": round(sl_points, 2),
+            "target_price": round(target_price, 2),
             "option_type": "CE" if vwap_dir == "BULLISH" else "PE",
             "blocked": blocked_reason is not None,
             "blocked_reason": blocked_reason,
+            "est_entry_premium": est_entry_premium,
+            "est_sl_premium": est_sl_premium,
+            "est_target_premium": est_target_premium,
+            "est_exit_premium": round(est_exit_premium, 2),
+            "est_pnl": est_pnl,
+            "outcome": outcome,
+            "exit_time": exit_time,
+            "exit_price_spot": round(exit_price_spot, 2),
         })
 
     return signals

@@ -197,6 +197,8 @@ export default function FlyHigh() {
                       <span className="text-accent font-mono">{p.lots || 1}L{p.lot_size ? ` (${p.qty})` : ''}</span>
                       <span className="text-slate-500 font-mono">@{p.entry_price?.toFixed(1) || '—'}</span>
                       <span className="text-slate-400 font-mono">→ {p.ltp?.toFixed(1) || '—'}</span>
+                      {p.sl_premium > 0 && <span className="text-loss font-mono text-[10px]" title="Stop Loss">SL:{p.sl_premium.toFixed(1)}</span>}
+                      {p.target_premium > 0 && <span className="text-profit font-mono text-[10px]" title="Target (1:1 R:R)">TGT:{p.target_premium.toFixed(1)}</span>}
                       <span className={`font-mono font-bold ${p.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                         {p.pnl >= 0 ? '+' : ''}₹{p.pnl.toLocaleString('en-IN')}
                       </span>
@@ -306,10 +308,12 @@ export default function FlyHigh() {
                   <th className="text-left py-1.5 px-2 font-medium">Time</th>
                   <th className="text-left py-1.5 px-2 font-medium">Direction</th>
                   <th className="text-left py-1.5 px-2 font-medium">Strike</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Spot Then</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Spot Now</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Drift</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Premium Now</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Entry Spot</th>
+                  <th className="text-right py-1.5 px-2 font-medium">SL</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Target</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Est. Entry ₹</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Est. Exit ₹</th>
+                  <th className="text-center py-1.5 px-2 font-medium">Outcome</th>
                   <th className="text-left py-1.5 px-2 font-medium">Status</th>
                   <th className="text-center py-1.5 px-2 font-medium">Action</th>
                 </tr>
@@ -328,12 +332,25 @@ export default function FlyHigh() {
                       )}
                     </td>
                     <td className="py-2 px-2 text-right text-slate-400 font-mono">{ms.spot_at_signal?.toLocaleString('en-IN')}</td>
-                    <td className="py-2 px-2 text-right text-slate-300 font-mono">{ms.current_spot?.toLocaleString('en-IN')}</td>
-                    <td className={`py-2 px-2 text-right font-mono ${ms.blocked ? 'text-slate-500' : ms.spot_drift_pct < 0.5 ? 'text-profit' : ms.spot_drift_pct < 1.5 ? 'text-yellow-400' : 'text-loss'}`}>
-                      {ms.blocked ? '—' : `${ms.spot_drift_pct?.toFixed(1)}%`}
+                    <td className="py-2 px-2 text-right text-loss font-mono">{ms.sl_price?.toLocaleString('en-IN') || '—'}</td>
+                    <td className="py-2 px-2 text-right text-profit font-mono">{ms.target_price?.toLocaleString('en-IN') || '—'}</td>
+                    <td className="py-2 px-2 text-right text-slate-300 font-mono">
+                      {ms.blocked ? '—' : ms.est_entry_premium > 0 ? `₹${ms.est_entry_premium.toFixed(1)}` : '—'}
                     </td>
                     <td className="py-2 px-2 text-right text-slate-300 font-mono">
-                      {ms.blocked ? '—' : ms.current_premium > 0 ? `₹${ms.current_premium.toFixed(2)}` : '—'}
+                      {ms.blocked ? '—' : ms.est_exit_premium > 0 ? `₹${ms.est_exit_premium.toFixed(1)}` : '—'}
+                    </td>
+                    <td className="py-2 px-2 text-center">
+                      {ms.blocked ? <span className="text-slate-500">—</span> : (
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          ms.outcome === 'Target Hit' ? 'bg-profit/15 text-profit' :
+                          ms.outcome === 'SL Hit' ? 'bg-loss/15 text-loss' :
+                          'bg-yellow-500/15 text-yellow-400'
+                        }`}>
+                          {ms.outcome === 'open' ? 'Running' : ms.outcome}
+                          {ms.exit_time ? ` @ ${ms.exit_time}` : ''}
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 px-2">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -342,7 +359,7 @@ export default function FlyHigh() {
                         ms.already_deployed ? 'bg-blue-500/15 text-blue-400' :
                         'bg-slate-700/40 text-slate-400'
                       }`}>
-                        {ms.validity_reason}
+                        {ms.blocked ? ms.validity_reason : ms.already_deployed ? 'Deployed' : ms.is_valid ? 'Valid' : ms.validity_reason}
                       </span>
                     </td>
                     <td className="py-2 px-2 text-center">
@@ -542,9 +559,11 @@ export default function FlyHigh() {
                   <th className="text-left py-1.5 px-2 font-medium">Side</th>
                   <th className="text-left py-1.5 px-2 font-medium">Instrument</th>
                   <th className="text-right py-1.5 px-2 font-medium">Qty</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Buy Price</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Sell Price</th>
-                  <th className="text-left py-1.5 px-2 font-medium">Exit Reason</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Entry ₹</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Exit ₹</th>
+                  <th className="text-right py-1.5 px-2 font-medium">SL ₹</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Target ₹</th>
+                  <th className="text-center py-1.5 px-2 font-medium">Outcome</th>
                   <th className="text-right py-1.5 px-2 font-medium">P&L</th>
                   <th className="text-right py-1.5 px-2 font-medium">R</th>
                 </tr>
@@ -554,7 +573,10 @@ export default function FlyHigh() {
                   const instrument = t.symbol || (t.strike ? `${t.underlying || 'NIFTY'} ${t.strike} ${t.option_type}` : `${t.option_type || '—'}`);
                   const entryP = t.entry_price > 0 ? `₹${t.entry_price.toFixed(2)}` : '—';
                   const exitP = t.exit_price > 0 ? `₹${t.exit_price.toFixed(2)}` : '—';
+                  const slP = t.sl_premium > 0 ? `₹${t.sl_premium.toFixed(1)}` : '—';
+                  const tgtP = t.target_premium > 0 ? `₹${t.target_premium.toFixed(1)}` : '—';
                   const tradeDate = t.entered_at ? new Date(t.entered_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—';
+                  const outcome = t.outcome || t.exit_reason || '—';
                   return (
                     <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20">
                       <td className="py-1.5 px-2 text-slate-500 font-mono text-[10px]">{tradeDate}</td>
@@ -563,7 +585,15 @@ export default function FlyHigh() {
                       <td className="py-1.5 px-2 text-right text-accent font-mono">{t.lots || 1}L ({t.qty || '—'})</td>
                       <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{entryP}</td>
                       <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{exitP}</td>
-                      <td className="py-1.5 px-2 text-slate-500">{t.exit_reason}</td>
+                      <td className="py-1.5 px-2 text-right text-loss font-mono">{slP}</td>
+                      <td className="py-1.5 px-2 text-right text-profit font-mono">{tgtP}</td>
+                      <td className="py-1.5 px-2 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          outcome === 'Target Hit' ? 'bg-profit/15 text-profit' :
+                          outcome === 'SL Hit' ? 'bg-loss/15 text-loss' :
+                          'bg-slate-700/40 text-slate-400'
+                        }`}>{outcome}</span>
+                      </td>
                       <td className={`py-1.5 px-2 text-right font-mono font-bold ${(t.pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss'}`}>
                         {(t.pnl ?? 0) >= 0 ? '+' : ''}₹{t.pnl?.toLocaleString('en-IN')}
                       </td>

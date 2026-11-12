@@ -3398,14 +3398,26 @@ async def flyhigh_performance():
         t_lots = int(pos0.get("lots", 0) or 0) or int(leg0.get("lots", 1) or 1)
         t_lot_size = int(s.get("lot_size", 0) or 0)
         t_qty = int(pos0.get("qty", 0) or 0) or (t_lots * t_lot_size if t_lot_size else t_lots)
+        rp = s.get("risk_params") or {}
+        sl_prem = float(rp.get("premium_sl", 0) or 0)
+        target_prem = round(entry_price + (entry_price - sl_prem), 2) if sl_prem and entry_price else 0.0
+        exit_reason_raw = s.get("exit_reason", "")
+        outcome = (
+            "Target Hit" if "partial" in str(exit_reason_raw).lower() or (exit_price > 0 and target_prem > 0 and exit_price >= target_prem) else
+            "SL Hit" if exit_price > 0 and sl_prem > 0 and exit_price <= sl_prem else
+            exit_reason_raw or ("Profit" if pnl > 0 else "Loss" if pnl < 0 else "Flat")
+        )
         recent.append({
             "name": s.get("name", ""), "pnl": round(pnl, 2),
             "r": round(pnl / risk_per_trade, 2),
-            "exit_reason": s.get("exit_reason", ""),
+            "exit_reason": exit_reason_raw,
+            "outcome": outcome,
             "exited_at": s.get("exited_at", ""),
             "entered_at": s.get("entered_at", ""),
             "entry_price": round(entry_price, 2),
             "exit_price": round(exit_price, 2),
+            "sl_premium": round(sl_prem, 2),
+            "target_premium": round(target_prem, 2),
             "side": pos0.get("side", leg0.get("action", "BUY")),
             "option_type": opt_type,
             "strike": strike,
@@ -3426,10 +3438,13 @@ async def flyhigh_performance():
         open_pnl += pnl
         legs = s.get("legs") or []
         leg0 = legs[0] if legs else {}
+        rp = s.get("risk_params") or {}
         entry_price = float(leg0.get("entry_price", leg0.get("premium", 0)) or 0)
         ltp = float(s.get("current_ltp", 0) or 0)
         lots = int(leg0.get("lots", 1) or 1)
         lot_size = int(s.get("lot_size", 0) or 0) or int(leg0.get("lot_size", 0) or 0)
+        sl_premium = float(rp.get("premium_sl", 0) or 0)
+        target_premium = round(entry_price + (entry_price - sl_premium), 2) if sl_premium and entry_price else 0.0
         open_positions.append({
             "strategy_id": sid,
             "name": s.get("name", ""),
@@ -3444,6 +3459,8 @@ async def flyhigh_performance():
             "lots": lots,
             "lot_size": lot_size,
             "qty": lots * lot_size if lot_size else lots,
+            "sl_premium": sl_premium,
+            "target_premium": target_premium,
         })
 
     return {
