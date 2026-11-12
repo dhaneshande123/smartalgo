@@ -585,6 +585,12 @@ export default function FlyHigh() {
           Fly-High deployed successfully!
         </div>
       )}
+      {/* Deploy error toast */}
+      {deployMut.isError && (
+        <div className="fixed bottom-4 right-4 bg-loss/90 text-white px-4 py-2 rounded-xl font-bold text-sm animate-pulse max-w-xs">
+          Deploy failed: {deployMut.error?.response?.data?.detail || deployMut.error?.message || 'Unknown error'}
+        </div>
+      )}
     </div>
   );
 }

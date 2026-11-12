@@ -1950,6 +1950,12 @@ _INDICES_CACHE_TTL = 5.0  # seconds — index tickers (raised from 2s)
 _flyhigh_signal_cache: dict[str, dict] = {}  # symbol -> signal dict
 _flyhigh_signal_cache_time: dict[str, float] = {}  # symbol -> timestamp
 _FLYHIGH_SIGNAL_CACHE_TTL = 15.0  # seconds
+# Active signal cache — persists a valid signal for deploy/auto-deploy use across the
+# full 5-min candle period.  The signal endpoint writes it when has_signal=True; the
+# deploy endpoint and auto-deploy cycle read it when fresh regeneration has no crossover.
+_flyhigh_active_signal: dict[str, Any] = {}  # symbol -> FlyHighSignal (dataclass)
+_flyhigh_active_signal_time: dict[str, float] = {}  # symbol -> epoch
+_FLYHIGH_ACTIVE_SIGNAL_TTL = 330.0  # 5.5 min — slightly > one candle period
 
 # In-memory stores for strategy management
 _deployed_strategies: dict[str, dict] = {}
@@ -2992,6 +2998,11 @@ async def flyhigh_signal(symbol: str = "NIFTY"):
     result["trades_today"] = trades_today
     _flyhigh_signal_cache[symbol] = result
     _flyhigh_signal_cache_time[symbol] = time.time()
+
+    if sig.has_signal:
+        _flyhigh_active_signal[symbol] = sig
+        _flyhigh_active_signal_time[symbol] = time.time()
+
     return result
 
 
@@ -3041,12 +3052,25 @@ async def flyhigh_deploy(body: dict = Body(...)):
         cfg=cfg, trades_today=trades_today,
     )
 
+    # If fresh regeneration missed the crossover (candle shifted), use the
+    # active signal cached by the signal-polling endpoint (valid for ~5 min).
+    if not sig.has_signal:
+        cached_sig = _flyhigh_active_signal.get(symbol)
+        cache_age = time.time() - _flyhigh_active_signal_time.get(symbol, 0)
+        if cached_sig and cache_age < _FLYHIGH_ACTIVE_SIGNAL_TTL and cached_sig.has_signal:
+            sig = cached_sig
+            logger.info(f"Fly-High deploy using cached active signal for {symbol} "
+                        f"(age {cache_age:.0f}s): {sig.direction} {sig.strike}{sig.option_type}")
+
     if not sig.has_signal:
         raise HTTPException(status_code=409, detail=f"No signal: {sig.reason}")
     if not sig.deploy_payload.get("legs"):
         raise HTTPException(status_code=409, detail="No tradeable strike found")
 
     result = await deploy_strategy(sig.deploy_payload)
+    # Clear active signal after successful deploy to prevent double-deploy
+    _flyhigh_active_signal.pop(symbol, None)
+    _flyhigh_active_signal_time.pop(symbol, None)
     return {"ok": True, "signal": sig.to_dict(), "deploy": result}
 
 
@@ -8326,10 +8350,20 @@ async def run_flyhigh_auto_cycle() -> dict:
                 lot_size=symbol_master.get_lot_size(sym) or 1,
                 cfg=cfg, trades_today=trades_today,
             )
+            # Fall back to the active signal cache when fresh generation misses
+            if not sig.has_signal:
+                cached_sig = _flyhigh_active_signal.get(sym)
+                cache_age = time.time() - _flyhigh_active_signal_time.get(sym, 0)
+                if cached_sig and cache_age < _FLYHIGH_ACTIVE_SIGNAL_TTL and cached_sig.has_signal:
+                    sig = cached_sig
+                    logger.info(f"Fly-High auto-deploy using cached signal for {sym} "
+                                f"(age {cache_age:.0f}s)")
             if sig.has_signal and sig.deploy_payload.get("legs"):
                 res = await deploy_strategy(sig.deploy_payload)
                 if res.get("ok") is False:
                     break  # kill switch active — stop the cycle
+                _flyhigh_active_signal.pop(sym, None)
+                _flyhigh_active_signal_time.pop(sym, None)
                 deployed.append({"underlying": sym, "strategy_id": res.get("strategy_id"),
                                  "direction": sig.direction, "strike": sig.strike})
                 logger.info(f"Fly-High auto-deployed {sym} {sig.direction} {sig.strike}{sig.option_type} ({sig.reason})")
