@@ -1955,6 +1955,11 @@ _FLYHIGH_SIGNAL_CACHE_TTL = 15.0  # seconds
 _flyhigh_armed: dict[str, str] | None = None
 # Last good 5-min candles per option contract (fyers symbol -> candles)
 _flyhigh_option_candles: dict[str, list] = {}
+# Today's signal log, recorded live so it survives strike drift and restarts
+# (SQLite setting "flyhigh_signal_log" = {"date": ..., "symbols": {SYM: {key: row}}})
+_flyhigh_log: dict | None = None
+_flyhigh_log_scan_time: dict[str, float] = {}  # symbol / contract -> last scan (monotonic)
+_FLYHIGH_LOG_SCAN_INTERVAL = 60.0  # seconds between live recording scans per symbol
 
 # In-memory stores for strategy management
 _deployed_strategies: dict[str, dict] = {}
@@ -3000,25 +3005,79 @@ async def flyhigh_stop(body: dict = Body(...)):
                 "with the gate result, SL/target outcome and whether the strategy took it.",
 )
 async def flyhigh_signal_log(symbol: str = "NIFTY"):
+    """Today's CE/PE cross-ups: rows recorded live during the session (correct
+    strike at the time, survive restarts) merged with a replay of the current
+    1-ITM contracts. Each row carries its outcome, ``taken`` and ``missed``."""
     from core import vwap_engine as ve
     symbol = symbol.upper()
+    cfg = ve.get_config()
+    stored = _flyhigh_log_rows(symbol)
+    merged: dict[str, dict] = {k: dict(v) for k, v in stored.items()}
+
+    # Replay the current 1-ITM contracts (covers signals before the backend started)
     result = await _flyhigh_evaluate(symbol, use_cache=True)
     contracts = result.get("_contracts") or {}
-    if not any(contracts.values()):
-        return {"symbol": symbol, "signals": [], "reason": result.get("reason", "")}
-    option_candles = {
-        side: _flyhigh_option_candles.get((contracts.get(side) or {}).get("fyers_symbol", ""), [])
-        for side in ("CE", "PE")
-    }
-    rows = ve.scan_signal_log(contracts, option_candles, ve.get_config())
+    current_syms = {(c or {}).get("fyers_symbol", "") for c in contracts.values()}
+    if any(contracts.values()):
+        option_candles = {
+            side: _flyhigh_option_candles.get((contracts.get(side) or {}).get("fyers_symbol", ""), [])
+            for side in ("CE", "PE")
+        }
+        for r in ve.scan_signal_log(contracts, option_candles, cfg):
+            key = _flyhigh_log_key(r)
+            merged[key] = {**merged.get(key, {}), **r}
+
+    # Recorded rows on contracts that have since rolled out of 1-ITM: refresh
+    # their still-open outcome from that contract's own chart (throttled)
+    stale: dict[str, list] = {}
+    for r in merged.values():
+        sym = r.get("fyers_symbol", "")
+        if r.get("outcome") == "open" and sym and sym not in current_syms:
+            stale.setdefault(sym, []).append(r)
+    due = [sym for sym in stale
+           if time.monotonic() - _flyhigh_log_scan_time.get(sym, 0.0) >= _FLYHIGH_LOG_SCAN_INTERVAL * 2]
+    if due:
+        for sym in due:
+            _flyhigh_log_scan_time[sym] = time.monotonic()
+        candles = await _flyhigh_fetch_option_candles(due)
+        changed = False
+        for sym in due:
+            side = stale[sym][0].get("option_type", "CE")
+            contract = {side: {"strike": stale[sym][0].get("strike", 0), "fyers_symbol": sym}}
+            replay = {_flyhigh_log_key(r): r
+                      for r in ve.scan_signal_log(contract, {side: candles.get(sym, [])}, cfg)}
+            for r in stale[sym]:
+                key = _flyhigh_log_key(r)
+                fresh = replay.get(key)
+                if fresh and fresh.get("outcome") != r.get("outcome"):
+                    upd = {k: fresh[k] for k in ("outcome", "exit_time", "exit_premium", "pnl_points")}
+                    merged[key].update(upd)
+                    if key in stored:
+                        stored[key].update(upd)
+                        changed = True
+        if changed:
+            _flyhigh_log_save()
+
     taken = {
         str((s.get("risk_params") or {}).get("signal_candle_ts", ""))
         for s in _flyhigh_today_trades(symbol)
     }
     taken.discard("")
+    rows = sorted(merged.values(), key=lambda r: (r.get("signal_candle_ts", ""), r.get("option_type", "")))
     for r in rows:
         r["taken"] = str(r.get("signal_candle_ts", "")) in taken
-    return {"symbol": symbol, "signals": rows}
+        r["missed"] = not r.get("blocked") and not r["taken"]
+        r.setdefault("recorded", False)
+        r.setdefault("missed_reason", "")
+    out = {
+        "symbol": symbol,
+        "signals": rows,
+        "missed_count": sum(1 for r in rows if r["missed"]),
+        "taken_count": sum(1 for r in rows if r["taken"]),
+    }
+    if not rows and not any(contracts.values()):
+        out["reason"] = result.get("reason", "")
+    return out
 
 
 @app.get("/api/flyhigh/performance", tags=["Fly-High"], summary="Fly-High performance stats")
@@ -3239,6 +3298,92 @@ def _flyhigh_set_armed(symbol: str, armed: bool) -> None:
         get_store().save_setting("flyhigh_armed", dict(m))
     except Exception as exc:
         logger.warning(f"Fly-High armed state save failed: {exc}")
+
+
+def _flyhigh_log_rows(symbol: str) -> dict[str, dict]:
+    """Today's recorded signal rows for ``symbol`` (key -> row); resets each day."""
+    global _flyhigh_log
+    today = _flyhigh_today()
+    if _flyhigh_log is None:
+        try:
+            from core.state_store import get_store
+            _flyhigh_log = dict(get_store().load_setting("flyhigh_signal_log", {}) or {})
+        except Exception as exc:
+            logger.debug(f"Fly-High signal log load failed: {exc}")
+            _flyhigh_log = {}
+    if _flyhigh_log.get("date") != today:
+        _flyhigh_log = {"date": today, "symbols": {}}
+    return _flyhigh_log.setdefault("symbols", {}).setdefault(symbol.upper(), {})
+
+
+def _flyhigh_log_save() -> None:
+    try:
+        from core.state_store import get_store
+        get_store().save_setting("flyhigh_signal_log", _flyhigh_log or {})
+    except Exception as exc:
+        logger.warning(f"Fly-High signal log save failed: {exc}")
+
+
+def _flyhigh_log_key(row: dict) -> str:
+    return f"{row.get('fyers_symbol') or row.get('option_type')}{row.get('strike')}|{row.get('signal_candle_ts')}"
+
+
+def _flyhigh_missed_reason(symbol: str) -> str:
+    """Why a valid signal firing right now would not be traded ("" = it will be)."""
+    from core import vwap_engine as ve
+    if not _flyhigh_is_armed(symbol):
+        return "strategy not deployed"
+    try:
+        from core.state_store import get_store
+        if get_store().is_kill_switch_active():
+            return "kill switch active"
+    except Exception:
+        pass
+    trades = _flyhigh_today_trades(symbol)
+    if any((t.get("status") or "").upper() == "RUNNING" for t in trades):
+        return "position already open"
+    if len(trades) >= int(ve.get_config().get("max_trades_per_day", 2)):
+        return "daily trade cap reached"
+    return ""
+
+
+async def _flyhigh_record_signals(symbol: str) -> None:
+    """Record fresh CE/PE cross-ups on the contracts that are 1-ITM *now*, and
+    refresh rows already recorded for them. Called from the live cycle so the
+    evening view shows the strike that was actually 1-ITM when each signal fired."""
+    from core import vwap_engine as ve
+    symbol = symbol.upper()
+    now_m = time.monotonic()
+    if now_m - _flyhigh_log_scan_time.get(symbol, 0.0) < _FLYHIGH_LOG_SCAN_INTERVAL:
+        return
+    _flyhigh_log_scan_time[symbol] = now_m
+    result = await _flyhigh_evaluate(symbol, use_cache=True)
+    contracts = result.get("_contracts") or {}
+    if not any(contracts.values()):
+        return
+    option_candles = {
+        side: _flyhigh_option_candles.get((contracts.get(side) or {}).get("fyers_symbol", ""), [])
+        for side in ("CE", "PE")
+    }
+    rows = ve.scan_signal_log(contracts, option_candles, ve.get_config())
+    stored = _flyhigh_log_rows(symbol)
+    now = datetime.now(IST)
+    fresh_after = (now - timedelta(minutes=3 * ve.CANDLE_MINUTES)).strftime("%H:%M")
+    changed = False
+    for r in rows:
+        key = _flyhigh_log_key(r)
+        if key in stored:
+            merged = {**stored[key], **r}
+            if merged != stored[key]:
+                stored[key] = merged
+                changed = True
+        elif r["time"] >= fresh_after:
+            # New signal on the contract that is 1-ITM right now
+            stored[key] = {**r, "recorded": True,
+                           "missed_reason": "" if r["blocked"] else _flyhigh_missed_reason(symbol)}
+            changed = True
+    if changed:
+        _flyhigh_log_save()
 
 
 def _flyhigh_today_trades(symbol: str | None = None) -> list[dict]:
@@ -8192,6 +8337,15 @@ async def run_flyhigh_auto_cycle() -> dict:
     # (b) Entries for armed underlyings
     today = _flyhigh_today()
     armed = [sym for sym, day in _flyhigh_armed_map().items() if day == today]
+
+    # (c) Live signal log — runs whether or not deployed, so missed signals are
+    #     there to review after market hours. NIFTY always, plus any symbol that
+    #     is armed or whose page was opened.
+    for sym in dict.fromkeys(["NIFTY", *armed, *list(_flyhigh_signal_cache.keys())]):
+        try:
+            await _flyhigh_record_signals(sym)
+        except Exception as e:
+            logger.debug(f"Fly-High signal log record failed for {sym}: {e!r}")
     if not armed:
         return {"armed": [], "deployed": 0}
 

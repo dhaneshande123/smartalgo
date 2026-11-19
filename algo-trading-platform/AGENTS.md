@@ -37,9 +37,16 @@ analyses the option charts directly. There is **no NIFTY-chart filter**.
   - Guards: one RUNNING per underlying, `max_trades_per_day`, and the kill switch.
 - `POST /api/flyhigh/stop {symbol}` stops new entries. An open position stays managed and keeps its
   Exit button.
-- `GET /api/flyhigh/signal-log/{symbol}` is a read-only log of today's CE/PE cross-ups, with
-  outcome and `taken` flags. It replaces missed-signals and late-entry. The log is computed on the
-  *current* 1-ITM contracts.
+- `GET /api/flyhigh/signal-log/{symbol}` is a read-only log of today's CE/PE cross-ups. Rows carry
+  the outcome plus `taken` / `missed` / `missed_reason` flags (e.g. "strategy not deployed",
+  "position already open"). It replaces late-entry.
+  - **Recorded live:** `run_flyhigh_auto_cycle` part (c) calls `_flyhigh_record_signals` every 60s
+    for NIFTY, armed symbols and viewed symbols, whether or not the strategy is deployed.
+  - Recorded rows are stored in SQLite setting `flyhigh_signal_log` (`{date, symbols: {SYM: {key: row}}}`),
+    so the evening view keeps the strike that was 1-ITM at signal time and survives restarts.
+  - The endpoint merges the recorded rows with a replay of the current contracts. It refreshes the
+    still-open outcomes of rolled-out contracts from their own chart, throttled to once every 2 min.
+- `book_partial_pct >= 100` means a full exit at the 1:1 target, with no runner.
 - `GET /api/flyhigh/performance` returns `armed: {SYM: true}`. `open_positions` carry `booked` and `trail_sl`.
 
 **Files**: `core/vwap_engine.py`, `core/api.py` (Fly-High section + `run_flyhigh_auto_cycle`),
@@ -495,7 +502,7 @@ AI Signal Engine / Strategy Builder / Manual
 - `GET|POST /api/flyhigh/config` — Fly-High strategy config (ADX threshold, risk/trade, entry window)
 - `POST /api/flyhigh/deploy` — Arm Fly-High for today (`{symbol}`); the backend loop auto-enters/exits
 - `POST /api/flyhigh/stop` — Disarm (no new entries; open position stays managed)
-- `GET /api/flyhigh/signal-log/{symbol}` — Read-only log of today's CE/PE cross-ups with outcome + taken flag
+- `GET /api/flyhigh/signal-log/{symbol}` — Today's CE/PE cross-ups (recorded live + saved): outcome, taken, missed + reason
 - `GET /api/flyhigh/ticker/{symbol}` — Cache-only spot + CE/PE LTP/VWAP (1s poll)
 - `GET /api/flyhigh/performance` — Fly-High analytics, live P&L, open positions, armed map
 - `POST /api/fyers/reconnect` — retry live feed with the stored token (no re-login)

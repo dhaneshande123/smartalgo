@@ -132,7 +132,7 @@ algo-trading-platform/
   - Fly-High: one **Deploy Strategy** button arms it for today (`POST /api/flyhigh/deploy`, persisted in SQLite setting `flyhigh_armed`). It must be re-armed each trading day. The 25s backend cycle enters and exits on its own. **Stop Strategy** (`POST /api/flyhigh/stop`) halts new entries, and an open position stays managed.
   - Scalper: 60s auto-deploy toggle.
   - Both are kill-switch aware, dedup-protected and capped.
-- **Fly-High signal log**: `GET /api/flyhigh/signal-log/{symbol}` is a read-only list of today's CE/PE cross-ups. It shows the forward-simulated outcome (Target Hit / SL Hit / open), the blocked reason, and whether each one was traded
+- **Fly-High signal log**: `GET /api/flyhigh/signal-log/{symbol}` is a read-only list of today's CE/PE cross-ups. It shows the forward-simulated outcome (Target Hit / SL Hit / open), the blocked reason, and whether each one was traded or **missed** (with the reason). Rows are recorded live every 60s and saved in SQLite, so missed signals can be reviewed after market hours on the strike that was 1-ITM at the time
 - **Paper trading**: Full PaperBroker with simulated fills, slippage, commission
 
 ### Risk Management

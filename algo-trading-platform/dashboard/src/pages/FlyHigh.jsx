@@ -98,6 +98,7 @@ export default function FlyHigh() {
   const exitPosition = useStopDeployedStrategy();
   const isKillActive = !!riskData?.kill_switch_active;
   const [showConfig, setShowConfig] = useState(false);
+  const [logFilter, setLogFilter] = useState('missed');
   const [localCfg, setLocalCfg] = useState({});
   const debounceRef = useRef(null);
   useEffect(() => { if (cfg) setLocalCfg(prev => Object.keys(prev).length ? prev : { ...cfg }); }, [cfg]);
@@ -118,6 +119,10 @@ export default function FlyHigh() {
   const adxMin = cfg?.adx_min ?? 10;
   const openPositions = perf?.open_positions || [];
   const signals = logData?.signals || [];
+  const missedCount = signals.filter((s) => s.missed).length;
+  const takenCount = signals.filter((s) => s.taken).length;
+  const shownSignals = signals.filter((s) =>
+    logFilter === 'missed' ? s.missed : logFilter === 'taken' ? s.taken : logFilter === 'blocked' ? s.blocked : true);
   // Only the non-chart blockers (window, cap, conflict…) — chart rules are shown per panel
   const globalBlockers = (sig?.blockers || []).filter((b) => b !== 'no entry setup on CE or PE chart');
 
@@ -306,14 +311,37 @@ export default function FlyHigh() {
         </div>
       )}
 
-      {/* ── Today's signals (read-only log) ── */}
+      {/* ── Today's signals: missed / traded / blocked (recorded live, kept for the evening) ── */}
       <div className="glass-card !rounded-2xl !p-4">
-        <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-          <History className="w-4 h-4 text-accent" />
-          Today's Signals
-          <span className="text-xs text-slate-500 font-normal ml-auto">VWAP cross-ups on the current 1-ITM CE/PE charts · read-only</span>
-        </h3>
-        {signals.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+            <History className="w-4 h-4 text-accent" />
+            Today's Signals
+          </h3>
+          <div className="flex items-center gap-1 ml-2">
+            {[
+              { key: 'missed', label: `Missed (${missedCount})` },
+              { key: 'taken', label: `Traded (${takenCount})` },
+              { key: 'blocked', label: 'Blocked' },
+              { key: 'all', label: `All (${signals.length})` },
+            ].map((f) => (
+              <button
+                key={f.key}
+                onClick={() => setLogFilter(f.key)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                  logFilter === f.key ? 'bg-accent/20 text-accent' : 'bg-slate-800/40 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-slate-500 font-normal ml-auto"
+            title="Recorded live during market hours and saved, so you can review after the close. Outcome = what a trade with signal-candle-low SL and 1:1 target would have done.">
+            Saved for after-market review · read-only
+          </span>
+        </div>
+        {shownSignals.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -326,11 +354,12 @@ export default function FlyHigh() {
                   <th className="text-right py-1.5 px-2 font-medium">ADX</th>
                   <th className="text-center py-1.5 px-2 font-medium">ST</th>
                   <th className="text-center py-1.5 px-2 font-medium">Outcome</th>
+                  <th className="text-right py-1.5 px-2 font-medium" title="Premium points per unit: exit − entry">Result</th>
                   <th className="text-left py-1.5 px-2 font-medium">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {signals.map((s, i) => (
+                {shownSignals.map((s, i) => (
                   <tr key={i} className={`border-b border-slate-800/30 hover:bg-slate-800/20 ${s.blocked ? 'opacity-60' : ''}`}>
                     <td className="py-2 px-2 font-mono text-slate-300">{s.time}</td>
                     <td className={`py-2 px-2 font-mono font-bold ${s.option_type === 'CE' ? 'text-profit' : 'text-loss'}`}>{s.strike} {s.option_type}</td>
@@ -350,13 +379,17 @@ export default function FlyHigh() {
                         </span>
                       )}
                     </td>
+                    <td className={`py-2 px-2 text-right font-mono ${s.blocked || !s.pnl_points ? 'text-slate-500' : s.pnl_points > 0 ? 'text-profit' : 'text-loss'}`}>
+                      {s.blocked || !s.pnl_points ? '—' : `${s.pnl_points > 0 ? '+' : ''}${Number(s.pnl_points).toFixed(1)} pts`}
+                    </td>
                     <td className="py-2 px-2">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                         s.taken ? 'bg-blue-500/15 text-blue-400' :
-                        s.blocked ? 'bg-red-500/15 text-red-400' : 'bg-slate-700/40 text-slate-400'
+                        s.blocked ? 'bg-red-500/15 text-red-400' : 'bg-orange-500/15 text-orange-400'
                       }`}>
                         {s.taken ? <span className="inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />Traded</span>
-                          : s.blocked ? s.blocked_reason : 'Valid — not traded'}
+                          : s.blocked ? s.blocked_reason
+                          : `Missed${s.missed_reason ? ` — ${s.missed_reason}` : ''}`}
                       </span>
                     </td>
                   </tr>
@@ -366,7 +399,9 @@ export default function FlyHigh() {
           </div>
         ) : (
           <div className="text-sm text-slate-500 text-center py-4">
-            {logData?.reason || 'No VWAP cross-ups on the CE/PE charts yet today'}
+            {signals.length > 0
+              ? `No ${logFilter} signals today`
+              : logData?.reason || 'No VWAP cross-ups on the CE/PE charts yet today'}
           </div>
         )}
       </div>
@@ -423,7 +458,7 @@ export default function FlyHigh() {
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Target</div>
-            <div className="font-medium">Book {cfg?.book_partial_pct ?? 50}% @ 1:1</div>
+            <div className="font-medium">{(cfg?.book_partial_pct ?? 50) >= 100 ? 'Full exit @ 1:1' : `Book ${cfg?.book_partial_pct ?? 50}% @ 1:1`}</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Trail (runner)</div>
@@ -452,7 +487,7 @@ export default function FlyHigh() {
               { key: 'max_trades_per_day', label: 'Max Trades/Day', type: 'number' },
               { key: 'supertrend_period', label: 'SuperTrend Period', type: 'number' },
               { key: 'supertrend_multiplier', label: 'SuperTrend Mult', type: 'number' },
-              { key: 'book_partial_pct', label: 'Book Partial %', type: 'number' },
+              { key: 'book_partial_pct', label: 'Book at Target % (100 = full exit)', type: 'number' },
               { key: 'trail_giveback_pct', label: 'Fallback Give-back %', type: 'number' },
               { key: 'max_hold_minutes', label: 'Max Hold (min)', type: 'number' },
               { key: 'premium_floor_pct', label: 'Floor Stop %', type: 'number' },

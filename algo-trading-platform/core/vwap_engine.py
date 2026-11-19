@@ -528,6 +528,7 @@ def scan_signal_log(
                 "option_type": side,
                 "direction": "BULLISH" if side == "CE" else "BEARISH",
                 "strike": int(info["strike"]),
+                "fyers_symbol": info.get("fyers_symbol", ""),
                 "entry_premium": round(entry, 2),
                 "sl_premium": round(sl, 2),
                 "target_premium": round(target, 2),

@@ -773,9 +773,10 @@ class DashboardStrategyExecutor:
         target = entry + (entry - premium_sl) if 0 < premium_sl < entry else 0.0
 
         # ── Target (1:1 R:R): book a partial, or exit fully if only 1 lot ──
+        # (book_partial_pct >= 100 means exit everything at target, no runner)
         if not booked and target > 0 and ltp >= target:
-            if qty > lot_size:
-                frac = abs(float(risk.get("book_partial_pct", 50))) / 100.0
+            frac = abs(float(risk.get("book_partial_pct", 50))) / 100.0
+            if qty > lot_size and frac < 1.0:
                 self._book_partial(sid, strat, pos, ltp, frac, "Fly-High")
                 strat["_flyhigh_booked"] = True
                 return None  # keep the runner
