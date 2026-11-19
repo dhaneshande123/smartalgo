@@ -3403,8 +3403,8 @@ async def flyhigh_performance():
         target_prem = round(entry_price + (entry_price - sl_prem), 2) if sl_prem and entry_price else 0.0
         exit_reason_raw = s.get("exit_reason", "")
         outcome = (
-            "Target Hit" if "partial" in str(exit_reason_raw).lower() or (exit_price > 0 and target_prem > 0 and exit_price >= target_prem) else
-            "SL Hit" if exit_price > 0 and sl_prem > 0 and exit_price <= sl_prem else
+            "Target Hit" if s.get("_flyhigh_booked") or "target" in str(exit_reason_raw).lower() or (exit_price > 0 and target_prem > 0 and exit_price >= target_prem) else
+            "SL Hit" if "sl_stop" in str(exit_reason_raw).lower() or (exit_price > 0 and sl_prem > 0 and exit_price <= sl_prem) else
             exit_reason_raw or ("Profit" if pnl > 0 else "Loss" if pnl < 0 else "Flat")
         )
         recent.append({

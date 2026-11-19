@@ -244,7 +244,7 @@ def generate_signal(
 
     # Time window check
     entry_start = dtime.fromisoformat(cfg.get("entry_start", "09:20"))
-    entry_cutoff = dtime.fromisoformat(cfg.get("entry_cutoff", "14:30"))
+    entry_cutoff = dtime.fromisoformat(cfg.get("entry_cutoff", "15:15"))
     if now_t < entry_start:
         blockers.append(f"before entry window ({cfg['entry_start']})")
     if now_t > entry_cutoff:

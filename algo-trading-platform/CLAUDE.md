@@ -167,13 +167,18 @@ during market hours → dead), REST health tracking via `_consecutive_rest_failu
 New strategy tab: **Fly-High** — VWAP crossover on 5-minute candles for intraday momentum entries.
 
 **Entry logic**: When a 5-min candle closes above/below VWAP (crossover detection using candles[-2]
-and candles[-3]), with ADX gate (default ≥20), take a 1-ITM option position (one strike below ATM
-for CE, one above for PE). Skips the first 5-min candle (09:15-09:20 noise). SL = previous candle
-low/high, capped at `max_sl_points` (default 30). Position sizing by Rs-risk (default Rs 3000).
-Max 2 trades/day. Entry window 09:20-14:30.
+and candles[-3]), with ADX gate (default ≥10) + SuperTrend(10, 3) agreement, take a 1-ITM option position (one strike below ATM
+for CE, one above for PE). Skips the first 5-min candle (09:15-09:20 noise). SL = the signal
+candle's own low (CE) / high (PE), uncapped. Position sizing by Rs-risk (default Rs 2000, max 10 lots).
+Max 2 trades/day. Entry window 09:20-15:15.
 
-**Exit plan**: Book 50% at target (+60% default), trail remainder with 25% give-back, structural
-stop if VWAP recross, premium floor -40% backstop.
+**Exit plan** (enforced by `DashboardExecutor._manage_flyhigh`, routed on
+`risk_params.strategy_type == "flyhigh_vwap"` — added Nov 19, 2026; before that Fly-High SL/target
+were display-only and every trade exited via max-hold, EOD, manual or kill switch):
+spot SL (signal candle broken) or premium SL (`premium_sl`) any time → at 1:1 R:R premium target
+(`entry + (entry - premium_sl)`) book `book_partial_pct`% (full exit if 1 lot) → runner gets a
+breakeven stop + trail (gives back `trail_giveback_pct`% of peak gain) → premium floor
+`abs(premium_floor_pct)` backstop before booking → max hold 45 min → EOD 15:15.
 
 **New files**:
 - `core/vwap_engine.py` — `compute_vwap_series()`, `detect_crossover()`, `select_itm_strike()`,
@@ -417,7 +422,7 @@ AI Signal Engine / Strategy Builder / Manual
 | **Risk Engine (classes)** | `core/risk_engine/*.py` | Circuit breaker, drawdown monitor, Greeks aggregator, margin calculator, position tracker, risk manager |
 | **OI Signal Engine** | `core/oi_signal_engine.py` | 4-factor OI signal generation: buildup, PCR, max pain, S/R breach. Confidence scoring + stability filter. |
 | **Scalper Engine** | `core/scalper_engine.py` | Expiry-day OTM option-buying. S/R levels (CPR, PDH/PDL, VWAP, ORB, round numbers, OI walls), STRICT regime gate (ADX + confirmed breakout close + volume), time-based strike selection, liquidity filter, ₹-risk sizing. Stateless; chain-format agnostic (`normalize_chain_rows`). |
-| **VWAP Engine** | `core/vwap_engine.py` | Fly-High strategy: VWAP crossover on 5-min candles, ADX gate, 1-ITM strike selection, capped SL (prev candle low/high), Rs-risk sizing. Reuses `normalize_chain_rows` from scalper. |
+| **VWAP Engine** | `core/vwap_engine.py` | Fly-High strategy: VWAP crossover on 5-min candles, ADX gate, 1-ITM strike selection, uncapped SL at signal candle low/high, Rs-risk sizing. Reuses `normalize_chain_rows` from scalper. |
 | **AI Signal Engine** | `core/ai_signal_engine.py` | Strategy recommendations from live market data |
 | **Strategy Fit Matrix** | `core/strategy_fit.py` | Maps regimes/IV/ADX to optimal strategy types |
 | **Market Regime** | `core/market_regime.py` | Classifies market: TRENDING_UP/DOWN, RANGING, HIGH_VOL |
@@ -446,7 +451,7 @@ AI Signal Engine / Strategy Builder / Manual
 - `POST /api/auto-deploy/execute` — manual one-shot auto-deploy of ready signals (paper)
 - `GET /api/scalper/performance` — closed-scalp analytics: win rate, avg R, profit factor, expectancy, avg hold, and exit-reason attribution (target/trail/structural/stop/eod/manual). `_bucket_exit_reason` maps raw reasons to buckets.
 - `GET /api/flyhigh/signal/{symbol}` — VWAP crossover signal: direction, strike, SL, target, premium, blockers
-- `GET|POST /api/flyhigh/config` — Fly-High strategy config (ADX threshold, SL cap, risk/trade, entry window)
+- `GET|POST /api/flyhigh/config` — Fly-High strategy config (ADX threshold, risk/trade, entry window)
 - `POST /api/flyhigh/deploy` — Deploy Fly-High signal to paper trading
 - `GET /api/flyhigh/performance` — Fly-High closed-trade analytics
 - `POST /api/fyers/reconnect` — retry live feed with the stored token (no re-login)
@@ -671,7 +676,7 @@ PaperBroker returns Decimal strings with different field names. API layer normal
 45. AI Auto-Deploy loop (June 2026): opt-in toggle on AI Signals page. `_auto_deploy_config` (enabled/symbols/min_confidence/max_per_cycle) drives `DashboardExecutor._maybe_auto_deploy` — every ~60s during market hours, deploys ready signals (>=70% conf) to paper via shared `_execute_auto_deploy_core` (dedup + kill-switch aware + per-cycle cap). Fixed `build_deploy_payload` NIFTY hardcode (now respects underlying). Endpoints `GET|POST /api/auto-deploy/config`.
 46. SENSEX support: added to frontend selector (`UNDERLYINGS`), header pill, mock data (`INDEX_BASE`). Backend mapping (`BSE:SENSEX-INDEX`), strike step 100, lot size 20 already existed. Scalper + AI signals work for SENSEX. Per-symbol expiry weekdays: NIFTY=Tuesday, SENSEX=Thursday (`scalper_engine.WEEKLY_EXPIRY_WEEKDAY`).
 47. Scalp performance + exit-attribution panel (`/api/scalper/performance` + Scalper page card): win rate, avg R (P&L/risk), profit factor, expectancy, avg hold, best/worst, and a breakdown bar of WHICH exit fired (target/trail/breakeven/structural/premium-floor/time/eod/manual) with per-bucket count + P&L + win-rate. Tells you if the exit plan is the edge or the leak. Also: `force` deploy now synthesizes a direction (spot vs VWAP) + protective stop so the manual-override button works in flat conditions (liquidity filter still applies).
-49. **Fly-High VWAP Strategy** (`core/vwap_engine.py` + `/flyhigh` page): VWAP crossover on 5-min candles with ADX gate, 1-ITM strike selection, capped SL, partial book + trail exits. Full UI: signal card, deploy, config editor, performance stats.
+49. **Fly-High VWAP Strategy** (`core/vwap_engine.py` + `/flyhigh` page): VWAP crossover on 5-min candles with ADX gate, 1-ITM strike selection, signal-candle SL, executor-enforced exits (`_manage_flyhigh`). Full UI: signal card, deploy, config editor, performance stats.
 50. **Fyers reliability hardening (Aug 2026)**: SDK singleton clearing, stale-tick detection (>60s = dead), REST health tracking, 429 retry with backoff, rate budget optimization (0.5s→3s refresh, 1s→3s frontend polling), paper positions merge (split-brain fix), ADX early-return fields.
 44. Expiry-Day Scalper (`core/scalper_engine.py` + `/scalper` page): S/R-driven OTM option buying for the 1->50 Rs gamma moves. Levels: CPR/PDH-PDL/VWAP/ORB/round-numbers/OI-walls. STRICT regime gate (ADX>=20 + confirmed breakout close + volume) filters chop. Time-based strike (OTM early -> ATM late), liquidity filter (min OI/vol, max spread%), Rs-risk sizing (default Rs2000/trade). Exit plan in `DashboardExecutor._manage_scalp`: book 50% at +50% -> stop to breakeven -> trail (give-back 30%), structural stop (spot reclaims level), premium-floor -35% backstop, late-session tightening, EOD square-off. Paper-validate first. Endpoint is warm-cache + bounded-fetch (<0.5s) to stay under the 10s frontend axios timeout.
 

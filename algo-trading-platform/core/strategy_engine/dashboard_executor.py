@@ -437,6 +437,9 @@ class DashboardStrategyExecutor:
                 # Scalper: partial-book + trail + structural stop (may book a
                 # partial as a side-effect and return None to keep the runner)
                 exit_reason = self._manage_scalp(sid, strat, now_t)
+            elif risk.get("strategy_type") == "flyhigh_vwap":
+                # Fly-High: spot/premium SL, 1:1 R:R partial book, trail runner
+                exit_reason = self._manage_flyhigh(sid, strat, now_t)
             else:
                 exit_reason = self._check_exit_conditions(strat, now_t)
             if exit_reason:
@@ -657,24 +660,13 @@ class DashboardStrategyExecutor:
 
         booked = bool(strat.get("_scalp_booked", False))
         book_at = float(risk.get("book_partial_pct", 50))
-        floor = float(risk.get("premium_floor_pct", 35))
+        floor = abs(float(risk.get("premium_floor_pct", 35)))  # tolerate -35 or 35
         trail_give = float(risk.get("trail_giveback_pct", 30))
 
         # ── Partial book at +book_at% (keep a runner) ──
         if not booked and pnl_pct >= book_at and qty > lot_size:
-            book_qty = max(lot_size, round((qty / 2) / lot_size) * lot_size)
-            book_qty = min(book_qty, qty - lot_size)  # always leave >= 1 lot running
-            realized_add = (ltp - entry) * book_qty
-            pos["_original_qty"] = pos.get("_original_qty") or qty
-            pos["qty"] = qty - book_qty
-            pos["lots"] = max(1, int(pos["qty"] / lot_size))
-            strat["_partial_gross"] = float(strat.get("_partial_gross", 0.0)) + realized_add
-            strat["realized_pnl"] = float(strat.get("realized_pnl", 0.0)) + realized_add
+            self._book_partial(sid, strat, pos, ltp, 0.5, "Scalp")
             strat["_scalp_booked"] = True
-            logger.info(
-                f"Scalp {sid}: booked {book_qty} @ {ltp:.2f} (+{pnl_pct:.0f}%), "
-                f"realized +{realized_add:.0f}, trailing {pos['qty']} runner"
-            )
             return None  # not a full exit
 
         # ── After partial: breakeven + trail the runner ──
@@ -697,6 +689,118 @@ class DashboardStrategyExecutor:
                     return f"late_tighten_stop ({pnl_pct:.0f}% after {tighten})"
             except (ValueError, TypeError):
                 pass
+
+        return None
+
+    @staticmethod
+    def _book_partial(sid: str, strat: dict, pos: dict, ltp: float, fraction: float, label: str) -> None:
+        """Book ``fraction`` of a single BUY leg at ``ltp``, always leaving at
+        least one lot running. Tracks ``_original_qty``/``_partial_gross`` so
+        ``_refresh_strategy_pnl`` can reconstruct the full P&L after exit."""
+        lot_size = int(strat.get("lot_size", 1) or 1)
+        entry = float(pos.get("entry_price", 0) or 0)
+        qty = int(pos.get("qty", 0) or 0)
+        book_qty = max(lot_size, round((qty * fraction) / lot_size) * lot_size)
+        book_qty = min(book_qty, qty - lot_size)  # always leave >= 1 lot running
+        realized_add = (ltp - entry) * book_qty
+        pos["_original_qty"] = pos.get("_original_qty") or qty
+        pos["qty"] = qty - book_qty
+        pos["lots"] = max(1, int(pos["qty"] / lot_size))
+        strat["_partial_gross"] = float(strat.get("_partial_gross", 0.0)) + realized_add
+        strat["realized_pnl"] = float(strat.get("realized_pnl", 0.0)) + realized_add
+        logger.info(
+            f"{label} {sid}: booked {book_qty} @ {ltp:.2f} ({(ltp / entry - 1) * 100:+.0f}%), "
+            f"realized {realized_add:+.0f}, trailing {pos['qty']} runner"
+        )
+
+    def _manage_flyhigh(self, sid: str, strat: dict, now_t: dtime) -> str | None:
+        """Manage a Fly-High (VWAP crossover) 1-ITM option buy.
+
+        Returns a reason string for a FULL exit, or None (which may include a
+        partial book as a side-effect, leaving a runner). The exit plan:
+          - spot SL (any time): spot breaks the signal candle's low/high
+          - premium SL (any time): option LTP <= ``premium_sl``
+          - target at 1:1 R:R on premium (entry + (entry - premium_sl)):
+            book ``book_partial_pct``% and trail the rest; full exit if 1 lot
+          - after booking: breakeven stop + trail (give back
+            ``trail_giveback_pct``% of the peak gain)
+          - before booking: premium-floor backstop (``premium_floor_pct``)
+          - max hold time + EOD square-off
+        """
+        risk = strat.get("risk_params", {}) or {}
+        positions = strat.get("positions", [])
+        if not positions:
+            return None
+        pos = positions[0]  # Fly-High is a single BUY leg
+        entry = float(pos.get("entry_price", 0) or 0)
+        ltp = float(pos.get("ltp", entry) or entry)
+        qty = int(pos.get("qty", 0) or 0)
+        if entry <= 0 or qty <= 0:
+            return None
+
+        lot_size = int(strat.get("lot_size", 1) or 1)
+        spot = float(strat.get("spot_price", 0) or 0)
+        pnl_pct = (ltp / entry - 1.0) * 100.0
+        bullish = (pos.get("symbol") or "").upper().endswith("CE")
+
+        # ── EOD square-off (highest priority) ──
+        if now_t >= SQUARE_OFF_TIME:
+            return "eod_square_off"
+
+        # ── Spot SL: signal candle's low (CE) / high (PE) broken ──
+        sl_spot = float(risk.get("sl_spot_ref", 0) or 0)
+        if sl_spot > 0 and spot > 0:
+            if bullish and spot < sl_spot:
+                return f"spot_sl_stop (spot {spot:.0f} < SL {sl_spot:.0f})"
+            if not bullish and spot > sl_spot:
+                return f"spot_sl_stop (spot {spot:.0f} > SL {sl_spot:.0f})"
+
+        # ── Premium SL ──
+        premium_sl = float(risk.get("premium_sl", 0) or 0)
+        if premium_sl > 0 and ltp <= premium_sl:
+            return f"premium_sl_stop (Rs{ltp:.1f} <= SL Rs{premium_sl:.1f})"
+
+        # ── Max hold time ──
+        max_hold = self._get_risk_value(risk, "max_hold_minutes", "maxHoldMinutes")
+        entered_at = strat.get("entered_at")
+        if max_hold and entered_at:
+            try:
+                held = (datetime.now(IST) - datetime.fromisoformat(entered_at)).total_seconds() / 60.0
+                if held >= max_hold:
+                    return f"max_hold_exceeded ({held:.0f}min >= {max_hold:.0f}min limit)"
+            except (ValueError, TypeError):
+                pass
+
+        # ── Track peak P&L% (high-water mark) ──
+        hwm = float(strat.get("_flyhigh_hwm_pct", 0.0))
+        if pnl_pct > hwm:
+            strat["_flyhigh_hwm_pct"] = pnl_pct
+            hwm = pnl_pct
+
+        booked = bool(strat.get("_flyhigh_booked", False))
+        target = entry + (entry - premium_sl) if 0 < premium_sl < entry else 0.0
+
+        # ── Target (1:1 R:R): book a partial, or exit fully if only 1 lot ──
+        if not booked and target > 0 and ltp >= target:
+            if qty > lot_size:
+                frac = abs(float(risk.get("book_partial_pct", 50))) / 100.0
+                self._book_partial(sid, strat, pos, ltp, frac, "Fly-High")
+                strat["_flyhigh_booked"] = True
+                return None  # keep the runner
+            return f"target_hit (Rs{ltp:.1f} >= 1:1 target Rs{target:.1f})"
+
+        if booked:
+            # ── After partial: breakeven + trail the runner ──
+            if ltp <= entry:
+                return "breakeven_stop (runner fell back to entry after booking)"
+            give = abs(float(risk.get("trail_giveback_pct", 30)))
+            if hwm > 0 and pnl_pct <= hwm * (1 - give / 100.0):
+                return f"trail_stop (+{pnl_pct:.0f}% gave back {give:.0f}% of peak +{hwm:.0f}%)"
+        else:
+            # ── Before partial: premium-floor backstop (stored as -35 or 35) ──
+            floor = abs(float(risk.get("premium_floor_pct", 35)))
+            if floor > 0 and pnl_pct <= -floor:
+                return f"premium_floor_stop ({pnl_pct:.0f}% <= -{floor:.0f}%)"
 
         return None
 

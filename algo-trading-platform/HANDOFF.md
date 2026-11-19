@@ -126,7 +126,7 @@ algo-trading-platform/
 ## What Is Completed
 
 ### Core Trading Features
-- **Fly-High strategy** (VWAP crossover): 5-min candle VWAP crossover detection (inter-candle + intra-candle), SuperTrend confluence filter, ADX gate (default >= 20), 1-ITM strike selection, Rs-risk position sizing, capped SL (prev candle low/high), 1:1 R:R targeting, entry window 09:20-15:15, max 2 trades/day
+- **Fly-High strategy** (VWAP crossover): 5-min candle VWAP crossover detection (inter-candle + intra-candle), SuperTrend confluence filter, ADX gate (default >= 10), 1-ITM strike selection, Rs-risk position sizing, uncapped SL at the signal candle low (CE) / high (PE), 1:1 R:R targeting, entry window 09:20-15:15, max 2 trades/day
 - **Expiry Scalper**: S/R breakout (CPR, PDH/PDL, VWAP, ORB, round numbers, OI walls), 3 profiles (Expiry/Daily/Momentum), STRICT regime gate (ADX + confirmed breakout + volume), partial-book + trail exits
 - **Auto-deploy system**: Both strategies support hands-free auto-deploy (25s cycle for Fly-High, 60s for Scalper). Kill-switch aware, dedup-protected, capped
 - **Active signal caching**: 330s TTL cache bridges the gap between signal detection and deploy action, preventing missed signals due to timing
@@ -181,6 +181,7 @@ algo-trading-platform/
 | Feature | Files | Status |
 |---------|-------|--------|
 | Fly-High signal reliability | `core/vwap_engine.py`, `core/api.py` | Active — intra-candle detection + signal cache shipped, needs live market validation |
+| Fly-High exit enforcement | `core/strategy_engine/dashboard_executor.py` (`_manage_flyhigh`), `core/api.py` | Fixed Nov 19 2026 — SL/target were display-only (no `scalp` flag, fell through to generic Rs-P&L checks). Now spot SL, premium SL, 1:1 partial book, breakeven/trail, floor, max-hold all fire. Simulation-verified; needs live session |
 | P&L accuracy | `core/api.py`, `core/charges.py`, `core/strategy_engine/dashboard_executor.py` | Fixed double-charge bug + partial exit tracking, monitoring for edge cases |
 | Fyers auto-reconnect | `core/fyers_live_feed.py`, `core/strategy_engine/dashboard_executor.py` | Watchdog implemented, needs extended live session testing |
 
@@ -188,7 +189,7 @@ algo-trading-platform/
 
 ## Pending Tasks (Priority Order)
 
-1. **Live market validation** — Run a full trading session and confirm: intra-candle crossover fires when it should, auto-deploy enters positions without manual intervention, missed signals scanner shows correct outcomes, kill switch triggers and blocks correctly
+1. **Live market validation** — Run a full trading session and confirm: intra-candle crossover fires when it should, auto-deploy enters positions without manual intervention, missed signals scanner shows correct outcomes, kill switch triggers and blocks correctly, **Fly-High exits fire on their own** (Today's Trades should show `spot_sl_stop` / `premium_sl_stop` / `target_hit` / `trail_stop` instead of only `manual_stop`)
 2. **Backtest engine wiring** — VectorBT engine exists but isn't wired to the Fly-High / Scalper strategies specifically. Need to plug the VWAP crossover logic into the vectorized backtester for parameter optimization
 3. **Multi-underlying support** — Currently trades NIFTY primarily. BANKNIFTY, FINNIFTY, SENSEX data flows work but strategy auto-deploy only runs for configured symbols. Need concurrent strategy execution per underlying
 4. **Trade log export** — CSV/Excel export of trade history for tax and audit purposes. `exportCsv.js` utility exists but isn't wired to all trade tables
