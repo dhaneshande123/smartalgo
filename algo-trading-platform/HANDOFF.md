@@ -126,11 +126,13 @@ algo-trading-platform/
 ## What Is Completed
 
 ### Core Trading Features
-- **Fly-High strategy** (VWAP crossover): 5-min candle VWAP crossover detection (inter-candle + intra-candle), SuperTrend confluence filter, ADX gate (default >= 10), 1-ITM strike selection, Rs-risk position sizing, uncapped SL at the signal candle low (CE) / high (PE), 1:1 R:R targeting, entry window 09:20-15:15, max 2 trades/day
+- **Fly-High strategy** (option-chart VWAP): evaluates the 1-ITM CE and 1-ITM PE **5-min option charts** directly, with no NIFTY filter. Entry = VWAP cross-up + SuperTrend(10, 3) UP + ADX(14) >= 10 on the option chart. If CE and PE fire on the same candle, the signal is skipped. SL = the signal candle low (premium). Target 1:1: book 50%, then the runner trails the option SuperTrend line (never below entry). Rs-risk sizing, entry window 09:20-15:15, max 2 trades/day
 - **Expiry Scalper**: S/R breakout (CPR, PDH/PDL, VWAP, ORB, round numbers, OI walls), 3 profiles (Expiry/Daily/Momentum), STRICT regime gate (ADX + confirmed breakout + volume), partial-book + trail exits
-- **Auto-deploy system**: Both strategies support hands-free auto-deploy (25s cycle for Fly-High, 60s for Scalper). Kill-switch aware, dedup-protected, capped
-- **Active signal caching**: 330s TTL cache bridges the gap between signal detection and deploy action, preventing missed signals due to timing
-- **Missed signals scanner**: Scans today's candles for VWAP crossovers that weren't traded, with forward candle scanning to simulate what the outcome would have been (Target Hit / SL Hit)
+- **Hands-free execution**:
+  - Fly-High: one **Deploy Strategy** button arms it for today (`POST /api/flyhigh/deploy`, persisted in SQLite setting `flyhigh_armed`). It must be re-armed each trading day. The 25s backend cycle enters and exits on its own. **Stop Strategy** (`POST /api/flyhigh/stop`) halts new entries, and an open position stays managed.
+  - Scalper: 60s auto-deploy toggle.
+  - Both are kill-switch aware, dedup-protected and capped.
+- **Fly-High signal log**: `GET /api/flyhigh/signal-log/{symbol}` is a read-only list of today's CE/PE cross-ups. It shows the forward-simulated outcome (Target Hit / SL Hit / open), the blocked reason, and whether each one was traded
 - **Paper trading**: Full PaperBroker with simulated fills, slippage, commission
 
 ### Risk Management
@@ -158,7 +160,7 @@ algo-trading-platform/
 
 ### Dashboard (16 pages, all using real data)
 - Dashboard (cockpit: hero P&L, deployed strategies, equity curve, risk snapshot)
-- Fly-High (VWAP signal card, deploy, missed signals with outcomes, performance, config editor)
+- Fly-High (Deploy/Stop Strategy, CE & PE chart panels with VWAP/SuperTrend/ADX checks, running positions with SL/target/trail + Exit, read-only signal log, performance, config editor)
 - Scalper (3-profile switcher, S/R rail, signal card, performance analytics)
 - Market Data (option chain, OI Analysis, OI Signals with 1-click deploy)
 - Charts (TradingView interactive: zoom/pan/crosshair)
@@ -180,8 +182,8 @@ algo-trading-platform/
 
 | Feature | Files | Status |
 |---------|-------|--------|
-| Fly-High signal reliability | `core/vwap_engine.py`, `core/api.py` | Active — intra-candle detection + signal cache shipped, needs live market validation |
-| Fly-High exit enforcement | `core/strategy_engine/dashboard_executor.py` (`_manage_flyhigh`), `core/api.py` | Fixed Nov 19 2026 — SL/target were display-only (no `scalp` flag, fell through to generic Rs-P&L checks). Now spot SL, premium SL, 1:1 partial book, breakeven/trail, floor, max-hold all fire. Simulation-verified; needs live session |
+| Fly-High option-chart rewrite | `core/vwap_engine.py`, `core/api.py`, `dashboard/src/pages/FlyHigh.jsx` | Nov 19 2026 — moved from the NIFTY chart to the CE/PE option charts; Deploy/Stop arm-for-today replaces the auto-deploy toggle and manual per-signal deploy. Simulation-verified; needs a live session |
+| Fly-High exit enforcement | `core/strategy_engine/dashboard_executor.py` (`_manage_flyhigh`), `core/api.py` | Fixed Nov 19 2026 — SL/target were display-only (no `scalp` flag, fell through to generic Rs-P&L checks). Now premium SL, 1:1 partial book, breakeven + option-SuperTrend trail, floor and max-hold all fire. Simulation-verified; needs live session |
 | P&L accuracy | `core/api.py`, `core/charges.py`, `core/strategy_engine/dashboard_executor.py` | Fixed double-charge bug + partial exit tracking, monitoring for edge cases |
 | Fyers auto-reconnect | `core/fyers_live_feed.py`, `core/strategy_engine/dashboard_executor.py` | Watchdog implemented, needs extended live session testing |
 
@@ -189,7 +191,7 @@ algo-trading-platform/
 
 ## Pending Tasks (Priority Order)
 
-1. **Live market validation** — Run a full trading session and confirm: intra-candle crossover fires when it should, auto-deploy enters positions without manual intervention, missed signals scanner shows correct outcomes, kill switch triggers and blocks correctly, **Fly-High exits fire on their own** (Today's Trades should show `spot_sl_stop` / `premium_sl_stop` / `target_hit` / `trail_stop` instead of only `manual_stop`)
+1. **Live market validation** — Run a full trading session and confirm: after **Deploy Strategy** the backend enters on a CE/PE option-chart setup without manual intervention, the signal log shows correct outcomes and `taken` flags, the SuperTrend trail ratchets, kill switch triggers and blocks correctly, **Fly-High exits fire on their own** (Today's Trades should show `premium_sl_stop` / `target_hit` / `trail_stop` instead of only `manual_stop`)
 2. **Backtest engine wiring** — VectorBT engine exists but isn't wired to the Fly-High / Scalper strategies specifically. Need to plug the VWAP crossover logic into the vectorized backtester for parameter optimization
 3. **Multi-underlying support** — Currently trades NIFTY primarily. BANKNIFTY, FINNIFTY, SENSEX data flows work but strategy auto-deploy only runs for configured symbols. Need concurrent strategy execution per underlying
 4. **Trade log export** — CSV/Excel export of trade history for tax and audit purposes. `exportCsv.js` utility exists but isn't wired to all trade tables
@@ -311,8 +313,8 @@ The platform is built around Fyers API v3 for all live data (quotes, option chai
 ### 5. Local Greeks computation
 Fyers does not provide Greeks. All Greeks (Delta, Gamma, Theta, Vega, Rho) are computed locally via Black-Scholes. IV is back-solved per strike using Newton-Raphson from option market prices. Falls back to India VIX when per-strike IV is unavailable.
 
-### 6. Active signal cache (330s TTL) for deploy reliability
-VWAP crossover detection is point-in-time — the crossover only appears at `candles[-2]` for one candle period (~5 min). But deploy/auto-deploy happens seconds to minutes later. The active signal cache bridges this gap: signal polling catches the crossover, caches it, and deploy/auto-deploy use the cached signal within its TTL.
+### 6. Fly-High runs server-side once armed (no deploy-timing gap)
+VWAP crossover detection is point-in-time. The cross only appears on the last closed candle for one period (~5 min). Because the deploy decision now lives in the 25s backend cycle (`run_flyhigh_auto_cycle`), a signal can no longer be missed while waiting for a click. That is why the old 330s active-signal cache and the late-entry path were removed. Each `signal_candle_ts` is entered at most once.
 
 ### 7. Charges model uses Indian F&O actuals
 Brokerage Rs 20/order, STT 0.0625% sell-side, Exchange 0.053%, GST 18% on (brokerage + exchange), SEBI 0.0001%, Stamp 0.003% buy-side, Slippage 0.1% (reduced from 0.5% — was unrealistic for liquid NIFTY ATM options).

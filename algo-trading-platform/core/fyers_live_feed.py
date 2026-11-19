@@ -431,7 +431,9 @@ class FyersLiveFeed:
                            self._connected, bool(self._fyers))
             return []
 
-        fyers_sym = INDEX_SYMBOLS.get(symbol.upper())
+        # Full Fyers symbols (e.g. an option contract "NSE:NIFTY25N2523700CE")
+        # pass straight through; internal names map via INDEX_SYMBOLS.
+        fyers_sym = symbol.upper() if ":" in symbol else INDEX_SYMBOLS.get(symbol.upper())
         if not fyers_sym:
             logger.warning("Candle fetch skipped — symbol %s not in INDEX_SYMBOLS", symbol)
             return []

@@ -43,7 +43,7 @@ export const useDeployScalp = () => {
     },
   });
 };
-// Fly-High (VWAP crossover strategy)
+// Fly-High (option-chart VWAP strategy)
 export const useFlyHighSignal = (symbol = 'NIFTY') =>
   useQuery({ queryKey: ['flyhighSignal', symbol], queryFn: () => api.getFlyHighSignal(symbol), refetchInterval: 15000 });
 export const useFlyHighConfig = () =>
@@ -59,34 +59,29 @@ export const useSetFlyHighConfig = () => {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['flyhighConfig'] }),
   });
 };
+const invalidateFlyHigh = (qc) => {
+  qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
+  qc.invalidateQueries({ queryKey: ['paperStrategies'] });
+  qc.invalidateQueries({ queryKey: ['flyhighPerformance'] });
+  qc.invalidateQueries({ queryKey: ['flyhighSignal'] });
+  qc.invalidateQueries({ queryKey: ['flyhighLog'] });
+};
 export const useDeployFlyHigh = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ symbol }) => api.deployFlyHigh(symbol),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
-      qc.invalidateQueries({ queryKey: ['paperStrategies'] });
-      qc.invalidateQueries({ queryKey: ['flyhighPerformance'] });
-      qc.invalidateQueries({ queryKey: ['flyhighSignal'] });
-      qc.invalidateQueries({ queryKey: ['flyhighMissed'] });
-    },
+    onSuccess: () => invalidateFlyHigh(qc),
   });
 };
-export const useFlyHighMissedSignals = (symbol = 'NIFTY') =>
-  useQuery({ queryKey: ['flyhighMissed', symbol], queryFn: () => api.getFlyHighMissedSignals(symbol), refetchInterval: 30000 });
-export const useFlyHighLateEntry = () => {
+export const useStopFlyHigh = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload) => api.flyHighLateEntry(payload),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['deployedStrategies'] });
-      qc.invalidateQueries({ queryKey: ['paperStrategies'] });
-      qc.invalidateQueries({ queryKey: ['flyhighPerformance'] });
-      qc.invalidateQueries({ queryKey: ['flyhighSignal'] });
-      qc.invalidateQueries({ queryKey: ['flyhighMissed'] });
-    },
+    mutationFn: ({ symbol }) => api.stopFlyHigh(symbol),
+    onSuccess: () => invalidateFlyHigh(qc),
   });
 };
+export const useFlyHighSignalLog = (symbol = 'NIFTY') =>
+  useQuery({ queryKey: ['flyhighLog', symbol], queryFn: () => api.getFlyHighSignalLog(symbol), refetchInterval: 30000 });
 
 export const useExpiries = (symbol) =>
   useQuery({ queryKey: ['expiries', symbol], queryFn: () => api.getExpiries(symbol) });

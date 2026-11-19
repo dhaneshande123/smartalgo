@@ -42,17 +42,19 @@ export const switchScalperProfile = (profile) =>
 export const deployScalp = (symbol = 'NIFTY', force = false) =>
   api.post('/scalper/deploy', { symbol, force });
 
-// Fly-High (VWAP crossover strategy)
+// Fly-High (option-chart VWAP strategy)
 export const getFlyHighSignal = (symbol = 'NIFTY') =>
   api.get(`/flyhigh/signal/${symbol}`);
 export const getFlyHighConfig = () => api.get('/flyhigh/config');
 export const setFlyHighConfig = (patch) => api.post('/flyhigh/config', patch);
+// Arm the strategy for today — the backend enters and exits on its own
 export const deployFlyHigh = (symbol = 'NIFTY') =>
   api.post('/flyhigh/deploy', { symbol });
+export const stopFlyHigh = (symbol = 'NIFTY') =>
+  api.post('/flyhigh/stop', { symbol });
 export const getFlyHighPerformance = () => api.get('/flyhigh/performance');
-export const getFlyHighMissedSignals = (symbol = 'NIFTY') =>
-  api.get(`/flyhigh/missed-signals/${symbol}`);
-export const flyHighLateEntry = (payload) => api.post('/flyhigh/late-entry', payload);
+export const getFlyHighSignalLog = (symbol = 'NIFTY') =>
+  api.get(`/flyhigh/signal-log/${symbol}`);
 
 // Greeks & IV
 export const getIVSurface = (symbol = 'NIFTY') =>

@@ -64,7 +64,7 @@ EQUITY_SNAPSHOT_INTERVAL = 60.0  # seconds between equity snapshots (1 per minut
 RISK_CHECK_EVERY_N_TICKS = 1     # check risk every tick (5s)
 AUTO_DEPLOY_INTERVAL = 60.0      # seconds between AI auto-deploy cycles (when enabled)
 SCALPER_AUTO_INTERVAL = 25.0     # seconds between hands-free scalper auto-deploy cycles (when enabled)
-FLYHIGH_AUTO_INTERVAL = 25.0     # seconds between hands-free Fly-High auto-deploy cycles (when enabled)
+FLYHIGH_AUTO_INTERVAL = 25.0     # seconds between Fly-High cycles (armed entries + runner trail)
 CHAIN_REFRESH_INTERVAL = 3.0     # min seconds between executor option-chain fetches (Fyers rate limit)
 
 # Fyers connection self-heal: retry a dropped feed without waiting for a
@@ -391,6 +391,7 @@ class DashboardStrategyExecutor:
                         by_strike[strike] = {"strike": strike, "isATM": False}
                     side = "call" if opt.get("option_type") == "CE" else "put"
                     by_strike[strike][f"{side}_ltp"] = float(opt.get("ltp", 0))
+                    by_strike[strike][f"{side}_symbol"] = opt.get("fyers_symbol", "")
                     by_strike[strike][f"{side}_iv"] = float(opt.get("iv", 0) or 0)
                     by_strike[strike][f"{side}_oi"] = int(opt.get("oi", 0))
                     by_strike[strike][f"{side}_volume"] = int(opt.get("volume", 0))
@@ -718,12 +719,13 @@ class DashboardStrategyExecutor:
 
         Returns a reason string for a FULL exit, or None (which may include a
         partial book as a side-effect, leaving a runner). The exit plan:
-          - spot SL (any time): spot breaks the signal candle's low/high
-          - premium SL (any time): option LTP <= ``premium_sl``
+          - premium SL (any time): option LTP <= ``premium_sl`` (signal
+            candle low on the option chart)
           - target at 1:1 R:R on premium (entry + (entry - premium_sl)):
             book ``book_partial_pct``% and trail the rest; full exit if 1 lot
-          - after booking: breakeven stop + trail (give back
-            ``trail_giveback_pct``% of the peak gain)
+          - after booking: breakeven stop + trail on the option chart's
+            SuperTrend line (``_flyhigh_trail_sl``); falls back to giving back
+            ``trail_giveback_pct``% of the peak gain if no trail is set yet
           - before booking: premium-floor backstop (``premium_floor_pct``)
           - max hold time + EOD square-off
         """
@@ -739,21 +741,11 @@ class DashboardStrategyExecutor:
             return None
 
         lot_size = int(strat.get("lot_size", 1) or 1)
-        spot = float(strat.get("spot_price", 0) or 0)
         pnl_pct = (ltp / entry - 1.0) * 100.0
-        bullish = (pos.get("symbol") or "").upper().endswith("CE")
 
         # ── EOD square-off (highest priority) ──
         if now_t >= SQUARE_OFF_TIME:
             return "eod_square_off"
-
-        # ── Spot SL: signal candle's low (CE) / high (PE) broken ──
-        sl_spot = float(risk.get("sl_spot_ref", 0) or 0)
-        if sl_spot > 0 and spot > 0:
-            if bullish and spot < sl_spot:
-                return f"spot_sl_stop (spot {spot:.0f} < SL {sl_spot:.0f})"
-            if not bullish and spot > sl_spot:
-                return f"spot_sl_stop (spot {spot:.0f} > SL {sl_spot:.0f})"
 
         # ── Premium SL ──
         premium_sl = float(risk.get("premium_sl", 0) or 0)
@@ -790,11 +782,17 @@ class DashboardStrategyExecutor:
             return f"target_hit (Rs{ltp:.1f} >= 1:1 target Rs{target:.1f})"
 
         if booked:
-            # ── After partial: breakeven + trail the runner ──
+            # ── After partial: breakeven + option-SuperTrend trail on the runner ──
             if ltp <= entry:
                 return "breakeven_stop (runner fell back to entry after booking)"
+            # _flyhigh_trail_sl is ratcheted by api.run_flyhigh_auto_cycle from
+            # the option chart's SuperTrend line
+            trail_sl = float(strat.get("_flyhigh_trail_sl", 0) or 0)
+            if trail_sl > entry and ltp <= trail_sl:
+                return f"trail_stop (Rs{ltp:.1f} <= option SuperTrend Rs{trail_sl:.1f})"
+            # Fallback when no SuperTrend trail is available yet
             give = abs(float(risk.get("trail_giveback_pct", 30)))
-            if hwm > 0 and pnl_pct <= hwm * (1 - give / 100.0):
+            if trail_sl <= 0 and hwm > 0 and pnl_pct <= hwm * (1 - give / 100.0):
                 return f"trail_stop (+{pnl_pct:.0f}% gave back {give:.0f}% of peak +{hwm:.0f}%)"
         else:
             # ── Before partial: premium-floor backstop (stored as -35 or 35) ──
@@ -922,6 +920,7 @@ class DashboardStrategyExecutor:
                                 by_strike[strike] = {"strike": strike}
                             side = "call" if opt.get("option_type") == "CE" else "put"
                             by_strike[strike][f"{side}_ltp"] = float(opt.get("ltp", 0))
+                            by_strike[strike][f"{side}_symbol"] = opt.get("fyers_symbol", "")
                         chain["chain"] = sorted(by_strike.values(), key=lambda r: r["strike"])
                         _api_mod._fyers_chain_cache[underlying] = chain
                     else:
@@ -1238,10 +1237,10 @@ class DashboardStrategyExecutor:
             logger.debug(f"Scalper auto cycle error: {e}")
 
     async def _maybe_flyhigh_auto(self) -> None:
-        """Run a hands-free Fly-High auto-deploy cycle every FLYHIGH_AUTO_INTERVAL
-        seconds when enabled. Only during market hours; the cycle is a no-op when
-        the VWAP config's auto_deploy is off, and the signal's own gates (entry
-        window, ADX, crossover, daily cap) still apply."""
+        """Run the Fly-High cycle every FLYHIGH_AUTO_INTERVAL seconds during
+        market hours. The cycle enters trades only for underlyings the user has
+        deployed (armed) today, and ratchets the option-SuperTrend trail of any
+        running Fly-High runner regardless of the armed state."""
         now = datetime.now(IST)
         if not (MARKET_OPEN <= now.time() < SQUARE_OFF_TIME):
             return
@@ -1250,9 +1249,6 @@ class DashboardStrategyExecutor:
                 return
         try:
             from core import api as api_mod
-            from core import vwap_engine as ve
-            if not ve.get_config().get("auto_deploy"):
-                return
             self._last_flyhigh_auto_at = now
             await api_mod.run_flyhigh_auto_cycle()
         except Exception as e:

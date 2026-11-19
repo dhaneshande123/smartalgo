@@ -226,6 +226,9 @@ def normalize_chain_rows(chain: dict) -> dict[int, dict]:
         slot[f"{side}_volume"] = float(obj.get("volume", 0) or 0)
         slot[f"{side}_bid"] = float(obj.get("bid", 0) or 0)
         slot[f"{side}_ask"] = float(obj.get("ask", 0) or 0)
+        sym = obj.get("fyers_symbol") or obj.get("symbol")
+        if sym:
+            slot[f"{side}_symbol"] = str(sym)
 
     for r in rows:
         if not isinstance(r, dict):
@@ -251,6 +254,9 @@ def normalize_chain_rows(chain: dict) -> dict[int, dict]:
                       "call_ask", "put_ask"):
                 if k in r:
                     slot[k] = float(r.get(k, 0) or 0)
+            for k in ("call_symbol", "put_symbol"):
+                if r.get(k):
+                    slot[k] = str(r[k])
     return out
 
 

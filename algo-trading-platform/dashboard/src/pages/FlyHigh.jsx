@@ -1,15 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Rocket, TrendingUp, TrendingDown, Gauge, Clock, AlertTriangle,
-  Shield, Target, Activity, ChevronDown, ChevronUp, Zap, BarChart3,
-  History, Play, LogOut,
+  Rocket, Gauge, Clock, AlertTriangle, Shield, Target, Activity,
+  ChevronDown, ChevronUp, BarChart3, History, LogOut, Power, Square, CheckCircle2,
 } from 'lucide-react';
 import { useUnderlying } from '../context/UnderlyingContext';
 import {
   useFlyHighSignal, useFlyHighConfig, useFlyHighPerformance,
-  useSetFlyHighConfig, useDeployFlyHigh, useFlyHighTicker,
-  useFlyHighMissedSignals, useFlyHighLateEntry,
-  useRiskMetrics, useDeactivateKillSwitch, useStopDeployedStrategy,
+  useSetFlyHighConfig, useDeployFlyHigh, useStopFlyHigh, useFlyHighTicker,
+  useFlyHighSignalLog, useRiskMetrics, useDeactivateKillSwitch, useStopDeployedStrategy,
 } from '../hooks/useApi';
 
 function StatCard({ label, value, sub, icon: Icon, color = 'text-slate-300' }) {
@@ -25,19 +23,79 @@ function StatCard({ label, value, sub, icon: Icon, color = 'text-slate-300' }) {
   );
 }
 
+const fmt = (v, d = 1) => (v > 0 ? Number(v).toFixed(d) : '—');
+
+// One option chart (1-ITM CE or PE): the three entry rules + live status
+function ChartPanel({ side, panel, live, adxMin }) {
+  const p = panel || {};
+  const ltp = live?.ltp || p.ltp || 0;
+  const vwap = p.vwap || live?.vwap || 0;
+  const ready = !!p.ready;
+  const rules = [
+    { ok: p.cross === 'BULLISH', label: 'VWAP cross-up', detail: p.cross_type ? `${p.cross_type}` : p.above_vwap ? 'above VWAP, no fresh cross' : 'below VWAP' },
+    { ok: p.st_dir === 'UP', label: 'SuperTrend UP', detail: p.st_dir ? `${p.st_dir} @ ${fmt(p.st_value)}` : '—' },
+    { ok: (p.adx || 0) >= adxMin, label: `ADX ≥ ${adxMin}`, detail: p.adx ? Number(p.adx).toFixed(1) : '—' },
+  ];
+  return (
+    <div className={`glass-card !rounded-2xl !p-4 ${ready ? 'border border-profit/40 bg-profit/5' : ''}`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${side === 'CE' ? 'bg-profit/15 text-profit' : 'bg-loss/15 text-loss'}`}>{side}</span>
+          <span className="font-mono font-bold">{p.strike || '—'}</span>
+          <span className="text-[10px] text-slate-500">1-ITM · 5-min</span>
+        </div>
+        {ready
+          ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-profit/20 text-profit">ENTRY SETUP</span>
+          : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700/40 text-slate-400">WATCHING</span>}
+      </div>
+      <div className="flex items-end gap-5 mb-3">
+        <div>
+          <div className="text-[10px] text-slate-500">LTP</div>
+          <div className="text-xl font-bold font-mono">{ltp ? `₹${Number(ltp).toFixed(2)}` : '—'}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-slate-500">VWAP</div>
+          <div className="text-lg font-bold font-mono text-accent">{vwap ? `₹${Number(vwap).toFixed(2)}` : '—'}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-slate-500" title="Close of the last completed 5-min candle">Last close</div>
+          <div className={`text-lg font-bold font-mono ${p.above_vwap ? 'text-profit' : 'text-loss'}`}>{fmt(p.close, 2)}</div>
+        </div>
+      </div>
+      <div className="space-y-1 text-xs">
+        {rules.map((r) => (
+          <div key={r.label} className="flex items-center justify-between bg-slate-800/30 rounded-lg px-2.5 py-1.5">
+            <span className={r.ok ? 'text-profit' : 'text-slate-400'}>{r.ok ? '✓' : '✗'} {r.label}</span>
+            <span className="font-mono text-slate-400">{r.detail}</span>
+          </div>
+        ))}
+      </div>
+      {p.signal_candle && (
+        <div className="mt-2 text-[11px] text-slate-500">
+          Last candle {p.signal_candle.time}: L {fmt(p.signal_candle.low)} · H {fmt(p.signal_candle.high)}
+          {ready && <span className="text-loss ml-1">→ SL = {fmt(p.signal_candle.low)}</span>}
+        </div>
+      )}
+      {!ready && p.blockers?.length > 0 && !p.blockers.every((b) => /cross-up|SuperTrend|ADX/.test(b)) && (
+        <div className="mt-2 text-[11px] text-yellow-400/80">{p.blockers.filter((b) => !/cross-up|SuperTrend|ADX/.test(b)).join(' · ')}</div>
+      )}
+    </div>
+  );
+}
+
 export default function FlyHigh() {
   const { underlying } = useUnderlying();
   const { data: sig } = useFlyHighSignal(underlying);
   const { data: cfg } = useFlyHighConfig();
   const { data: perf } = useFlyHighPerformance();
   const { data: ticker } = useFlyHighTicker(underlying);
+  const { data: logData } = useFlyHighSignalLog(underlying);
   const deployMut = useDeployFlyHigh();
+  const stopMut = useStopFlyHigh();
   const configMut = useSetFlyHighConfig();
-  const { data: missedData } = useFlyHighMissedSignals(underlying);
-  const lateEntryMut = useFlyHighLateEntry();
   const { data: riskData } = useRiskMetrics();
   const deactivateKill = useDeactivateKillSwitch();
-  const stopStrategy = useStopDeployedStrategy();
+  const exitPosition = useStopDeployedStrategy();
   const isKillActive = !!riskData?.kill_switch_active;
   const [showConfig, setShowConfig] = useState(false);
   const [localCfg, setLocalCfg] = useState({});
@@ -50,27 +108,25 @@ export default function FlyHigh() {
     debounceRef.current = setTimeout(() => configMut.mutate({ [key]: parsed }), 600);
   };
 
+  // perf.armed lists only armed symbols and is fresh (5s); the signal response is cached 15s
+  const armed = perf ? !!perf.armed?.[underlying] : !!sig?.armed;
+  const busy = deployMut.isPending || stopMut.isPending;
   const hasSignal = sig?.has_signal;
-  const direction = sig?.direction || '';
-  const isBullish = direction === 'BULLISH';
-  const adx = sig?.adx ?? 0;
-  const vwap = ticker?.vwap || sig?.vwap || 0;
   const spot = ticker?.spot || sig?.spot || 0;
-  const spotVsVwap = spot && vwap ? ((spot - vwap) / vwap * 100).toFixed(2) : '0.00';
-  const blockers = sig?.blockers || [];
   const tradesToday = sig?.trades_today ?? 0;
   const maxTrades = cfg?.max_trades_per_day ?? 2;
-  const crossInfo = sig?.candle_info || {};
-  const stDir = crossInfo?.supertrend_dir || '';
+  const adxMin = cfg?.adx_min ?? 10;
+  const openPositions = perf?.open_positions || [];
+  const signals = logData?.signals || [];
+  // Only the non-chart blockers (window, cap, conflict…) — chart rules are shown per panel
+  const globalBlockers = (sig?.blockers || []).filter((b) => b !== 'no entry setup on CE or PE chart');
 
-  const handleDeploy = () => {
-    if (!hasSignal) return;
-    deployMut.mutate({ symbol: underlying });
-  };
-
-  const handleToggleAuto = () => {
-    configMut.mutate({ auto_deploy: !cfg?.auto_deploy });
-  };
+  let status;
+  if (!armed) status = { text: 'Not deployed', sub: 'Signals are shown, but no trades will be taken', cls: 'text-slate-400' };
+  else if (isKillActive) status = { text: 'Deployed — blocked by kill switch', sub: 'Reset the kill switch to allow entries', cls: 'text-red-400' };
+  else if (openPositions.length) status = { text: 'Deployed — managing position', sub: 'SL / 1:1 target / SuperTrend trail are enforced automatically', cls: 'text-profit' };
+  else if (tradesToday >= maxTrades) status = { text: 'Deployed — daily trade cap reached', sub: `${tradesToday}/${maxTrades} trades today`, cls: 'text-yellow-400' };
+  else status = { text: 'Deployed — waiting for signal', sub: `Enters automatically on the first valid CE/PE setup (${cfg?.entry_start ?? '09:20'}–${cfg?.entry_cutoff ?? '15:15'})`, cls: 'text-profit' };
 
   return (
     <div className="space-y-4 max-w-6xl mx-auto">
@@ -79,47 +135,21 @@ export default function FlyHigh() {
         <div className="flex items-center gap-2">
           <Rocket className="w-6 h-6 text-accent" />
           <h1 className="text-xl font-bold">Fly-High Strategy</h1>
-          <span className="text-xs text-slate-400 bg-slate-800/50 px-2 py-0.5 rounded-full">VWAP + SuperTrend</span>
+          <span className="text-xs text-slate-400 bg-slate-800/50 px-2 py-0.5 rounded-full">CE / PE chart · VWAP + SuperTrend + ADX</span>
         </div>
         <div className="flex items-center gap-2 ml-auto flex-wrap">
-          {/* Auto-deploy toggle — hands-free deploy when a signal forms */}
-          <button
-            onClick={handleToggleAuto}
-            disabled={configMut.isPending}
-            title={cfg?.auto_deploy
-              ? 'Auto-deploy ON — Fly-High deploys automatically when a valid crossover forms (paper). Click to disable.'
-              : 'Auto-deploy OFF — signals are shown but you deploy manually. Click to enable hands-free deploy.'}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
-              cfg?.auto_deploy ? 'bg-profit/20 text-profit ring-1 ring-profit/40' : 'bg-slate-700/40 text-slate-400'
-            }`}
-          >
-            <Zap className="w-3.5 h-3.5" />
-            {cfg?.auto_deploy ? `AUTO-DEPLOY ON (${underlying})` : 'Auto-Deploy OFF'}
-          </button>
-          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold ${
-            adx >= 25 ? 'bg-profit/15 text-profit' : adx >= 20 ? 'bg-yellow-500/15 text-yellow-400' : 'bg-slate-700/40 text-slate-400'
-          }`}>
-            <Gauge className="w-3.5 h-3.5" />
-            ADX {adx.toFixed(0)} {adx >= 25 ? '— Strong' : adx >= 20 ? '— Trending' : '— Weak'}
-          </span>
-          <span
-            title={`SuperTrend direction: ${stDir || 'N/A'}. For a BULLISH trade, ST must be UP. For BEARISH, ST must be DOWN. This is the confluence filter.`}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold cursor-help ${
-            stDir === 'UP' ? 'bg-profit/15 text-profit' : stDir === 'DOWN' ? 'bg-loss/15 text-loss' : 'bg-slate-700/40 text-slate-400'
-          }`}>
-            SuperTrend {stDir === 'UP' ? '▲ UP' : stDir === 'DOWN' ? '▼ DOWN' : '—'}
-          </span>
           <span className={`px-3 py-1.5 rounded-full text-xs font-bold ${
             tradesToday >= maxTrades ? 'bg-red-500/15 text-red-400' : 'bg-slate-700/40 text-slate-400'
           }`}>
             {tradesToday}/{maxTrades} trades today
           </span>
-          <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/15 text-accent">{underlying}</span>
-          {/* Kill switch status pill — always visible */}
+          <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/15 text-accent">
+            {underlying} {spot ? spot.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : ''}
+          </span>
           <button
             onClick={isKillActive ? () => deactivateKill.mutate('manual reset via Fly-High') : undefined}
             disabled={!isKillActive || deactivateKill.isPending}
-            title={isKillActive ? 'Kill switch is ON — all deploys blocked. Click to reset.' : 'Kill switch is OFF — deploys allowed.'}
+            title={isKillActive ? 'Kill switch is ON — all entries blocked. Click to reset.' : 'Kill switch is OFF — entries allowed.'}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
               isKillActive
                 ? 'bg-red-500/20 text-red-400 ring-1 ring-red-500/40 cursor-pointer hover:bg-red-500/30'
@@ -132,24 +162,12 @@ export default function FlyHigh() {
         </div>
       </div>
 
-      {/* ── Auto-deploy active banner ── */}
-      {cfg?.auto_deploy && (
-        <div className="glass-card !rounded-xl !p-3 flex items-start gap-2 bg-profit/5 border border-profit/20">
-          <Zap className="w-4 h-4 text-profit flex-shrink-0 mt-0.5" />
-          <div className="text-xs text-slate-300">
-            <span className="font-bold text-profit">Hands-free auto-deploy is ON</span> for {underlying}. Fly-High
-            will deploy automatically when a valid VWAP + SuperTrend confluence signal forms — within {cfg?.entry_start ?? '09:20'}–{cfg?.entry_cutoff ?? '15:15'},
-            max {maxTrades} trades/day, one position per underlying. Paper mode.
-          </div>
-        </div>
-      )}
-
-      {/* ── Kill switch banner (always visible) ── */}
+      {/* ── Kill switch banner ── */}
       {isKillActive && (
         <div className="glass-card !rounded-xl !p-3 flex items-center gap-3 bg-red-500/10 border border-red-500/30">
           <Shield className="w-5 h-5 text-red-400 flex-shrink-0" />
           <div className="flex-1 text-xs text-slate-300">
-            <span className="font-bold text-red-400">Kill Switch is ACTIVE</span> — all strategy deploys are blocked.
+            <span className="font-bold text-red-400">Kill Switch is ACTIVE</span> — Fly-High will not take new entries.
             {riskData?.kill_switch_meta?.reason && (
               <span className="text-slate-500 ml-1">Reason: {riskData.kill_switch_meta.reason}</span>
             )}
@@ -164,7 +182,66 @@ export default function FlyHigh() {
         </div>
       )}
 
-      {/* ── Live P&L strip ── */}
+      {/* ── Deploy control ── */}
+      <div className={`glass-card !rounded-2xl !p-4 ${armed ? 'border border-profit/30' : ''}`}>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className={`w-3 h-3 rounded-full ${armed ? 'bg-profit animate-pulse' : 'bg-slate-600'}`} />
+            <div>
+              <div className={`text-base font-bold ${status.cls}`}>{status.text}</div>
+              <div className="text-xs text-slate-500">{status.sub}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {hasSignal && (
+              <div className="text-xs text-right">
+                <div className="font-bold text-profit">Signal: BUY {sig?.strike}{sig?.option_type} @ ₹{fmt(sig?.premium)}</div>
+                <div className="text-slate-400">SL ₹{fmt(sig?.sl_premium)} · TGT ₹{fmt(sig?.target_premium)} · {sig?.lots} lot{sig?.lots > 1 ? 's' : ''}</div>
+              </div>
+            )}
+            {armed ? (
+              <button
+                onClick={() => stopMut.mutate({ symbol: underlying })}
+                disabled={busy}
+                title="Stop new entries for today. An open position stays managed (SL / target / trail) and can be exited below."
+                className="flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/30 transition-all disabled:opacity-50"
+              >
+                <Square className="w-4 h-4" />
+                {stopMut.isPending ? 'Stopping…' : 'Stop Strategy'}
+              </button>
+            ) : (
+              <button
+                onClick={() => deployMut.mutate({ symbol: underlying })}
+                disabled={busy}
+                title="Deploy for today: the backend watches the CE/PE charts and enters/exits on its own. Re-deploy each trading day."
+                className="flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm bg-accent hover:bg-accent/80 text-black transition-all disabled:opacity-50"
+              >
+                <Power className="w-4 h-4" />
+                {deployMut.isPending ? 'Deploying…' : 'Deploy Strategy'}
+              </button>
+            )}
+          </div>
+        </div>
+        {globalBlockers.length > 0 && (
+          <div className="mt-3 flex items-start gap-2 text-xs text-slate-400">
+            <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0" />
+            <div className="space-y-0.5">{globalBlockers.map((b, i) => <div key={i}>{b}</div>)}</div>
+          </div>
+        )}
+        {(deployMut.isError || stopMut.isError) && (
+          <div className="mt-2 text-xs text-loss">
+            {(deployMut.error || stopMut.error)?.response?.data?.detail || (deployMut.error || stopMut.error)?.message}
+          </div>
+        )}
+      </div>
+
+      {/* ── CE / PE charts ── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ChartPanel side="CE" panel={sig?.ce} live={ticker?.ce} adxMin={adxMin} />
+        <ChartPanel side="PE" panel={sig?.pe} live={ticker?.pe} adxMin={adxMin} />
+      </div>
+
+      {/* ── Live P&L + running positions ── */}
       {(perf?.running_count > 0 || perf?.closed_count > 0) && (
         <div className="glass-card !rounded-2xl !p-4">
           <div className="flex flex-wrap items-center gap-6">
@@ -186,33 +263,40 @@ export default function FlyHigh() {
                 {(perf?.total_pnl ?? 0) >= 0 ? '+' : ''}₹{(perf?.total_pnl ?? 0).toLocaleString('en-IN')}
               </div>
             </div>
-            {perf?.open_positions?.length > 0 && (
-              <div className="flex-1 min-w-[200px]">
+            {openPositions.length > 0 && (
+              <div className="flex-1 min-w-[260px]">
                 <div className="text-xs text-slate-400 mb-1">Running positions</div>
                 <div className="space-y-1">
-                  {perf.open_positions.map((p, i) => (
-                    <div key={i} className="flex items-center justify-between gap-2 text-xs bg-slate-800/30 rounded-lg px-2.5 py-1.5">
-                      <span className={`font-bold ${p.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{p.side || 'BUY'}</span>
-                      <span className="text-slate-300 truncate max-w-[120px]">{p.strike}{p.option_type}</span>
+                  {openPositions.map((p) => (
+                    <div key={p.strategy_id} className="flex flex-wrap items-center justify-between gap-2 text-xs bg-slate-800/30 rounded-lg px-2.5 py-1.5">
+                      <span className="font-bold text-profit">BUY</span>
+                      <span className="text-slate-300">{p.strike}{p.option_type}</span>
                       <span className="text-accent font-mono">{p.lots || 1}L{p.lot_size ? ` (${p.qty})` : ''}</span>
-                      <span className="text-slate-500 font-mono">@{p.entry_price?.toFixed(1) || '—'}</span>
-                      <span className="text-slate-400 font-mono">→ {p.ltp?.toFixed(1) || '—'}</span>
-                      {p.sl_premium > 0 && <span className="text-loss font-mono text-[10px]" title="Stop Loss">SL:{p.sl_premium.toFixed(1)}</span>}
-                      {p.target_premium > 0 && <span className="text-profit font-mono text-[10px]" title="Target (1:1 R:R)">TGT:{p.target_premium.toFixed(1)}</span>}
+                      <span className="text-slate-500 font-mono">@{fmt(p.entry_price)}</span>
+                      <span className="text-slate-300 font-mono">→ {fmt(p.ltp)}</span>
+                      {p.sl_premium > 0 && <span className="text-loss font-mono text-[10px]" title="Stop loss: signal-candle low on the option chart">SL:{fmt(p.sl_premium)}</span>}
+                      {p.target_premium > 0 && (
+                        <span className={`font-mono text-[10px] ${p.booked ? 'text-slate-500 line-through' : 'text-profit'}`} title="1:1 target — books partial">
+                          TGT:{fmt(p.target_premium)}
+                        </span>
+                      )}
+                      {p.booked && (
+                        <span className="text-yellow-400 font-mono text-[10px]" title="Runner trails the option SuperTrend line (never below entry)">
+                          TRAIL:{p.trail_sl > p.entry_price ? fmt(p.trail_sl) : 'BE'}
+                        </span>
+                      )}
                       <span className={`font-mono font-bold ${p.pnl >= 0 ? 'text-profit' : 'text-loss'}`}>
                         {p.pnl >= 0 ? '+' : ''}₹{p.pnl.toLocaleString('en-IN')}
                       </span>
-                      {p.strategy_id && (
-                        <button
-                          onClick={() => stopStrategy.mutate(p.strategy_id)}
-                          disabled={stopStrategy.isPending}
-                          title="Exit this position manually (square off)"
-                          className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-all disabled:opacity-50"
-                        >
-                          <LogOut className="w-3 h-3" />
-                          {stopStrategy.isPending ? 'Exiting…' : 'Exit'}
-                        </button>
-                      )}
+                      <button
+                        onClick={() => exitPosition.mutate(p.strategy_id)}
+                        disabled={exitPosition.isPending}
+                        title="Exit this position now (square off)"
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-all disabled:opacity-50"
+                      >
+                        <LogOut className="w-3 h-3" />
+                        {exitPosition.isPending ? 'Exiting…' : 'Exit'}
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -222,253 +306,93 @@ export default function FlyHigh() {
         </div>
       )}
 
-      {/* ── VWAP Status Bar ── */}
+      {/* ── Today's signals (read-only log) ── */}
       <div className="glass-card !rounded-2xl !p-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-6">
-            <div>
-              <div className="text-xs text-slate-400 mb-0.5">Spot</div>
-              <div className="text-2xl font-bold font-mono">{spot ? spot.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-400 mb-0.5">VWAP</div>
-              <div className="text-2xl font-bold font-mono text-accent">{vwap ? vwap.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-400 mb-0.5">Spot vs VWAP</div>
-              <div className={`text-lg font-bold font-mono ${Number(spotVsVwap) > 0 ? 'text-profit' : Number(spotVsVwap) < 0 ? 'text-loss' : 'text-slate-400'}`}>
-                {Number(spotVsVwap) > 0 ? '+' : ''}{spotVsVwap}%
-              </div>
-            </div>
-          </div>
-
-          {/* Signal + Deploy */}
-          <div className="flex items-center gap-3">
-            {hasSignal ? (
-              <div className={`flex items-center gap-2 px-4 py-2 rounded-xl ${
-                isBullish ? 'bg-profit/10 border border-profit/30' : 'bg-loss/10 border border-loss/30'
-              }`}>
-                {isBullish ? <TrendingUp className="w-5 h-5 text-profit" /> : <TrendingDown className="w-5 h-5 text-loss" />}
-                <div>
-                  <div className={`text-sm font-bold ${isBullish ? 'text-profit' : 'text-loss'}`}>
-                    {direction} — {sig?.option_type} {sig?.strike}
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    SL: ₹{sig?.sl_premium?.toFixed(1) || '—'} ({sig?.option_type}) | Target: 1:1 R:R | Entry: ₹{sig?.premium?.toFixed(1)}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800/50 border border-slate-700/50">
-                <Clock className="w-5 h-5 text-slate-500" />
-                <div>
-                  <div className="text-sm font-medium text-slate-400">Waiting for crossover</div>
-                  <div className="text-xs text-slate-500 max-w-[260px] truncate">{sig?.reason || 'Scanning...'}</div>
-                </div>
-              </div>
-            )}
-
-            <button
-              onClick={handleDeploy}
-              disabled={!hasSignal || deployMut.isPending}
-              className={`px-5 py-3 rounded-xl font-bold text-sm transition-all ${
-                hasSignal
-                  ? 'bg-accent hover:bg-accent/80 text-black cursor-pointer'
-                  : 'bg-slate-700/50 text-slate-500 cursor-not-allowed'
-              }`}
-            >
-              {deployMut.isPending ? 'Deploying...' : '🚀 Deploy'}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Blockers ── */}
-      {blockers.length > 0 && (
-        <div className="glass-card !rounded-xl !p-3 flex items-start gap-2">
-          <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
-          <div className="text-xs text-slate-400 space-y-0.5">
-            {blockers.map((b, i) => <div key={i}>• {b}</div>)}
-          </div>
-        </div>
-      )}
-
-      {/* ── Missed Signals (Late Entry) ── */}
-      {missedData?.signals?.length > 0 && (
-        <div className="glass-card !rounded-2xl !p-4 border border-yellow-500/30">
-          <h3 className="text-sm font-semibold text-yellow-400 mb-3 flex items-center gap-2">
-            <History className="w-4 h-4" />
-            Missed Signals Today
-            <span className="text-xs text-slate-500 font-normal ml-auto">Signals that fired while you were offline</span>
-          </h3>
+        <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+          <History className="w-4 h-4 text-accent" />
+          Today's Signals
+          <span className="text-xs text-slate-500 font-normal ml-auto">VWAP cross-ups on the current 1-ITM CE/PE charts · read-only</span>
+        </h3>
+        {signals.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-slate-500 border-b border-slate-700/50">
                   <th className="text-left py-1.5 px-2 font-medium">Time</th>
-                  <th className="text-left py-1.5 px-2 font-medium">Direction</th>
-                  <th className="text-left py-1.5 px-2 font-medium">Strike</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Entry Spot</th>
-                  <th className="text-right py-1.5 px-2 font-medium">SL</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Target</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Est. Entry ₹</th>
-                  <th className="text-right py-1.5 px-2 font-medium">Est. Exit ₹</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Contract</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Entry ₹</th>
+                  <th className="text-right py-1.5 px-2 font-medium">SL ₹</th>
+                  <th className="text-right py-1.5 px-2 font-medium">Target ₹</th>
+                  <th className="text-right py-1.5 px-2 font-medium">ADX</th>
+                  <th className="text-center py-1.5 px-2 font-medium">ST</th>
                   <th className="text-center py-1.5 px-2 font-medium">Outcome</th>
                   <th className="text-left py-1.5 px-2 font-medium">Status</th>
-                  <th className="text-center py-1.5 px-2 font-medium">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {missedData.signals.map((ms, i) => (
-                  <tr key={i} className={`border-b border-slate-800/30 hover:bg-slate-800/20 ${ms.blocked ? 'opacity-60' : ''}`}>
-                    <td className="py-2 px-2 font-mono text-slate-300">{ms.time}</td>
-                    <td className={`py-2 px-2 font-bold ${ms.direction === 'BULLISH' ? 'text-profit' : 'text-loss'}`}>
-                      {ms.direction === 'BULLISH' ? '▲ BULL' : '▼ BEAR'}
-                    </td>
-                    <td className="py-2 px-2 text-slate-300 font-mono" title={ms.original_strike && ms.original_strike !== ms.strike ? `Original: ${ms.original_strike} ${ms.option_type}` : ''}>
-                      {ms.strike} {ms.option_type}
-                      {ms.original_strike && ms.original_strike !== ms.strike && (
-                        <span className="text-[9px] text-slate-500 ml-1">(was {ms.original_strike})</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-2 text-right text-slate-400 font-mono">{ms.spot_at_signal?.toLocaleString('en-IN')}</td>
-                    <td className="py-2 px-2 text-right text-loss font-mono">{ms.sl_price?.toLocaleString('en-IN') || '—'}</td>
-                    <td className="py-2 px-2 text-right text-profit font-mono">{ms.target_price?.toLocaleString('en-IN') || '—'}</td>
-                    <td className="py-2 px-2 text-right text-slate-300 font-mono">
-                      {ms.blocked ? '—' : ms.est_entry_premium > 0 ? `₹${ms.est_entry_premium.toFixed(1)}` : '—'}
-                    </td>
-                    <td className="py-2 px-2 text-right text-slate-300 font-mono">
-                      {ms.blocked ? '—' : ms.est_exit_premium > 0 ? `₹${ms.est_exit_premium.toFixed(1)}` : '—'}
-                    </td>
+                {signals.map((s, i) => (
+                  <tr key={i} className={`border-b border-slate-800/30 hover:bg-slate-800/20 ${s.blocked ? 'opacity-60' : ''}`}>
+                    <td className="py-2 px-2 font-mono text-slate-300">{s.time}</td>
+                    <td className={`py-2 px-2 font-mono font-bold ${s.option_type === 'CE' ? 'text-profit' : 'text-loss'}`}>{s.strike} {s.option_type}</td>
+                    <td className="py-2 px-2 text-right font-mono text-slate-300">{fmt(s.entry_premium)}</td>
+                    <td className="py-2 px-2 text-right font-mono text-loss">{fmt(s.sl_premium)}</td>
+                    <td className="py-2 px-2 text-right font-mono text-profit">{fmt(s.target_premium)}</td>
+                    <td className="py-2 px-2 text-right font-mono text-slate-400">{s.adx ? Number(s.adx).toFixed(0) : '—'}</td>
+                    <td className={`py-2 px-2 text-center font-mono ${s.supertrend_dir === 'UP' ? 'text-profit' : 'text-loss'}`}>{s.supertrend_dir || '—'}</td>
                     <td className="py-2 px-2 text-center">
-                      {ms.blocked ? <span className="text-slate-500">—</span> : (
+                      {s.blocked ? <span className="text-slate-500">—</span> : (
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          ms.outcome === 'Target Hit' ? 'bg-profit/15 text-profit' :
-                          ms.outcome === 'SL Hit' ? 'bg-loss/15 text-loss' :
+                          s.outcome === 'Target Hit' ? 'bg-profit/15 text-profit' :
+                          s.outcome === 'SL Hit' ? 'bg-loss/15 text-loss' :
                           'bg-yellow-500/15 text-yellow-400'
                         }`}>
-                          {ms.outcome === 'open' ? 'Running' : ms.outcome}
-                          {ms.exit_time ? ` @ ${ms.exit_time}` : ''}
+                          {s.outcome === 'open' ? 'Open' : s.outcome}{s.exit_time ? ` @ ${s.exit_time}` : ''}
                         </span>
                       )}
                     </td>
                     <td className="py-2 px-2">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        ms.blocked ? 'bg-red-500/15 text-red-400' :
-                        ms.is_valid ? 'bg-profit/15 text-profit' :
-                        ms.already_deployed ? 'bg-blue-500/15 text-blue-400' :
-                        'bg-slate-700/40 text-slate-400'
+                        s.taken ? 'bg-blue-500/15 text-blue-400' :
+                        s.blocked ? 'bg-red-500/15 text-red-400' : 'bg-slate-700/40 text-slate-400'
                       }`}>
-                        {ms.blocked ? ms.validity_reason : ms.already_deployed ? 'Deployed' : ms.is_valid ? 'Valid' : ms.validity_reason}
+                        {s.taken ? <span className="inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />Traded</span>
+                          : s.blocked ? s.blocked_reason : 'Valid — not traded'}
                       </span>
-                    </td>
-                    <td className="py-2 px-2 text-center">
-                      {ms.is_valid && !ms.blocked && (
-                        <button
-                          onClick={() => lateEntryMut.mutate({
-                            symbol: underlying,
-                            direction: ms.direction,
-                            strike: ms.strike,
-                          })}
-                          disabled={lateEntryMut.isLoading}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-accent/20 text-accent hover:bg-accent/30 text-[11px] font-bold transition-colors disabled:opacity-50"
-                        >
-                          <Play className="w-3 h-3" />
-                          Enter Now
-                        </button>
-                      )}
-                      {ms.already_deployed && (
-                        <span className="text-[10px] text-blue-400">Deployed</span>
-                      )}
-                      {ms.blocked && (
-                        <span className="text-[10px] text-red-400/60">Filtered</span>
-                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {lateEntryMut.isSuccess && (
-            <div className="mt-2 text-xs text-profit font-bold">Late entry deployed successfully!</div>
-          )}
-          {lateEntryMut.isError && (
-            <div className="mt-2 text-xs text-loss">{lateEntryMut.error?.response?.data?.detail || 'Late entry failed'}</div>
-          )}
-        </div>
-      )}
+        ) : (
+          <div className="text-sm text-slate-500 text-center py-4">
+            {logData?.reason || 'No VWAP cross-ups on the CE/PE charts yet today'}
+          </div>
+        )}
+      </div>
 
-      {/* ── Crossover Detail + Stats ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Crossover info */}
-        <div className="glass-card !rounded-2xl !p-4">
-          <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-            <Activity className="w-4 h-4 text-accent" />
-            Crossover Detail
-          </h3>
-          {crossInfo.crossed ? (
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Direction</span>
-                <span className={crossInfo.direction === 'BULLISH' ? 'text-profit font-bold' : 'text-loss font-bold'}>
-                  {crossInfo.direction}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Candle Close</span>
-                <span className="font-mono">{crossInfo.close?.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">VWAP at Close</span>
-                <span className="font-mono text-accent">{crossInfo.vwap?.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Prev Close</span>
-                <span className="font-mono">{crossInfo.prev_close?.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Spot SL (prev candle {crossInfo.direction === 'BULLISH' ? 'low' : 'high'})</span>
-                <span className="font-mono text-slate-400">
-                  {crossInfo.direction === 'BULLISH' ? crossInfo.curr_candle_low?.toFixed(2) : crossInfo.curr_candle_high?.toFixed(2)}
-                </span>
-              </div>
-              {sig?.sl_premium > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Option SL ({sig?.option_type})</span>
-                  <span className="font-mono text-loss font-bold">₹{sig?.sl_premium?.toFixed(2)}</span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-sm text-slate-500 text-center py-6">
-              No crossover detected on last closed 5-min candle
-            </div>
-          )}
-        </div>
-
-        {/* Performance */}
-        <div className="glass-card !rounded-2xl !p-4">
-          <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
-            <BarChart3 className="w-4 h-4 text-accent" />
-            Performance
-          </h3>
-          {perf && perf.closed_count > 0 ? (
-            <div className="grid grid-cols-2 gap-3">
-              <StatCard label="Win Rate" value={`${(perf.win_rate * 100).toFixed(0)}%`} icon={Target}
-                color={perf.win_rate >= 0.5 ? 'text-profit' : 'text-loss'} />
-              <StatCard label="Total P&L" value={`₹${perf.total_pnl?.toLocaleString('en-IN')}`} icon={Activity}
-                color="text-profit" />
-              <StatCard label="Avg R" value={perf.avg_r?.toFixed(2)} icon={Gauge}
-                color={perf.avg_r > 0 ? 'text-profit' : 'text-loss'} />
-              <StatCard label="Avg Hold" value={`${perf.avg_hold_minutes?.toFixed(0)}m`} icon={Clock}
-                color="text-slate-300" />
-            </div>
-          ) : (
-            <div className="text-sm text-slate-500 text-center py-6">
-              {perf?.running_count ? `${perf.running_count} running — no closed trades yet` : 'No trades yet — deploy to start'}
-            </div>
-          )}
-        </div>
+      {/* ── Performance ── */}
+      <div className="glass-card !rounded-2xl !p-4">
+        <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+          <BarChart3 className="w-4 h-4 text-accent" />
+          Performance (today)
+        </h3>
+        {perf && perf.closed_count > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <StatCard label="Win Rate" value={`${(perf.win_rate * 100).toFixed(0)}%`} icon={Target}
+              color={perf.win_rate >= 0.5 ? 'text-profit' : 'text-loss'} />
+            <StatCard label="Total P&L" value={`₹${perf.total_pnl?.toLocaleString('en-IN')}`} icon={Activity}
+              color={perf.total_pnl >= 0 ? 'text-profit' : 'text-loss'} />
+            <StatCard label="Avg R" value={perf.avg_r?.toFixed(2)} icon={Gauge}
+              color={perf.avg_r > 0 ? 'text-profit' : 'text-loss'} />
+            <StatCard label="Avg Hold" value={`${perf.avg_hold_minutes?.toFixed(0)}m`} icon={Clock}
+              color="text-slate-300" />
+          </div>
+        ) : (
+          <div className="text-sm text-slate-500 text-center py-4">
+            {perf?.running_count ? `${perf.running_count} running — no closed trades yet` : 'No trades yet today'}
+          </div>
+        )}
       </div>
 
       {/* ── Strategy Rules ── */}
@@ -486,28 +410,28 @@ export default function FlyHigh() {
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
           <div className="bg-slate-800/30 rounded-lg p-2.5">
+            <div className="text-slate-500">Charts</div>
+            <div className="font-medium">1-ITM CE & PE, 5-min</div>
+          </div>
+          <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Entry</div>
-            <div className="font-medium">VWAP cross + SuperTrend</div>
-          </div>
-          <div className="bg-slate-800/30 rounded-lg p-2.5">
-            <div className="text-slate-500">Gate</div>
-            <div className="font-medium">ADX ≥ {cfg?.adx_min ?? 10}</div>
-          </div>
-          <div className="bg-slate-800/30 rounded-lg p-2.5">
-            <div className="text-slate-500">Strike</div>
-            <div className="font-medium">1-ITM (high delta)</div>
+            <div className="font-medium">VWAP cross-up + SuperTrend UP + ADX ≥ {adxMin}</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">SL</div>
-            <div className="font-medium">Option premium at prev candle low/high</div>
+            <div className="font-medium">Signal candle low (option chart)</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Target</div>
-            <div className="font-medium">Book {cfg?.book_partial_pct ?? 50}% @ 1:1 R:R</div>
+            <div className="font-medium">Book {cfg?.book_partial_pct ?? 50}% @ 1:1</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
-            <div className="text-slate-500">Trail</div>
-            <div className="font-medium">{cfg?.trail_giveback_pct ?? 30}% give-back from peak</div>
+            <div className="text-slate-500">Trail (runner)</div>
+            <div className="font-medium">Option SuperTrend line, never below entry</div>
+          </div>
+          <div className="bg-slate-800/30 rounded-lg p-2.5">
+            <div className="text-slate-500">Conflict</div>
+            <div className="font-medium">CE & PE same candle → skip</div>
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Max Hold</div>
@@ -515,7 +439,7 @@ export default function FlyHigh() {
           </div>
           <div className="bg-slate-800/30 rounded-lg p-2.5">
             <div className="text-slate-500">Window</div>
-            <div className="font-medium">{cfg?.entry_start ?? '09:20'} – {cfg?.entry_cutoff ?? '15:15'}</div>
+            <div className="font-medium">{cfg?.entry_start ?? '09:20'} – {cfg?.entry_cutoff ?? '15:15'}, max {maxTrades}/day</div>
           </div>
         </div>
 
@@ -529,7 +453,7 @@ export default function FlyHigh() {
               { key: 'supertrend_period', label: 'SuperTrend Period', type: 'number' },
               { key: 'supertrend_multiplier', label: 'SuperTrend Mult', type: 'number' },
               { key: 'book_partial_pct', label: 'Book Partial %', type: 'number' },
-              { key: 'trail_giveback_pct', label: 'Trail Give-back %', type: 'number' },
+              { key: 'trail_giveback_pct', label: 'Fallback Give-back %', type: 'number' },
               { key: 'max_hold_minutes', label: 'Max Hold (min)', type: 'number' },
               { key: 'premium_floor_pct', label: 'Floor Stop %', type: 'number' },
             ].map(({ key, label, type }) => (
@@ -547,7 +471,7 @@ export default function FlyHigh() {
         )}
       </div>
 
-      {/* ── Recent Trades ── */}
+      {/* ── Today's Trades ── */}
       {perf?.recent?.length > 0 && (
         <div className="glass-card !rounded-2xl !p-4">
           <h3 className="text-sm font-semibold text-slate-300 mb-3">Today's Trades</h3>
@@ -555,8 +479,7 @@ export default function FlyHigh() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-slate-500 border-b border-slate-700/50">
-                  <th className="text-left py-1.5 px-2 font-medium">Date</th>
-                  <th className="text-left py-1.5 px-2 font-medium">Side</th>
+                  <th className="text-left py-1.5 px-2 font-medium">Exit</th>
                   <th className="text-left py-1.5 px-2 font-medium">Instrument</th>
                   <th className="text-right py-1.5 px-2 font-medium">Qty</th>
                   <th className="text-right py-1.5 px-2 font-medium">Entry ₹</th>
@@ -571,22 +494,17 @@ export default function FlyHigh() {
               <tbody>
                 {perf.recent.map((t, i) => {
                   const instrument = t.symbol || (t.strike ? `${t.underlying || 'NIFTY'} ${t.strike} ${t.option_type}` : `${t.option_type || '—'}`);
-                  const entryP = t.entry_price > 0 ? `₹${t.entry_price.toFixed(2)}` : '—';
-                  const exitP = t.exit_price > 0 ? `₹${t.exit_price.toFixed(2)}` : '—';
-                  const slP = t.sl_premium > 0 ? `₹${t.sl_premium.toFixed(1)}` : '—';
-                  const tgtP = t.target_premium > 0 ? `₹${t.target_premium.toFixed(1)}` : '—';
-                  const tradeDate = t.entered_at ? new Date(t.entered_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—';
+                  const exitTime = t.exited_at ? new Date(t.exited_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—';
                   const outcome = t.outcome || t.exit_reason || '—';
                   return (
                     <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20">
-                      <td className="py-1.5 px-2 text-slate-500 font-mono text-[10px]">{tradeDate}</td>
-                      <td className={`py-1.5 px-2 font-bold ${t.side === 'SELL' ? 'text-loss' : 'text-profit'}`}>{t.side || 'BUY'}</td>
+                      <td className="py-1.5 px-2 text-slate-500 font-mono text-[10px]">{exitTime}</td>
                       <td className="py-1.5 px-2 text-slate-300 font-mono">{instrument}</td>
                       <td className="py-1.5 px-2 text-right text-accent font-mono">{t.lots || 1}L ({t.qty || '—'})</td>
-                      <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{entryP}</td>
-                      <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{exitP}</td>
-                      <td className="py-1.5 px-2 text-right text-loss font-mono">{slP}</td>
-                      <td className="py-1.5 px-2 text-right text-profit font-mono">{tgtP}</td>
+                      <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{t.entry_price > 0 ? `₹${t.entry_price.toFixed(2)}` : '—'}</td>
+                      <td className="py-1.5 px-2 text-right text-slate-300 font-mono">{t.exit_price > 0 ? `₹${t.exit_price.toFixed(2)}` : '—'}</td>
+                      <td className="py-1.5 px-2 text-right text-loss font-mono">{fmt(t.sl_premium)}</td>
+                      <td className="py-1.5 px-2 text-right text-profit font-mono">{fmt(t.target_premium)}</td>
                       <td className="py-1.5 px-2 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           outcome === 'Target Hit' ? 'bg-profit/15 text-profit' :
@@ -606,19 +524,6 @@ export default function FlyHigh() {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {/* Deploy success toast */}
-      {deployMut.isSuccess && (
-        <div className="fixed bottom-4 right-4 bg-profit/90 text-black px-4 py-2 rounded-xl font-bold text-sm animate-pulse">
-          Fly-High deployed successfully!
-        </div>
-      )}
-      {/* Deploy error toast */}
-      {deployMut.isError && (
-        <div className="fixed bottom-4 right-4 bg-loss/90 text-white px-4 py-2 rounded-xl font-bold text-sm animate-pulse max-w-xs">
-          Deploy failed: {deployMut.error?.response?.data?.detail || deployMut.error?.message || 'Unknown error'}
         </div>
       )}
     </div>

@@ -9,7 +9,47 @@ Live market data via **Fyers API v3** (WebSocket + REST). Paper trading fully fu
 **GitHub**: https://github.com/dhaneshande123/smartalgo.git
 **Branch**: `main`
 
-## Latest Session (November 2026) — Fly-High UX + P&L accuracy overhaul
+## Latest Session (Nov 19, 2026) — Fly-High moved to option charts + Deploy/Stop model
+
+**Why**: on NIFTY the move shows up late; the 1-ITM CE/PE option charts move first. Fly-High now
+analyses the option charts directly. There is **no NIFTY-chart filter**.
+
+**Rules** (`core/vwap_engine.py`):
+- Both the 1-ITM CE and the 1-ITM PE 5-min charts are evaluated (`select_contracts`,
+  `analyze_option_chart`). The candles come from `_live_feed.get_candles(fyers_symbol, "M5")`.
+- Entry on a chart needs all of:
+  - a VWAP cross-up on the option chart (VWAP uses today's closed candles only)
+  - SuperTrend(10, 3) UP
+  - ADX(14) >= `adx_min`
+- If CE and PE both fire on the same candle, the signal is skipped (conflict).
+- SL = the signal candle low on the option chart (`premium_sl`). Target = 1:1 on premium.
+- Exits:
+  - At 1:1, book `book_partial_pct`%.
+  - The runner trails the option SuperTrend line, never below entry. `run_flyhigh_auto_cycle`
+    ratchets `_flyhigh_trail_sl` and `_manage_flyhigh` enforces it.
+  - The give-back trail is only a fallback when no SuperTrend value is available.
+
+**Control model** (old auto-deploy toggle, per-signal Deploy and late-entry "Enter Now" removed):
+- `POST /api/flyhigh/deploy {symbol}` arms the strategy **for today only**. The state is persisted
+  in SQLite setting `flyhigh_armed` = `{SYMBOL: "YYYY-MM-DD"}` and must be re-armed each trading day.
+- While armed, `run_flyhigh_auto_cycle` (every ~25s via `_maybe_flyhigh_auto`) enters on the first
+  valid setup and never re-enters the same `signal_candle_ts`.
+  - Guards: one RUNNING per underlying, `max_trades_per_day`, and the kill switch.
+- `POST /api/flyhigh/stop {symbol}` stops new entries. An open position stays managed and keeps its
+  Exit button.
+- `GET /api/flyhigh/signal-log/{symbol}` is a read-only log of today's CE/PE cross-ups, with
+  outcome and `taken` flags. It replaces missed-signals and late-entry. The log is computed on the
+  *current* 1-ITM contracts.
+- `GET /api/flyhigh/performance` returns `armed: {SYM: true}`. `open_positions` carry `booked` and `trail_sl`.
+
+**Files**: `core/vwap_engine.py`, `core/api.py` (Fly-High section + `run_flyhigh_auto_cycle`),
+`core/strategy_engine/dashboard_executor.py` (`_manage_flyhigh` SuperTrend trail),
+`dashboard/src/pages/FlyHigh.jsx` (rewritten: Deploy/Stop, CE/PE panels, signal log),
+`dashboard/src/api/client.js`, `dashboard/src/hooks/useApi.js`.
+
+**Status**: verified in an offline simulation only (stubbed chain and feed). Needs a live session.
+
+## Previous Session (November 2026) — Fly-High UX + P&L accuracy overhaul
 
 ### Kill Switch UI (Fly-High page)
 
@@ -166,19 +206,20 @@ during market hours → dead), REST health tracking via `_consecutive_rest_failu
 
 New strategy tab: **Fly-High** — VWAP crossover on 5-minute candles for intraday momentum entries.
 
-**Entry logic**: When a 5-min candle closes above/below VWAP (crossover detection using candles[-2]
-and candles[-3]), with ADX gate (default ≥10) + SuperTrend(10, 3) agreement, take a 1-ITM option position (one strike below ATM
-for CE, one above for PE). Skips the first 5-min candle (09:15-09:20 noise). SL = the signal
-candle's own low (CE) / high (PE), uncapped. Position sizing by Rs-risk (default Rs 2000, max 10 lots).
-Max 2 trades/day. Entry window 09:20-15:15.
+**Entry logic** (superseded Nov 19, 2026 — see Latest Session): the strategy is now evaluated on the
+1-ITM CE and PE option charts, not the NIFTY chart. Entry = VWAP cross-up + SuperTrend(10, 3) UP +
+ADX >= 10 on the option chart. SL = the signal candle low (premium). Target is 1:1: book 50%, and the
+runner trails the option SuperTrend line. Rs-risk sizing (default Rs 2000, max 10 lots). Max 2 trades/day.
+Entry window 09:20-15:15.
 
 **Exit plan** (enforced by `DashboardExecutor._manage_flyhigh`, routed on
-`risk_params.strategy_type == "flyhigh_vwap"` — added Nov 19, 2026; before that Fly-High SL/target
-were display-only and every trade exited via max-hold, EOD, manual or kill switch):
-spot SL (signal candle broken) or premium SL (`premium_sl`) any time → at 1:1 R:R premium target
-(`entry + (entry - premium_sl)`) book `book_partial_pct`% (full exit if 1 lot) → runner gets a
-breakeven stop + trail (gives back `trail_giveback_pct`% of peak gain) → premium floor
-`abs(premium_floor_pct)` backstop before booking → max hold 45 min → EOD 15:15.
+`risk_params.strategy_type == "flyhigh_vwap"`), in order:
+1. Premium SL at any time.
+2. At the 1:1 target, book `book_partial_pct`% (full exit if only 1 lot).
+3. The runner gets a breakeven stop plus the option-SuperTrend trail. The give-back trail is a fallback.
+4. Before booking, the premium floor `abs(premium_floor_pct)` acts as a backstop.
+5. Max hold 45 min.
+6. EOD 15:15.
 
 **New files**:
 - `core/vwap_engine.py` — `compute_vwap_series()`, `detect_crossover()`, `select_itm_strike()`,
@@ -452,8 +493,11 @@ AI Signal Engine / Strategy Builder / Manual
 - `GET /api/scalper/performance` — closed-scalp analytics: win rate, avg R, profit factor, expectancy, avg hold, and exit-reason attribution (target/trail/structural/stop/eod/manual). `_bucket_exit_reason` maps raw reasons to buckets.
 - `GET /api/flyhigh/signal/{symbol}` — VWAP crossover signal: direction, strike, SL, target, premium, blockers
 - `GET|POST /api/flyhigh/config` — Fly-High strategy config (ADX threshold, risk/trade, entry window)
-- `POST /api/flyhigh/deploy` — Deploy Fly-High signal to paper trading
-- `GET /api/flyhigh/performance` — Fly-High closed-trade analytics
+- `POST /api/flyhigh/deploy` — Arm Fly-High for today (`{symbol}`); the backend loop auto-enters/exits
+- `POST /api/flyhigh/stop` — Disarm (no new entries; open position stays managed)
+- `GET /api/flyhigh/signal-log/{symbol}` — Read-only log of today's CE/PE cross-ups with outcome + taken flag
+- `GET /api/flyhigh/ticker/{symbol}` — Cache-only spot + CE/PE LTP/VWAP (1s poll)
+- `GET /api/flyhigh/performance` — Fly-High analytics, live P&L, open positions, armed map
 - `POST /api/fyers/reconnect` — retry live feed with the stored token (no re-login)
 - `GET /api/market/candles/{symbol}` — Cache-first: SQLite -> Fyers -> mock last resort
 - `GET /api/risk/*` (11 endpoints) — Real Risk Engine: VaR, Greeks, stress test, margin, limits, kill switch, breaches, audit
@@ -498,7 +542,7 @@ All 16 pages use real data. The only "simulated" content is the Strategy catalog
 |------|-------|-------------|--------|
 | Dashboard | `/` | usePnLSummary + useDeployedStrategies + WS ticker + Risk | **REAL** — COCKPIT: hero P&L summary + deployed strategies front-and-center, quick actions, equity curve, risk snapshot |
 | Scalper | `/scalper` | Scalper Engine (S/R + regime + strike) | **REAL** — expiry-day OTM buying, live S/R rail, partial-book+trail deploy, force-override |
-| Fly-High | `/flyhigh` | VWAP Engine (crossover + ADX + 1-ITM) | **REAL** — VWAP crossover on 5-min candles, signal card, deploy, config editor, performance |
+| Fly-High | `/flyhigh` | VWAP Engine (crossover + ADX + 1-ITM) | **REAL** — CE/PE option-chart VWAP + SuperTrend + ADX panels, Deploy/Stop (arm for today), signal log, config, performance |
 | Market Data | `/market` | Fyers option chain + OI Analysis + OI Signals (4-factor engine + deploy) | **REAL** (3s refresh, OI change arrows, signals 5s) |
 | Charts | `/charts` | Fyers candles via lightweight-charts (TradingView) | **REAL** (interactive zoom/pan/crosshair) |
 | Portfolio | `/portfolio` | deployed_strategies + Risk Engine margin | **REAL** (zeros when empty) |
