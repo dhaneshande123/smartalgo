@@ -177,6 +177,7 @@ export const saveFyersSettings = (creds) => api.post('/settings/fyers', creds);
 export const getFyersStatus = () => api.get('/settings/fyers');
 export const initFyersConnect = (creds) => api.post('/fyers/init-connect', creds, { timeout: 30000 });
 export const getFyersConnectionStatus = () => api.get('/fyers/connection-status');
+export const getFyersStatusStrip = () => api.get('/fyers/status-strip');
 export const disconnectFyers = () => api.post('/fyers/disconnect');
 export const reconnectFyers = () => api.post('/fyers/reconnect', {}, { timeout: 30000 });
 export const getFlyHighTicker = (symbol = 'NIFTY') => api.get(`/flyhigh/ticker/${symbol}`);

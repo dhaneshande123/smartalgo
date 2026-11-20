@@ -3402,7 +3402,8 @@ async def _flyhigh_fetch_option_candles(symbols: list[str]) -> dict[str, list]:
     wanted = [s for s in dict.fromkeys(symbols) if s]
     if _live_feed and wanted:
         results = await asyncio.gather(
-            *(asyncio.wait_for(_live_feed.get_candles(s, "M5", count=75), timeout=8.0) for s in wanted),
+            *(asyncio.wait_for(_live_feed.get_candles(s, "M5", count=150, priority="critical"), timeout=10.0)
+              for s in wanted),
             return_exceptions=True,
         )
         for sym, res in zip(wanted, results):
@@ -8904,6 +8905,80 @@ async def fyers_connection_status():
         "message": _fyers_oauth_state["message"],
         "live_feed_connected": _live_feed.is_connected if _live_feed else False,
         "access_token_set": bool(FYERS_ACCESS_TOKEN),
+    }
+
+
+def _fyers_token_expiry(token: str) -> datetime | None:
+    """Read the ``exp`` claim from a Fyers access-token JWT (expires 06:00 IST daily)."""
+    try:
+        import base64, json as _json
+        parts = (token or "").split(".")
+        if len(parts) < 2:
+            return None
+        payload = _json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+        exp = payload.get("exp")
+        return datetime.fromtimestamp(int(exp), tz=IST) if exp else None
+    except Exception:
+        return None
+
+
+@app.get(
+    "/api/fyers/status-strip",
+    tags=["Fyers OAuth"],
+    summary="Token / request budget / feed / Fly-High status for the UI strip",
+)
+async def fyers_status_strip():
+    from core.fyers_rate_limiter import get_limiter
+
+    stats = get_limiter().stats()
+    now = datetime.now(IST)
+
+    token = (getattr(_live_feed, "access_token", "") if _live_feed else "") or FYERS_ACCESS_TOKEN
+    expires_at = _fyers_token_expiry(token)
+    rejected = stats.get("token_rejected_at") is not None
+    if not token:
+        token_state = "missing"
+    elif expires_at and expires_at <= now:
+        token_state = "expired"
+    elif rejected:
+        token_state = "rejected"
+    else:
+        token_state = "valid"
+
+    connected = bool(_live_feed and _live_feed.is_connected)
+    tick_age = getattr(_live_feed, "last_tick_age_seconds", None) if _live_feed else None
+    if not isinstance(tick_age, (int, float)) or tick_age != tick_age or tick_age == float("inf"):
+        tick_age = None  # no tick yet — inf/NaN isn't valid JSON
+    in_market = MARKET_OPEN <= now.time() <= MARKET_CLOSE
+    if not connected:
+        feed_state = "offline"
+    elif not getattr(_live_feed, "rest_healthy", True):
+        feed_state = "degraded"
+    elif in_market and tick_age is not None and tick_age > 60:
+        feed_state = "stale"
+    else:
+        feed_state = "live"
+
+    today = _flyhigh_today()
+    armed = sorted(sym for sym, day in _flyhigh_armed_map().items() if day == today)
+
+    return {
+        "token": {
+            "state": token_state,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "seconds_left": int((expires_at - now).total_seconds()) if expires_at else None,
+        },
+        "requests": stats,
+        "feed": {
+            "state": feed_state,
+            "connected": connected,
+            "ws_connected": bool(getattr(_live_feed, "ws_connected", False)) if _live_feed else False,
+            "last_tick_age_seconds": round(tick_age, 1) if tick_age is not None else None,
+            "in_market_hours": in_market,
+        },
+        "flyhigh": {"armed": armed, "armed_for": today},
+        "trading_mode": _TRADING_MODE,
+        "timestamp": now.isoformat(),
     }
 
 

@@ -460,6 +460,17 @@ AI Signal Engine / Strategy Builder / Manual
 - Access tokens expire daily — use Settings → **Reconnect** (stored token) or **Connect Fyers** (re-auth).
 - Live chain requires the symbol in `OPTION_CHAIN_SYMBOLS` (fyers_live_feed): NIFTY/BANKNIFTY/
   FINNIFTY/MIDCPNIFTY/SENSEX/BANKEX. Missing symbol → empty chain (spot only).
+- **Central limiter (Nov 2026)** — `core/fyers_rate_limiter.py`. `FyersLiveFeed.connect()` wraps the
+  SDK in `RateLimitedFyers`, so EVERY REST call shares one sliding window: 4/sec; tiers
+  critical (orders + Fly-High candles via `get_candles(..., priority="critical")`) ≤190/min,
+  high (history/quotes/optionchain) ≤150/min, low (positions/funds/books/depth) ≤100/min.
+  Refused calls return `{"s":"error","code":-9429}` (Fyers' own rate-limit codes are -429/429/-360/1015).
+  After a token rejection (-16 etc.) non-critical calls return -9401, with one probe every 30s;
+  a new token in `connect()` lifts the pause. Never sleep on the event-loop thread (handled).
+- `/ws/portfolio` makes no Fyers calls in paper mode; live mode shares one positions+funds fetch per 30s.
+- `state_store.get_candles` without `from_ts` returns the NEWEST `limit` rows (ascending).
+- Tokens expire 06:00 IST (JWT `exp`); the watchdog stops auto-reconnecting with an expired token.
+- `GET /api/fyers/status-strip` → `FyersStatusStrip.jsx` under the header (token, req/min, feed, Fly-High armed).
 
 ## Key Modules
 

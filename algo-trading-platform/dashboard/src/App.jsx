@@ -26,6 +26,7 @@ import TradeAnalytics from './pages/TradeAnalytics';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import FyersStatusStrip from './components/common/FyersStatusStrip';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -108,6 +109,9 @@ function AuthenticatedApp() {
       <div className="flex flex-col flex-1 overflow-hidden min-w-0">
         <ErrorBoundary>
           <Header onMobileMenuToggle={() => setMobileMenuOpen(!mobileMenuOpen)} />
+        </ErrorBoundary>
+        <ErrorBoundary>
+          <FyersStatusStrip />
         </ErrorBoundary>
         <main className="flex-1 overflow-y-auto p-3 md:p-4 bg-terminal-bg">
           <ErrorBoundary>

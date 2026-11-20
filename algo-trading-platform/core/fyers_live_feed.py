@@ -99,13 +99,25 @@ class FyersLiveFeed:
         try:
             from fyers_apiv3 import fyersModel
 
-            # SDK auto-prepends client_id: — pass raw access_token only
-            self._fyers = fyersModel.FyersModel(
+            from core.fyers_rate_limiter import RateLimitedFyers, get_limiter
+
+            # A different token was installed (fresh login) — lift any auth
+            # pause left over from the previous, rejected one.
+            import hashlib
+            limiter = get_limiter()
+            fingerprint = hashlib.sha256(self.access_token.encode()).hexdigest()[:16]
+            if limiter.token_fingerprint != fingerprint:
+                limiter.reset_auth()
+                limiter.token_fingerprint = fingerprint
+
+            # SDK auto-prepends client_id: — pass raw access_token only.
+            # Every REST call goes through the shared request limiter.
+            self._fyers = RateLimitedFyers(fyersModel.FyersModel(
                 client_id=self.app_id,
                 token=self.access_token,
                 is_async=False,
                 log_path="",
-            )
+            ))
 
             loop = asyncio.get_event_loop()
             response = await asyncio.wait_for(
@@ -364,6 +376,7 @@ class FyersLiveFeed:
         timeframe: str = "D1",
         count: int = 50,
         use_cache: bool = True,
+        priority: str | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch historical candle data — cache-first with Fyers fill.
 
@@ -378,6 +391,8 @@ class FyersLiveFeed:
             timeframe: M1, M5, M15, M30, H1, D1
             count: Number of candles to return
             use_cache: If True (default), check SQLite first
+            priority: Request-limiter tier override (e.g. "critical" for
+                Fly-High option charts); default is the method's own tier.
 
         Returns:
             list of candle dicts with timestamp, open, high, low, close, volume.
@@ -453,13 +468,17 @@ class FyersLiveFeed:
         # down/slow API can't be hammered every poll.
         _last_candle_fetch[fetch_key] = time.monotonic()
 
+        fyers = self._fyers
+        if priority and hasattr(fyers, "with_priority"):
+            fyers = fyers.with_priority(priority)
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
                     None,
-                    lambda: self._fyers.history(
+                    lambda: fyers.history(
                         data={
                             "symbol": fyers_sym,
                             "resolution": resolution,

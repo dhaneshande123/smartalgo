@@ -314,6 +314,16 @@ class DashboardStrategyExecutor:
         if not token:
             return
 
+        # Fyers tokens expire at 06:00 IST. Reconnecting with an expired one
+        # can't succeed and only adds rejected requests — wait for a new login.
+        expires_at = _api_mod._fyers_token_expiry(token)
+        if expires_at and expires_at <= now:
+            if getattr(self, "_expired_token_warned_for", None) != expires_at:
+                self._expired_token_warned_for = expires_at
+                logger.warning(f"Fyers token expired at {expires_at:%d-%b %H:%M} IST — "
+                               f"auto-reconnect paused until you log in again")
+            return
+
         try:
             result = await _api_mod._reconnect_fyers_feed(
                 app_id=os.getenv("FYERS_APP_ID", "") or _api_mod.FYERS_APP_ID,

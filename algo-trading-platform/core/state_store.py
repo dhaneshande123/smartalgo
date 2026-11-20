@@ -648,9 +648,12 @@ class StateStore:
         to_ts: int | None = None,
         limit: int = 5000,
     ) -> list[dict]:
-        """Fetch cached candles, oldest first.
+        """Fetch cached candles, returned oldest first.
 
-        If from_ts/to_ts are provided, filter by timestamp range.
+        If from_ts/to_ts are provided, filter by timestamp range. Without a
+        ``from_ts`` the ``limit`` keeps the NEWEST rows (callers asking for
+        "the last N candles" would otherwise get the oldest N once the cache
+        grows past the limit, see stale data, and refetch from Fyers forever).
         """
         try:
             with self._lock:
@@ -666,11 +669,13 @@ class StateStore:
                     params.append(int(to_ts))
                 params.append(limit)
                 where = " AND ".join(conditions)
-                cursor = self._conn.execute(
-                    f"SELECT ts, open, high, low, close, volume FROM candles_cache "
-                    f"WHERE {where} ORDER BY ts ASC LIMIT ?",
-                    params,
-                )
+                if from_ts is None:
+                    sql = (f"SELECT * FROM (SELECT ts, open, high, low, close, volume FROM candles_cache "
+                           f"WHERE {where} ORDER BY ts DESC LIMIT ?) ORDER BY ts ASC")
+                else:
+                    sql = (f"SELECT ts, open, high, low, close, volume FROM candles_cache "
+                           f"WHERE {where} ORDER BY ts ASC LIMIT ?")
+                cursor = self._conn.execute(sql, params)
                 rows = cursor.fetchall()
             return [
                 {

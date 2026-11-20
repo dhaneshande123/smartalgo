@@ -4,6 +4,7 @@ WebSocket route handlers for the algo trading platform.
 Endpoints:
     /ws/market-data   — streams live tick data (mock-generated at ~500ms intervals)
     /ws/portfolio      — streams position and P&L updates every 2 seconds
+                         (Fyers positions/funds polled at most every 30s, live mode only)
     /ws/orders         — streams order status changes
     /ws/alerts         — streams platform alerts as they fire
 """
@@ -114,9 +115,63 @@ def _generate_position() -> dict[str, Any]:
     }
 
 
+# Fyers positions/funds are polled at most once per 30s and shared by every
+# /ws/portfolio client. Previously each open tab called both endpoints every
+# 2s, which alone burned ~60 req/min per tab against the 200/min plan limit.
+_FYERS_PORTFOLIO_TTL = 30.0
+_fyers_portfolio_cache: dict[str, Any] | None = None
+_fyers_portfolio_fetched_at: float = 0.0
+_fyers_portfolio_lock: asyncio.Lock | None = None
+
+
+def _trading_mode() -> str:
+    try:
+        from core import api as _api_mod
+        return str(getattr(_api_mod, "_TRADING_MODE", "paper") or "paper").lower()
+    except Exception:
+        return "paper"
+
+
+async def _get_portfolio_snapshot() -> dict[str, Any]:
+    """Portfolio snapshot for the WS stream.
+
+    Paper mode never touches Fyers — P&L comes from deployed strategies.
+    Live mode reads Fyers through a shared 30s cache, fetched off the event loop.
+    """
+    global _fyers_portfolio_cache, _fyers_portfolio_fetched_at, _fyers_portfolio_lock
+    if _trading_mode() != "live":
+        return _generate_paper_snapshot()
+
+    if _fyers_portfolio_lock is None:
+        _fyers_portfolio_lock = asyncio.Lock()
+    async with _fyers_portfolio_lock:
+        if time.monotonic() - _fyers_portfolio_fetched_at >= _FYERS_PORTFOLIO_TTL:
+            _fyers_portfolio_fetched_at = time.monotonic()
+            try:
+                _fyers_portfolio_cache = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_fyers_portfolio), timeout=10.0
+                )
+            except Exception as e:
+                logger.warning(f"Fyers portfolio snapshot failed: {e}")
+                _fyers_portfolio_cache = None
+        cached = _fyers_portfolio_cache
+
+    if cached:
+        return {**cached, "timestamp": datetime.now(timezone.utc).isoformat()}
+    return _generate_paper_snapshot()
+
+
 def _generate_portfolio_snapshot() -> dict[str, Any]:
-    """Generate a full portfolio P&L snapshot — uses Fyers if connected."""
-    # Try live data from Fyers
+    """Synchronous snapshot (kept for callers outside the WS loop)."""
+    if _trading_mode() == "live":
+        live = _fetch_fyers_portfolio()
+        if live:
+            return live
+    return _generate_paper_snapshot()
+
+
+def _fetch_fyers_portfolio() -> dict[str, Any] | None:
+    """Fetch positions + funds from Fyers. Blocking — call via a thread."""
     if live_feed and hasattr(live_feed, '_fyers') and live_feed._fyers:
         try:
             pos_result = live_feed._fyers.positions()
@@ -165,8 +220,11 @@ def _generate_portfolio_snapshot() -> dict[str, Any]:
                     }
         except Exception as e:
             logger.warning(f"Fyers portfolio snapshot failed: {e}")
+    return None
 
-    # Fallback: compute from deployed strategies (paper mode) instead of mock
+
+def _generate_paper_snapshot() -> dict[str, Any]:
+    """Compute the portfolio from deployed strategies (no Fyers calls)."""
     try:
         from core import api as _api_mod
         deployed = getattr(_api_mod, "_deployed_strategies", {}) or {}
@@ -394,7 +452,7 @@ async def ws_portfolio(websocket: WebSocket) -> None:
 
     try:
         while True:
-            snapshot = _generate_portfolio_snapshot()
+            snapshot = await _get_portfolio_snapshot()
             await manager.send_to(client_id, {
                 "channel": "pnl",
                 "data": snapshot,

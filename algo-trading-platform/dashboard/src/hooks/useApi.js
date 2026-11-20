@@ -206,6 +206,10 @@ export const useSaveFyersSettings = () => {
 export const useFyersStatus = () =>
   useQuery({ queryKey: ['fyersStatus'], queryFn: api.getFyersStatus, refetchInterval: 5000 });
 
+// Token / request budget / feed / Fly-High strip — served from backend memory, no Fyers calls
+export const useFyersStatusStrip = () =>
+  useQuery({ queryKey: ['fyersStatusStrip'], queryFn: api.getFyersStatusStrip, refetchInterval: 5000 });
+
 export const useInitFyersConnect = () => {
   const qc = useQueryClient();
   return useMutation({
